@@ -7,41 +7,50 @@ import { useState, useEffect, useRef, useCallback } from "react";
    ════════════════════════════════════════════════════════════════════ */
 
 // ─── SUPABASE CONFIG ───────────────────────────────────────────────────
-// Paste your keys in Admin → Settings, or hardcode here for production.
-let SB_URL = localStorage.getItem("sb_url") || "";
-let SB_KEY = localStorage.getItem("sb_key") || "";
-const DEMO_MODE = !SB_URL || !SB_KEY;   // runs on local data when no keys
+const SB_URL = "https://mkibgjnzbgfqjkhowafr.supabase.co";
+const SB_KEY = "sb_publishable_zh5Soyi6iNGd8CLxPfD9Lg_dVdAwDe7";
 
-// Lightweight Supabase REST helper (no SDK dependency)
-async function sb(path, opts = {}) {
-  if (DEMO_MODE) return null;
+async function sbFetch(path, opts = {}) {
   const res = await fetch(`${SB_URL}/rest/v1/${path}`, {
     ...opts,
     headers: {
       apikey: SB_KEY,
       Authorization: `Bearer ${SB_KEY}`,
       "Content-Type": "application/json",
-      Prefer: "return=representation",
+      Prefer: opts.prefer || "return=representation",
       ...opts.headers,
     },
   });
   if (!res.ok) throw new Error(await res.text());
   return res.status === 204 ? null : res.json();
 }
+const sbGet    = (t, q = "")  => sbFetch(`${t}?${q}`, { method: "GET" });
+const sbPost   = (t, d)        => sbFetch(t, { method: "POST", body: JSON.stringify(d) });
+const sbPatch  = (t, id, d)    => sbFetch(`${t}?id=eq.${id}`, { method: "PATCH", body: JSON.stringify(d), prefer: "return=minimal" });
+const sbDelete = (t, id)       => sbFetch(`${t}?id=eq.${id}`, { method: "DELETE", prefer: "return=minimal" });
+
+// ─── SNAKE ↔ CAMEL TRANSFORMS ──────────────────────────────────────────
+const fromProfile = r => ({ id: r.id, name: r.name, role: r.role, email: r.email, phone: r.phone || "", pin: r.pin, active: r.active !== false });
+const fromJob     = r => ({ id: r.id, name: r.name, address: r.address || "", lat: r.lat, lng: r.lng, budget: r.budget, status: r.status, closedAt: r.closed_at, gsmJobId: r.gsm_job_id });
+const fromTask    = r => ({ id: r.id, jobId: r.job_id, title: r.title, titleEs: r.title_es || "", assignedTo: r.assigned_to, status: r.status, dueDate: r.due_date || "", createdAt: (r.created_at || "").slice(0, 10) });
+const fromLog     = r => ({ id: r.id, taskId: r.task_id, jobId: r.job_id, crewId: r.crew_id, en: r.text_en, es: r.text_es, weather: r.weather, date: r.log_date });
+const fromPhoto   = r => ({ id: r.id, taskId: r.task_id, jobId: r.job_id, crewId: r.crew_id, dataUrl: r.data_url, type: r.photo_type, sizeKB: r.size_kb, date: r.created_at });
+const fromReceipt = r => ({ id: r.id, taskId: r.task_id, jobId: r.job_id, crewId: r.crew_id, dataUrl: r.data_url, store: r.store, amount: r.amount, note: r.note, paidBy: r.paid_by || "crew", reimbursementStatus: r.reimbursement_status || "pending", billStatus: r.bill_status, createdAt: (r.created_at || "").slice(0, 10) });
+const fromMat     = r => ({ id: r.id, taskId: r.task_id, jobId: r.job_id, crewId: r.crew_id, en: r.text_en, es: r.text_es, fulfilled: r.fulfilled });
 
 // ─── OFFLINE QUEUE ──────────────────────────────────────────────────────
 const QUEUE_KEY = "gsm_offline_queue";
 const getQueue = () => JSON.parse(localStorage.getItem(QUEUE_KEY) || "[]");
 const setQueue = (q) => localStorage.setItem(QUEUE_KEY, JSON.stringify(q));
-const enqueue = (action) => setQueue([...getQueue(), { ...action, ts: Date.now() }]);
+const enqueue  = (action) => setQueue([...getQueue(), { ...action, ts: Date.now() }]);
 
 async function flushQueue() {
-  if (DEMO_MODE || !navigator.onLine) return 0;
+  if (!navigator.onLine) return 0;
   const q = getQueue();
   let done = 0;
   for (const action of q) {
     try {
-      await sb(action.table, { method: action.method || "POST", body: JSON.stringify(action.payload) });
+      await sbPost(action.table, action.payload);
       done++;
     } catch { break; }
   }
@@ -385,57 +394,89 @@ export default function App() {
   const [online, setOnline] = useState(navigator.onLine);
   const [tab, setTab] = useState("dash");
   const [menuOpen, setMenuOpen] = useState(false);
-  const [jobs, setJobs] = useState(DEMO_JOBS);
-  const [tasks, setTasks] = useState(DEMO_TASKS);
-  const [receipts, setReceipts] = useState(DEMO_RECEIPTS);
+  const [jobs, setJobs] = useState([]);
+  const [tasks, setTasks] = useState([]);
+  const [receipts, setReceipts] = useState([]);
   const [logs, setLogs] = useState([]);
   const [photos, setPhotos] = useState([]);
+  const [mats, setMats] = useState([]);
   const [revoked, setRevoked] = useState(false);
+  const [loading, setLoading] = useState(false);
   const [settings, setSettings] = useState(() => JSON.parse(localStorage.getItem("gsm_set") || "{}"));
-  // Crew roster — editable. Admin can add, edit, deactivate members.
-  const [users, setUsers] = useState(() => {
-    try {
-      const saved = JSON.parse(localStorage.getItem("gsm_users") || "null");
-      return saved && saved.length ? saved : DEMO_USERS;
-    } catch { return DEMO_USERS; }
-  });
+  const [users, setUsers] = useState([]);
   const t = T[lang];
 
-  // Persist session + language + users
   const login = (u) => { localStorage.setItem("gsm_session", JSON.stringify(u)); setUser(u); };
   const logout = () => { localStorage.removeItem("gsm_session"); setUser(null); setRevoked(false); };
   useEffect(() => { localStorage.setItem("gsm_lang", lang); }, [lang]);
-  useEffect(() => { localStorage.setItem("gsm_users", JSON.stringify(users)); }, [users]);
 
-  const setActive = (id, active) => setUsers(u => u.map(x => x.id === id ? { ...x, active } : x));
-  const addUser = (member) => setUsers(u => [...u, { ...member, id: "u" + Date.now(), role: "crew", active: true }]);
-  const updateUser = (id, patch) => setUsers(u => u.map(x => x.id === id ? { ...x, ...patch } : x));
-  const removeUser = (id) => setUsers(u => u.filter(x => x.id !== id));
+  // ── LOAD ALL DATA FROM SUPABASE ───────────────────────────────────
+  useEffect(() => {
+    if (!user) return;
+    const load = async () => {
+      setLoading(true);
+      try {
+        const [dbUsers, dbJobs, dbTasks, dbLogs, dbPhotos, dbReceipts, dbMats] = await Promise.all([
+          sbGet("field_profiles", "order=created_at"),
+          sbGet("field_jobs", "order=created_at"),
+          sbGet("field_tasks", "order=created_at"),
+          sbGet("field_logs", "order=created_at.desc"),
+          sbGet("field_photos", "order=created_at.desc"),
+          sbGet("field_receipts", "order=created_at.desc"),
+          sbGet("field_material_requests", "order=created_at.desc"),
+        ]);
+        if (dbUsers)    setUsers(dbUsers.map(fromProfile));
+        if (dbJobs)     setJobs(dbJobs.map(fromJob));
+        if (dbTasks)    setTasks(dbTasks.map(fromTask));
+        if (dbLogs)     setLogs(dbLogs.map(fromLog));
+        if (dbPhotos)   setPhotos(dbPhotos.map(fromPhoto));
+        if (dbReceipts) setReceipts(dbReceipts.map(fromReceipt));
+        if (dbMats)     setMats(dbMats.map(fromMat));
+      } catch (e) { console.error("Load:", e); }
+      setLoading(false);
+    };
+    load();
+  }, [user?.id]);
+
+  // ── CREW MUTATIONS ────────────────────────────────────────────────
+  const setActive = async (id, active) => {
+    setUsers(u => u.map(x => x.id === id ? { ...x, active } : x));
+    try { await sbPatch("field_profiles", id, { active }); } catch {}
+  };
+  const addUser = async (member) => {
+    const id = "u" + Date.now();
+    const row = { id, name: member.name, role: "crew", email: member.email, phone: member.phone || "", pin: member.pin, active: true };
+    setUsers(u => [...u, { ...row }]);
+    try { await sbPost("field_profiles", row); } catch { enqueue({ table: "field_profiles", payload: row }); }
+  };
+  const updateUser = async (id, patch) => {
+    setUsers(u => u.map(x => x.id === id ? { ...x, ...patch } : x));
+    const dbPatch = {};
+    if (patch.name)  dbPatch.name  = patch.name;
+    if (patch.email) dbPatch.email = patch.email;
+    if (patch.phone) dbPatch.phone = patch.phone;
+    if (patch.pin)   dbPatch.pin   = patch.pin;
+    try { await sbPatch("field_profiles", id, dbPatch); } catch {}
+  };
+  const removeUser = async (id) => {
+    setUsers(u => u.filter(x => x.id !== id));
+    try { await sbDelete("field_profiles", id); } catch {}
+  };
 
   // ── REVOCATION CHECK ──────────────────────────────────────────────
-  // If this user has been deactivated, lock the app within the poll window.
-  // In production this reads from Supabase so the change reaches any device.
   useEffect(() => {
     if (!user) return;
     const check = async () => {
-      let active = true;
-      if (!DEMO_MODE) {
-        try {
-          const rows = await sb(`profiles?id=eq.${user.id}&select=active`);
-          active = rows?.[0]?.active !== false;
-        } catch { return; }
-      } else {
-        const local = JSON.parse(localStorage.getItem("gsm_users") || "[]");
-        active = local.find(x => x.id === user.id)?.active !== false;
-      }
-      if (!active) setRevoked(true);
+      try {
+        const rows = await sbGet("field_profiles", `id=eq.${user.id}&select=active`);
+        if (rows?.[0]?.active === false) setRevoked(true);
+      } catch {}
     };
     check();
     const iv = setInterval(check, 15000);
-    const onFocus = () => check();
-    window.addEventListener("focus", onFocus);
-    return () => { clearInterval(iv); window.removeEventListener("focus", onFocus); };
-  }, [user]);
+    window.addEventListener("focus", check);
+    return () => { clearInterval(iv); window.removeEventListener("focus", check); };
+  }, [user?.id]);
 
   useEffect(() => {
     const on = () => { setOnline(true); flushQueue(); };
@@ -454,13 +495,20 @@ export default function App() {
 
   const saveSettings = (s) => { setSettings(s); localStorage.setItem("gsm_set", JSON.stringify(s)); };
 
-  if (!user) return <Login onLogin={login} users={users} t={t} lang={lang} setLang={setLang} />;
+  if (!user) return <Login onLogin={login} t={t} lang={lang} setLang={setLang} />;
 
-  // ── LOCKED OUT SCREEN ─────────────────────────────────────────────
   if (revoked) return <LockedOut user={user} lang={lang} onAck={logout} />;
 
+  if (loading) return (
+    <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", background: "var(--steel)" }}>
+      <style>{CSS}</style>
+      <div style={{ textAlign: "center" }}><div className="spin" style={{ width: 36, height: 36, margin: "0 auto 16px" }} />
+        <p style={{ color: "var(--silver)", fontSize: 13 }}>Loading...</p></div>
+    </div>
+  );
+
   const shared = { user, lang, t, jobs, setJobs, tasks, setTasks, receipts, setReceipts,
-                   logs, setLogs, photos, setPhotos, settings, saveSettings, users,
+                   logs, setLogs, photos, setPhotos, mats, setMats, settings, saveSettings, users,
                    online, setActive, addUser, updateUser, removeUser };
 
   return (
@@ -496,13 +544,19 @@ function LockedOut({ user, lang, onAck }) {
 }
 
 // ─── LOGIN ────────────────────────────────────────────────────────────
-function Login({ onLogin, users, t, lang, setLang }) {
-  const [email, setEmail] = useState(""), [pin, setPin] = useState(""), [err, setErr] = useState("");
-  const go = () => {
-    const u = users.find(u => u.email.toLowerCase() === email.trim().toLowerCase() && u.pin === pin);
-    if (!u) return setErr(lang === "en" ? "Invalid credentials." : "Credenciales inválidas.");
-    if (u.active === false) return setErr(lang === "en" ? "This account has been deactivated." : "Esta cuenta ha sido desactivada.");
-    onLogin(u);
+function Login({ onLogin, t, lang, setLang }) {
+  const [email, setEmail] = useState(""), [pin, setPin] = useState(""), [err, setErr] = useState(""), [busy, setBusy] = useState(false);
+  const go = async () => {
+    if (!email || !pin) return setErr(lang === "en" ? "Enter email and PIN." : "Ingresa email y PIN.");
+    setBusy(true); setErr("");
+    try {
+      const rows = await sbGet("field_profiles", `email=eq.${encodeURIComponent(email.trim().toLowerCase())}&select=*`);
+      const u = rows?.[0];
+      if (!u || u.pin !== pin) { setErr(lang === "en" ? "Invalid credentials." : "Credenciales inválidas."); setBusy(false); return; }
+      if (u.active === false) { setErr(lang === "en" ? "Account deactivated." : "Cuenta desactivada."); setBusy(false); return; }
+      onLogin(fromProfile(u));
+    } catch { setErr(lang === "en" ? "Connection error. Try again." : "Error de conexión."); }
+    setBusy(false);
   };
   return (
     <div className="login"><style>{CSS}</style>
@@ -517,12 +571,7 @@ function Login({ onLogin, users, t, lang, setLang }) {
             <input className="fi" type="password" value={pin} onChange={e => setPin(e.target.value)} placeholder="••••" maxLength={6}
               onKeyDown={e => e.key === "Enter" && go()} /></div>
           {err && <p style={{ color: "var(--red)", fontSize: 13, marginBottom: 12 }}>{err}</p>}
-          <button className="btn btn-p btn-full" onClick={go}>{t.login}</button>
-        </div>
-        <div style={{ marginTop: 22, padding: 14, background: "rgba(0,0,0,.2)", borderRadius: 10 }}>
-          <p style={{ fontSize: 10, color: "var(--slate)", marginBottom: 7, textTransform: "uppercase", letterSpacing: 1 }}>Demo Accounts</p>
-          {users.map(u => <p key={u.id} style={{ fontSize: 12, color: "var(--silver)", marginBottom: 3 }}>
-            <strong style={{ color: "var(--sky2)" }}>{u.name}</strong> — {u.email} / {u.pin}</p>)}
+          <button className="btn btn-p btn-full" onClick={go} disabled={busy}>{busy ? <span className="spin" /> : t.login}</button>
         </div>
         <div style={{ textAlign: "center", marginTop: 14 }}>
           <button className="btn btn-s btn-sm" onClick={() => setLang(lang === "en" ? "es" : "en")}>
@@ -635,10 +684,23 @@ function AdminTasks(props) {
     setBusy(true);
     let es = nt.titleEs;
     if (!es && settings.gtKey) es = await translateText(nt.title, "es", settings.gtKey);
-    setTasks(p => [...p, { ...nt, id: "t" + Date.now(), titleEs: es || nt.title, status: "pending", createdAt: today }]);
+    const id = "t" + Date.now();
+    const task = { id, jobId: nt.jobId, title: nt.title, titleEs: es || nt.title, assignedTo: nt.assignedTo, dueDate: nt.dueDate, status: "pending", createdAt: today };
+    setTasks(p => [...p, task]);
+    const row = { id, job_id: nt.jobId, title: nt.title, title_es: es || nt.title, assigned_to: nt.assignedTo, due_date: nt.dueDate || null, status: "pending" };
+    try { await sbPost("field_tasks", row); } catch { enqueue({ table: "field_tasks", payload: row }); }
     setNt({ title: "", titleEs: "", jobId: "", assignedTo: "", dueDate: "" }); setModal(false); setBusy(false);
   };
-  const toggle = id => setTasks(p => p.map(t => t.id === id ? { ...t, status: t.status === "done" ? "pending" : "done" } : t));
+  const toggle = async (id) => {
+    const task = tasks.find(t => t.id === id);
+    const next = task.status === "done" ? "pending" : "done";
+    setTasks(p => p.map(t => t.id === id ? { ...t, status: next } : t));
+    try { await sbPatch("field_tasks", id, { status: next, completed_at: next === "done" ? new Date().toISOString() : null }); } catch {}
+  };
+  const deleteTask = async (id) => {
+    setTasks(p => p.filter(t => t.id !== id));
+    try { await sbDelete("field_tasks", id); } catch {}
+  };
   const st = task => task.status === "done" ? "done" : (task.dueDate && task.dueDate < today ? "overdue" : "pending");
 
   return (
@@ -664,7 +726,9 @@ function AdminTasks(props) {
                 <div className="tmeta"><span className={`tag tag-${s}`}>{t[s]}</span>
                   {task.dueDate && <span className="tag" style={{ background: "rgba(255,255,255,.06)", color: "var(--silver)" }}>Due {task.dueDate}</span>}
                   {a && <span className="tag-l">{a.name}</span>}</div>
-              </div></div>;
+              </div>
+              <button className="btn btn-s btn-sm btn-ic" style={{ color: "var(--red)", flexShrink: 0 }} title="Delete" onClick={() => deleteTask(task.id)}><Icon n="x" s={14} /></button>
+            </div>;
           })}</div>
         </div>;
       })}
@@ -798,11 +862,24 @@ function AdminReceipts({ receipts, setReceipts, jobs, users }) {
           <div className="flexb" style={{ marginBottom: 14, paddingBottom: 14, borderBottom: "1px solid var(--border)" }}>
             <span className="muted">{receipts.length} receipt{receipts.length !== 1 ? "s" : ""} captured</span>
             <span style={{ fontFamily: "'Barlow Condensed'", fontWeight: 800, fontSize: 20, color: "var(--accent)" }}>${total.toFixed(2)}</span></div>
-          <div className="tbl-wrap"><table><thead><tr><th>Date</th><th>Crew</th><th>Job</th><th>Vendor</th><th>Memo</th><th style={{ textAlign: "right" }}>Amount</th></tr></thead>
+          <div className="tbl-wrap"><table><thead><tr><th>Date</th><th>Crew</th><th>Job</th><th>Vendor</th><th>Memo</th><th>Paid By</th><th>Reimburse</th><th style={{ textAlign: "right" }}>Amount</th></tr></thead>
           <tbody>{receipts.map(r => { const j = jobs.find(x => x.id === r.jobId), c = users.find(u => u.id === r.crewId);
-            return <tr key={r.id}><td data-l="Date" className="muted">{r.createdAt}</td><td data-l="Crew">{c?.name}</td>
-              <td data-l="Job"><span className="tag-l" style={{ fontSize: 11 }}>{j?.name}</span></td><td data-l="Vendor">{r.store}</td><td data-l="Memo" className="muted">{r.note}</td>
-              <td data-l="Amount" style={{ textAlign: "right", fontWeight: 600, color: "var(--accent)" }}>${(+r.amount).toFixed(2)}</td></tr>; })}</tbody></table></div></div>}
+            const needsReimb = r.paidBy === "crew" && r.reimbursementStatus !== "paid";
+            return <tr key={r.id}>
+              <td data-l="Date" className="muted">{r.createdAt}</td>
+              <td data-l="Crew">{c?.name}</td>
+              <td data-l="Job"><span className="tag-l" style={{ fontSize: 11 }}>{j?.name}</span></td>
+              <td data-l="Vendor">{r.store}</td>
+              <td data-l="Memo" className="muted">{r.note}</td>
+              <td data-l="Paid By"><span className={`tag ${r.paidBy === "crew" ? "tag-overdue" : "tag-done"}`}>{r.paidBy === "crew" ? "Crew" : "Company"}</span></td>
+              <td data-l="Reimburse">{r.paidBy === "crew" ? <span className={`tag ${needsReimb ? "tag-pending" : "tag-done"}`}>{needsReimb ? "Pending" : "Paid"}</span> : <span className="muted">—</span>}</td>
+              <td data-l="Amount" style={{ textAlign: "right", fontWeight: 600, color: needsReimb ? "var(--orange)" : "var(--accent)" }}>${(+r.amount).toFixed(2)}</td>
+            </tr>; })}</tbody></table></div></div>}
+      {receipts.filter(r => r.paidBy === "crew" && r.reimbursementStatus !== "paid").length > 0 && (
+        <div style={{ marginTop: 12, padding: "10px 14px", background: "rgba(249,115,22,.1)", border: "1px solid rgba(249,115,22,.3)", borderRadius: 10, color: "var(--orange)", fontSize: 13 }}>
+          ⚠ {receipts.filter(r => r.paidBy === "crew" && r.reimbursementStatus !== "paid").length} receipt{receipts.filter(r => r.paidBy === "crew" && r.reimbursementStatus !== "paid").length !== 1 ? "s" : ""} need reimbursement — total ${receipts.filter(r => r.paidBy === "crew" && r.reimbursementStatus !== "paid").reduce((s, r) => s + (+r.amount || 0), 0).toFixed(2)}
+        </div>
+      )}
     </div>
   );
 }
@@ -825,8 +902,18 @@ function Jobs({ jobs, setJobs, tasks }) {
   const [confirm, setConfirm] = useState(null);
   const [nj, setNj] = useState({ name: "", address: "" });
   const [showClosed, setShowClosed] = useState(false);
-  const add = () => { if (!nj.name) return; setJobs(p => [...p, { ...nj, id: "j" + Date.now(), status: "active", createdAt: new Date().toISOString().split("T")[0] }]); setNj({ name: "", address: "" }); setModal(false); };
-  const setStatus = (id, status) => { setJobs(p => p.map(j => j.id === id ? { ...j, status, closedAt: status === "closed" ? new Date().toISOString().split("T")[0] : null } : j)); setConfirm(null); };
+  const add = async () => {
+    if (!nj.name) return;
+    const id = "j" + Date.now();
+    const job = { id, name: nj.name, address: nj.address, status: "active" };
+    setJobs(p => [...p, job]); setNj({ name: "", address: "" }); setModal(false);
+    try { await sbPost("field_jobs", job); } catch { enqueue({ table: "field_jobs", payload: job }); }
+  };
+  const setStatus = async (id, status) => {
+    const closedAt = status === "closed" ? new Date().toISOString().split("T")[0] : null;
+    setJobs(p => p.map(j => j.id === id ? { ...j, status, closedAt } : j)); setConfirm(null);
+    try { await sbPatch("field_jobs", id, { status, closed_at: closedAt }); } catch {}
+  };
 
   const active = jobs.filter(j => j.status !== "closed");
   const closed = jobs.filter(j => j.status === "closed");
@@ -1040,7 +1127,20 @@ function CrewTasks(props) {
   const [matModal, setMatModal] = useState(null);
   const [mat, setMat] = useState("");
   const [signModal, setSignModal] = useState(null);
-  const toggle = id => setTasks(p => p.map(t => t.id === id ? { ...t, status: t.status === "done" ? "pending" : "done" } : t));
+  const toggle = async (id) => {
+    const task = tasks.find(t => t.id === id);
+    const next = task.status === "done" ? "pending" : "done";
+    setTasks(p => p.map(t => t.id === id ? { ...t, status: next } : t));
+    try { await sbPatch("field_tasks", id, { status: next, completed_at: next === "done" ? new Date().toISOString() : null }); } catch {}
+  };
+  const submitMat = async (taskId) => {
+    if (!mat.trim()) return;
+    const tk = tasks.find(t => t.id === taskId);
+    const id = "m" + Date.now();
+    const row = { id, task_id: taskId, job_id: tk?.jobId || null, crew_id: user.id, text_en: mat, text_es: null, fulfilled: false };
+    try { await sbPost("field_material_requests", row); } catch { enqueue({ table: "field_material_requests", payload: row }); }
+    setMat(""); setMatModal(null);
+  };
   const st = task => task.status === "done" ? "done" : (task.dueDate && task.dueDate < today ? "overdue" : "pending");
 
   const checkIn = async (job) => {
@@ -1084,18 +1184,27 @@ function CrewTasks(props) {
           <div className="fg"><label className="fl">{lang === "es" ? "¿Qué necesitas?" : "What do you need?"}</label>
             <textarea className="fi" value={mat} onChange={e => setMat(e.target.value)} placeholder={lang === "es" ? "ej. madera 2x4..." : "e.g. 2x4 lumber..."} /></div>
           <div className="macts"><button className="btn btn-s" onClick={() => setMatModal(null)}>Cancel</button>
-            <button className="btn btn-a" onClick={() => { setMat(""); setMatModal(null); }}><Icon n="tools" s={14} /> {lang === "es" ? "Enviar" : "Submit"}</button></div></div></div>}
+            <button className="btn btn-a" onClick={() => submitMat(matModal)}><Icon n="tools" s={14} /> {lang === "es" ? "Enviar" : "Submit"}</button></div></div></div>}
       {signModal && <SignModal task={signModal} lang={lang} onClose={() => setSignModal(null)} />}
     </div>
   );
 }
 
 function SignModal({ task, lang, onClose }) {
-  const cv = useRef(); const [drawing, setDrawing] = useState(false); const [name, setName] = useState("");
+  const cv = useRef(); const [drawing, setDrawing] = useState(false); const [name, setName] = useState(""); const [busy, setBusy] = useState(false);
   const pos = e => { const r = cv.current.getBoundingClientRect(); const t = e.touches?.[0] || e; return { x: t.clientX - r.left, y: t.clientY - r.top }; };
   const start = e => { setDrawing(true); const c = cv.current.getContext("2d"); const p = pos(e); c.beginPath(); c.moveTo(p.x, p.y); };
   const move = e => { if (!drawing) return; e.preventDefault(); const c = cv.current.getContext("2d"); const p = pos(e); c.lineWidth = 2.5; c.lineCap = "round"; c.strokeStyle = "#0f1923"; c.lineTo(p.x, p.y); c.stroke(); };
   const clear = () => cv.current.getContext("2d").clearRect(0, 0, cv.current.width, cv.current.height);
+  const save = async () => {
+    if (!name) return;
+    setBusy(true);
+    const sigData = cv.current.toDataURL("image/png");
+    const id = "sig" + Date.now();
+    const row = { id, task_id: task.id, job_id: task.jobId, signed_name: name, signature_data: sigData };
+    try { await sbPost("field_signoffs", row); } catch { enqueue({ table: "field_signoffs", payload: row }); }
+    setBusy(false); onClose();
+  };
   return (
     <div className="modal-bg" onClick={e => e.target === e.currentTarget && onClose()}>
       <div className="modal"><div className="mt">{lang === "es" ? "Firma de Aprobación" : "Client Sign-Off"}</div>
@@ -1107,7 +1216,7 @@ function SignModal({ task, lang, onClose }) {
           onMouseDown={start} onMouseMove={move} onMouseUp={() => setDrawing(false)} onMouseLeave={() => setDrawing(false)}
           onTouchStart={start} onTouchMove={move} onTouchEnd={() => setDrawing(false)} />
         <div className="macts"><button className="btn btn-s" onClick={clear}>{lang === "es" ? "Borrar" : "Clear"}</button>
-          <button className="btn btn-g" onClick={onClose}><Icon n="check" s={14} /> {lang === "es" ? "Guardar" : "Save"}</button></div></div>
+          <button className="btn btn-g" onClick={save} disabled={busy}>{busy ? <span className="spin" /> : <><Icon n="check" s={14} /> {lang === "es" ? "Guardar" : "Save"}</>}</button></div></div>
     </div>
   );
 }
@@ -1122,7 +1231,11 @@ function CrewPhotos(props) {
     setBusy(true);
     const { dataUrl, sizeKB } = await compressImage(file);
     const tk = tasks.find(t => t.id === task);
-    setPhotos(p => [...p, { dataUrl, type, taskId: task, jobId: tk?.jobId, crewId: user.id, sizeKB, date: new Date().toISOString() }]);
+    const id = "p" + Date.now();
+    const photo = { id, dataUrl, type, taskId: task, jobId: tk?.jobId, crewId: user.id, sizeKB, date: new Date().toISOString() };
+    setPhotos(p => [...p, photo]);
+    const row = { id, data_url: dataUrl, photo_type: type, task_id: task, job_id: tk?.jobId, crew_id: user.id, size_kb: sizeKB };
+    try { await sbPost("field_photos", row); } catch { enqueue({ table: "field_photos", payload: row }); }
     setBusy(false);
   };
   return (
@@ -1152,14 +1265,19 @@ function CrewPhotos(props) {
 function CrewReceipts(props) {
   const { user, tasks, jobs, receipts, setReceipts, t, lang } = props;
   const my = tasks.filter(t => t.assignedTo === user.id);
-  const [task, setTask] = useState(""); const [store, setStore] = useState(""); const [amount, setAmount] = useState(""); const [note, setNote] = useState(""); const [busy, setBusy] = useState(false);
+  const [task, setTask] = useState(""); const [store, setStore] = useState(""); const [amount, setAmount] = useState(""); const [note, setNote] = useState(""); const [paidBy, setPaidBy] = useState("crew"); const [busy, setBusy] = useState(false);
   const fileRef = useRef();
   const upload = async e => {
     const file = e.target.files[0]; if (!file || !task) return; setBusy(true);
     const { dataUrl } = await compressImage(file, 1000, 0.6);
     const tk = tasks.find(t => t.id === task);
-    setReceipts(p => [...p, { id: "r" + Date.now(), dataUrl, taskId: task, jobId: tk?.jobId, crewId: user.id, store, amount, note, createdAt: new Date().toISOString().split("T")[0] }]);
-    setStore(""); setAmount(""); setNote(""); setBusy(false);
+    const id = "r" + Date.now();
+    const today = new Date().toISOString().split("T")[0];
+    const receipt = { id, dataUrl, taskId: task, jobId: tk?.jobId, crewId: user.id, store, amount, note, paidBy, reimbursementStatus: paidBy === "crew" ? "pending" : "na", createdAt: today };
+    setReceipts(p => [...p, receipt]);
+    const row = { id, data_url: dataUrl, task_id: task, job_id: tk?.jobId, crew_id: user.id, store, amount: parseFloat(amount) || 0, note, paid_by: paidBy, reimbursement_status: paidBy === "crew" ? "pending" : "na" };
+    try { await sbPost("field_receipts", row); } catch { enqueue({ table: "field_receipts", payload: row }); }
+    setStore(""); setAmount(""); setNote(""); setPaidBy("crew"); setBusy(false);
   };
   return (
     <div><h2 className="h2" style={{ marginBottom: 18 }}>{t.receipts}</h2>
@@ -1174,13 +1292,24 @@ function CrewReceipts(props) {
             <input className="fi" type="number" value={amount} onChange={e => setAmount(e.target.value)} placeholder="0.00" /></div></div>
         <div className="fg"><label className="fl">{lang === "es" ? "Notas" : "Notes"}</label>
           <input className="fi" value={note} onChange={e => setNote(e.target.value)} placeholder={lang === "es" ? "Qué compraste" : "What was bought"} /></div>
+        <div className="fg"><label className="fl">{lang === "es" ? "¿Quién pagó?" : "Who paid?"}</label>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button className={`btn btn-sm ${paidBy === "crew" ? "btn-a" : "btn-s"}`} onClick={() => setPaidBy("crew")}>{lang === "es" ? "Yo pagué (necesito reembolso)" : "I paid (need reimbursement)"}</button>
+            <button className={`btn btn-sm ${paidBy === "company" ? "btn-p" : "btn-s"}`} onClick={() => setPaidBy("company")}>{lang === "es" ? "Empresa pagó" : "Company paid"}</button>
+          </div>
+          {paidBy === "crew" && <p style={{ fontSize: 11, color: "var(--orange)", marginTop: 6 }}>{lang === "es" ? "Se registrará para reembolso" : "Will be flagged for reimbursement"}</p>}
+        </div>
         <input ref={fileRef} type="file" accept="image/*" capture="environment" style={{ display: "none" }} onChange={upload} />
         <button className="btn btn-a" disabled={!task || busy} onClick={() => fileRef.current?.click()}>{busy ? <span className="spin" /> : <><Icon n="camera" s={16} /> {lang === "es" ? "Foto Recibo" : "Photo Receipt"}</>}</button>
       </div>
       {receipts.filter(r => r.crewId === user.id).map(r => { const j = jobs.find(x => x.id === r.jobId);
         return <div key={r.id} className="card" style={{ display: "flex", gap: 14, alignItems: "center" }}>
           {r.dataUrl && <img src={r.dataUrl} alt="receipt" style={{ width: 56, height: 56, borderRadius: 8, objectFit: "cover" }} />}
-          <div style={{ flex: 1 }}><div style={{ fontWeight: 600 }}>{r.store}</div><div className="muted">{j?.name} · {r.note}</div></div>
+          <div style={{ flex: 1 }}>
+            <div style={{ fontWeight: 600 }}>{r.store}</div>
+            <div className="muted">{j?.name} · {r.note}</div>
+            {r.paidBy === "crew" && <span className={`tag ${r.reimbursementStatus === "paid" ? "tag-done" : "tag-overdue"}`} style={{ marginTop: 4, display: "inline-block" }}>{r.reimbursementStatus === "paid" ? (lang === "es" ? "Reembolsado" : "Reimbursed") : (lang === "es" ? "Pendiente reembolso" : "Awaiting reimbursement")}</span>}
+          </div>
           <div style={{ fontSize: 18, fontWeight: 800, color: "var(--accent)" }}>${(+r.amount).toFixed(2)}</div></div>; })}
     </div>
   );
@@ -1198,7 +1327,11 @@ function CrewLog(props) {
     if (e && !s && settings.gtKey) s = await translateText(e, "es", settings.gtKey);
     if (s && !e && settings.gtKey) e = await translateText(s, "en", settings.gtKey);
     const tk = tasks.find(t => t.id === task);
-    setLogs(p => [...p, { id: "l" + Date.now(), en: e, es: s, weather, taskId: task, jobId: tk?.jobId, crewId: user.id, date: today }]);
+    const id = "l" + Date.now();
+    const log = { id, en: e, es: s, weather, taskId: task, jobId: tk?.jobId, crewId: user.id, date: today };
+    setLogs(p => [...p, log]);
+    const row = { id, text_en: e, text_es: s, weather, task_id: task || null, job_id: tk?.jobId || null, crew_id: user.id, log_date: today };
+    try { await sbPost("field_logs", row); } catch { enqueue({ table: "field_logs", payload: row }); }
     setEn(""); setEs(""); setWeather(""); setBusy(false); setDone(true); setTimeout(() => setDone(false), 3000);
   };
   return (
