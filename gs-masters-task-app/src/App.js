@@ -32,7 +32,7 @@ const sbDelete = (t, id)       => sbFetch(`${t}?id=eq.${id}`, { method: "DELETE"
 // ─── SNAKE ↔ CAMEL TRANSFORMS ──────────────────────────────────────────
 const fromProfile = r => ({ id: r.id, name: r.name, role: r.role, email: r.email, phone: r.phone || "", pin: r.pin, active: r.active !== false });
 const fromJob     = r => ({ id: r.id, name: r.name, address: r.address || "", lat: r.lat, lng: r.lng, budget: r.budget, status: r.status, closedAt: r.closed_at, gsmJobId: r.gsm_job_id, gsmSync: r.gsm_sync || false });
-const fromTask    = r => ({ id: r.id, jobId: r.job_id, title: r.title, titleEs: r.title_es || "", assignedTo: r.assigned_to, status: r.status, dueDate: r.due_date || "", createdAt: (r.created_at || "").slice(0, 10) });
+const fromTask    = r => ({ id: r.id, jobId: r.job_id, title: r.title, titleEs: r.title_es || "", assignedTo: Array.isArray(r.assigned_to) ? r.assigned_to : (r.assigned_to ? [r.assigned_to] : []), status: r.status, dueDate: r.due_date || "", createdAt: (r.created_at || "").slice(0, 10) });
 const fromLog     = r => ({ id: r.id, taskId: r.task_id, jobId: r.job_id, crewId: r.crew_id, en: r.text_en, es: r.text_es, weather: r.weather, date: r.log_date });
 const fromPhoto   = r => ({ id: r.id, taskId: r.task_id, jobId: r.job_id, crewId: r.crew_id, dataUrl: r.data_url, type: r.photo_type, sizeKB: r.size_kb, date: r.created_at });
 const fromReceipt = r => ({ id: r.id, taskId: r.task_id, jobId: r.job_id, crewId: r.crew_id, dataUrl: r.data_url, store: r.store, amount: r.amount, note: r.note, paidBy: r.paid_by || "crew", reimbursementStatus: r.reimbursement_status || "pending", billStatus: r.bill_status, createdAt: (r.created_at || "").slice(0, 10) });
@@ -382,7 +382,45 @@ td{padding:9px 11px;font-size:13px;border-bottom:1px solid rgba(255,255,255,.04)
 }
 
 @media print{.topbar,.side,.cnav,.toolbar .btn,.modal-bg,.hamburger,.side-scrim{display:none!important}.content{padding:0}body{background:#fff;color:#000}}
+
+/* ── DROPDOWN OPTIONS FIX (dark mode: white bg / white text) ── */
+select.fi option{background:var(--steel2);color:var(--white)}
+
+/* ── LIGHT MODE ── */
+.app.light{--steel:#f1f5f9;--steel2:#ffffff;--steel3:#e8edf2;--card:rgba(255,255,255,.97);--border:rgba(15,25,36,.12);--slate:#475569;--silver:#64748b;--mist:#334155;--white:#0f172a;background:#f1f5f9}
+.app.light .login{background:radial-gradient(ellipse at 20% 30%,rgba(59,130,246,.08),transparent 55%),radial-gradient(ellipse at 85% 70%,rgba(245,158,11,.06),transparent 50%),#f1f5f9}
+.app.light .login-card{background:rgba(255,255,255,.95);border-color:rgba(59,130,246,.2);box-shadow:0 24px 70px rgba(0,0,0,.1)}
+.app.light .topbar{background:rgba(255,255,255,.97);border-color:rgba(15,25,36,.1);box-shadow:0 1px 8px rgba(0,0,0,.08)}
+.app.light .side{background:rgba(241,245,249,.98);border-color:rgba(15,25,36,.1)}
+.app.light .nav{color:#475569}
+.app.light .nav:hover{background:rgba(59,130,246,.08);color:#0f172a}
+.app.light .nav.on{background:rgba(59,130,246,.12);color:var(--sky-dim);border-color:rgba(59,130,246,.25)}
+.app.light .nav-sec{color:#94a3b8}
+.app.light .content{background:#f1f5f9}
+.app.light .card{background:rgba(255,255,255,.95);box-shadow:0 2px 12px rgba(0,0,0,.06)}
+.app.light .fi{background:#fff;border-color:rgba(15,25,36,.18);color:#0f172a}
+.app.light .fi:focus{border-color:var(--sky);background:#fff}
+.app.light .fi::placeholder{color:#94a3b8}
+.app.light select.fi option{background:#fff;color:#0f172a}
+.app.light .trow{background:rgba(255,255,255,.5)}
+.app.light .trow:hover{background:rgba(59,130,246,.04)}
+.app.light .log{background:rgba(0,0,0,.04)}
+.app.light .modal{background:#fff;border-color:rgba(15,25,36,.12)}
+.app.light .jobhead{background:linear-gradient(135deg,#e8edf5,#f1f5f9)}
+.app.light .jobbody{border-color:rgba(15,25,36,.1)}
+.app.light .cnav{background:rgba(255,255,255,.98);border-color:rgba(15,25,36,.1)}
+.app.light .cnav-i{color:#64748b}
+.app.light .cnav-i.on{color:var(--sky-dim)}
+.app.light .stat{background:rgba(255,255,255,.8);border-color:rgba(15,25,36,.1)}
+.app.light .bar{background:rgba(0,0,0,.08)}
+.app.light th{background:rgba(0,0,0,.04);color:#64748b}
+.app.light td{border-color:rgba(0,0,0,.05)}
+.app.light .badge-admin{background:rgba(245,158,11,.12);color:#b45309;border-color:rgba(245,158,11,.25)}
+.app.light .badge-crew{background:rgba(59,130,246,.1);color:var(--sky-dim);border-color:rgba(59,130,246,.2)}
+.app.light .net-on{background:rgba(16,185,129,.1)}
+.app.light .net-off{background:rgba(249,115,22,.1)}
 `;
+
 
 // ════════════════════════════════════════════════════════════════════════
 export default function App() {
@@ -391,8 +429,10 @@ export default function App() {
     try { return JSON.parse(localStorage.getItem("gsm_session") || "null"); } catch { return null; }
   });
   const [lang, setLang] = useState(() => localStorage.getItem("gsm_lang") || "en");
+  const [theme, setTheme] = useState(() => localStorage.getItem("gsm_theme") || "dark");
   const [online, setOnline] = useState(navigator.onLine);
   const [tab, setTab] = useState("dash");
+  const toggleTheme = () => setTheme(t => { const n = t === "dark" ? "light" : "dark"; localStorage.setItem("gsm_theme", n); return n; });
   const [menuOpen, setMenuOpen] = useState(false);
   const [jobs, setJobs] = useState([]);
   const [tasks, setTasks] = useState([]);
@@ -512,9 +552,10 @@ export default function App() {
                    online, setActive, addUser, updateUser, removeUser };
 
   return (
-    <div className="app">
+    <div className={`app${theme === "light" ? " light" : ""}`}>
       <style>{CSS}</style>
       <TopBar user={user} onLogout={logout} t={t} lang={lang} setLang={setLang} online={online}
+        theme={theme} toggleTheme={toggleTheme}
         showMenu={user.role === "admin"} menuOpen={menuOpen} setMenuOpen={setMenuOpen} />
       {user.role === "admin"
         ? <Admin {...shared} tab={tab} setTab={setTab} menuOpen={menuOpen} setMenuOpen={setMenuOpen} />
@@ -583,7 +624,7 @@ function Login({ onLogin, t, lang, setLang }) {
 }
 
 // ─── TOP BAR ──────────────────────────────────────────────────────────
-function TopBar({ user, onLogout, t, lang, setLang, online, showMenu, menuOpen, setMenuOpen }) {
+function TopBar({ user, onLogout, t, lang, setLang, online, showMenu, menuOpen, setMenuOpen, theme, toggleTheme }) {
   return (
     <div className="topbar">
       <div className="tb-brand">
@@ -594,6 +635,8 @@ function TopBar({ user, onLogout, t, lang, setLang, online, showMenu, menuOpen, 
       <div className="tb-right">
         <span className={`net-dot ${online ? "net-on" : "net-off"}`}>
           <Icon n={online ? "wifi" : "wifiOff"} s={12} /> <span className="net-txt">{online ? "Online" : "Offline"}</span></span>
+        <button className="btn btn-s btn-sm btn-ic" onClick={toggleTheme} title={theme === "dark" ? "Switch to Light Mode" : "Switch to Dark Mode"}
+          style={{ fontSize: 15 }}>{theme === "dark" ? "☀️" : "🌙"}</button>
         <button className="btn btn-s btn-sm" onClick={() => setLang(lang === "en" ? "es" : "en")}>
           <Icon n="translate" s={14} /> {lang === "en" ? "ES" : "EN"}</button>
         <span className="muted tb-name" style={{ fontSize: 13 }}>{user.name}</span>
@@ -674,13 +717,15 @@ function AdminTasks(props) {
   const { tasks, setTasks, jobs, users, t, settings } = props;
   const [filter, setFilter] = useState("all");
   const [modal, setModal] = useState(false);
-  const [nt, setNt] = useState({ title: "", titleEs: "", jobId: "", assignedTo: "", dueDate: "" });
+  const [nt, setNt] = useState({ title: "", titleEs: "", jobId: "", assignedTo: [], dueDate: "" });
   const [busy, setBusy] = useState(false);
   const today = new Date().toISOString().split("T")[0];
   const shown = filter === "all" ? jobs : jobs.filter(j => j.id === filter);
 
+  const toggleCrew = (id) => setNt(p => ({ ...p, assignedTo: p.assignedTo.includes(id) ? p.assignedTo.filter(x => x !== id) : [...p.assignedTo, id] }));
+
   const add = async () => {
-    if (!nt.title || !nt.jobId || !nt.assignedTo) return;
+    if (!nt.title || !nt.jobId || !nt.assignedTo.length) return;
     setBusy(true);
     let es = nt.titleEs;
     if (!es && settings.gtKey) es = await translateText(nt.title, "es", settings.gtKey);
@@ -689,7 +734,7 @@ function AdminTasks(props) {
     setTasks(p => [...p, task]);
     const row = { id, job_id: nt.jobId, title: nt.title, title_es: es || nt.title, assigned_to: nt.assignedTo, due_date: nt.dueDate || null, status: "pending" };
     try { await sbPost("field_tasks", row); } catch { enqueue({ table: "field_tasks", payload: row }); }
-    setNt({ title: "", titleEs: "", jobId: "", assignedTo: "", dueDate: "" }); setModal(false); setBusy(false);
+    setNt({ title: "", titleEs: "", jobId: "", assignedTo: [], dueDate: "" }); setModal(false); setBusy(false);
   };
   const toggle = async (id) => {
     const task = tasks.find(t => t.id === id);
@@ -717,7 +762,7 @@ function AdminTasks(props) {
           <div className="jobhead"><div><div className="jobname">{job.name}</div><div className="jobaddr">{job.address}</div></div>
             <span className="tag-l">{jt.length} tasks</span></div>
           <div className="jobbody">{jt.map(task => {
-            const s = st(task), a = users.find(u => u.id === task.assignedTo);
+            const s = st(task), crew = (task.assignedTo || []).map(id => users.find(u => u.id === id)).filter(Boolean);
             return <div key={task.id} className="trow">
               <div className="tchk"><input type="checkbox" checked={task.status === "done"} onChange={() => toggle(task.id)} /></div>
               <div className="tinfo">
@@ -725,7 +770,7 @@ function AdminTasks(props) {
                 <div className="tes">{task.titleEs}</div>
                 <div className="tmeta"><span className={`tag tag-${s}`}>{t[s]}</span>
                   {task.dueDate && <span className="tag" style={{ background: "rgba(255,255,255,.06)", color: "var(--silver)" }}>Due {task.dueDate}</span>}
-                  {a && <span className="tag-l">{a.name}</span>}</div>
+                  {crew.map(a => <span key={a.id} className="tag-l" style={{ marginRight: 3 }}>{a.name}</span>)}</div>
               </div>
               <button className="btn btn-s btn-sm btn-ic" style={{ color: "var(--red)", flexShrink: 0 }} title="Delete" onClick={() => deleteTask(task.id)}><Icon n="x" s={14} /></button>
             </div>;
@@ -741,12 +786,26 @@ function AdminTasks(props) {
             <input className="fi" value={nt.title} onChange={e => setNt(p => ({ ...p, title: e.target.value }))} placeholder="Task..." /></div>
           <div className="fg"><label className="fl">Tarea (Español) — auto-translates if blank</label>
             <input className="fi" value={nt.titleEs} onChange={e => setNt(p => ({ ...p, titleEs: e.target.value }))} placeholder="Opcional..." /></div>
-          <div className="grid2">
-            <div className="fg"><label className="fl">Assign To</label>
-              <select className="fi" value={nt.assignedTo} onChange={e => setNt(p => ({ ...p, assignedTo: e.target.value }))}>
-                <option value="">Crew</option>{users.filter(u => u.role === "crew").map(u => <option key={u.id} value={u.id}>{u.name}</option>)}</select></div>
-            <div className="fg"><label className="fl">Due Date</label>
-              <input className="fi" type="date" value={nt.dueDate} onChange={e => setNt(p => ({ ...p, dueDate: e.target.value }))} /></div></div>
+          <div className="fg">
+            <label className="fl">Assign To <span style={{ color: "var(--silver)", fontWeight: 400, textTransform: "none", letterSpacing: 0 }}>— select one or more</span></label>
+            <div style={{ background: "rgba(0,0,0,.15)", borderRadius: 10, padding: "6px 4px", border: "1px solid var(--border)" }}>
+              {users.filter(u => u.role === "crew").map(u => (
+                <label key={u.id} style={{ display: "flex", alignItems: "center", gap: 11, padding: "8px 12px", cursor: "pointer", borderRadius: 8,
+                  background: nt.assignedTo.includes(u.id) ? "rgba(59,130,246,.12)" : "transparent", transition: ".15s" }}>
+                  <input type="checkbox" checked={nt.assignedTo.includes(u.id)} onChange={() => toggleCrew(u.id)}
+                    style={{ width: 17, height: 17, accentColor: "var(--sky)", flexShrink: 0 }} />
+                  <div style={{ width: 32, height: 32, borderRadius: "50%", background: nt.assignedTo.includes(u.id) ? "linear-gradient(135deg,var(--sky-dim),var(--sky))" : "rgba(255,255,255,.1)",
+                    display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "'Barlow Condensed'", fontWeight: 800, fontSize: 14, flexShrink: 0 }}>{u.name[0]}</div>
+                  <span style={{ fontSize: 14, fontWeight: 500 }}>{u.name}</span>
+                  {nt.assignedTo.includes(u.id) && <span style={{ marginLeft: "auto", fontSize: 11, color: "var(--sky2)" }}>✓ assigned</span>}
+                </label>
+              ))}
+              {!users.filter(u => u.role === "crew").length && <p className="muted" style={{ padding: "10px 12px", fontSize: 13 }}>No crew members added yet.</p>}
+            </div>
+            {!nt.assignedTo.length && <p style={{ fontSize: 11, color: "var(--orange)", marginTop: 6 }}>Select at least one crew member</p>}
+          </div>
+          <div className="fg"><label className="fl">Due Date</label>
+            <input className="fi" type="date" value={nt.dueDate} onChange={e => setNt(p => ({ ...p, dueDate: e.target.value }))} /></div>
           <div className="macts"><button className="btn btn-s" onClick={() => setModal(false)}>Cancel</button>
             <button className="btn btn-p" onClick={add} disabled={busy}>{busy ? <span className="spin" /> : "Add Task"}</button></div>
         </div></div>}
@@ -805,7 +864,7 @@ function Report({ tasks, jobs, users, logs, t }) {
             <option value="all">All Jobs</option>{jobs.map(j => <option key={j.id} value={j.id}>{j.name}</option>)}</select>
           <button className="btn btn-s btn-sm" onClick={() => window.print()}><Icon n="print" s={14} /> Print</button></div></div>
       {crew.map(m => {
-        const mt = ft.filter(t => t.assignedTo === m.id);
+        const mt = ft.filter(t => (Array.isArray(t.assignedTo) ? t.assignedTo.includes(m.id) : t.assignedTo === m.id));
         if (!mt.length) return null;
         const done = mt.filter(t => t.status === "done").length;
         const jw = [...new Set(mt.map(t => t.jobId))];
@@ -1055,7 +1114,7 @@ function CrewMgmt({ users, tasks, setActive, addUser, updateUser, removeUser, se
         <button className="btn btn-p" onClick={openAdd}><Icon n="plus" s={16} /> Add Crew</button></div>
       <p className="muted" style={{ marginBottom: 18, fontSize: 13 }}>Add a member to generate their login + a text-ready invite. Deactivating locks their app on every device within seconds and blocks new logins.</p>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(270px,1fr))", gap: 14 }}>
-        {users.filter(u => u.role === "crew").map(m => { const mt = tasks.filter(t => t.assignedTo === m.id), done = mt.filter(t => t.status === "done").length;
+        {users.filter(u => u.role === "crew").map(m => { const mt = tasks.filter(t => (Array.isArray(t.assignedTo) ? t.assignedTo.includes(m.id) : t.assignedTo === m.id)), done = mt.filter(t => t.status === "done").length;
           const active = isActive(m);
           return <div key={m.id} className="card" style={{ borderTop: `4px solid ${active ? "var(--sky)" : "var(--red)"}`, opacity: active ? 1 : .75 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 14 }}>
@@ -1183,7 +1242,7 @@ function Crew(props) {
 function CrewTasks(props) {
   const { user, tasks, setTasks, jobs, lang, t, settings } = props;
   const closedJobIds = new Set(jobs.filter(j => j.status === "closed").map(j => j.id));
-  const my = tasks.filter(t => t.assignedTo === user.id && !closedJobIds.has(t.jobId));
+  const my = tasks.filter(t => (Array.isArray(t.assignedTo) ? t.assignedTo.includes(user.id) : t.assignedTo === user.id) && !closedJobIds.has(t.jobId));
   const today = new Date().toISOString().split("T")[0];
   const [checkedJob, setCheckedJob] = useState(null);
   const [gps, setGps] = useState(null);
@@ -1286,7 +1345,7 @@ function SignModal({ task, lang, onClose }) {
 
 function CrewPhotos(props) {
   const { user, tasks, jobs, photos, setPhotos, t } = props;
-  const my = tasks.filter(t => t.assignedTo === user.id);
+  const my = tasks.filter(t => Array.isArray(t.assignedTo) ? t.assignedTo.includes(user.id) : t.assignedTo === user.id);
   const [task, setTask] = useState(""); const [type, setType] = useState("before"); const [busy, setBusy] = useState(false);
   const fileRef = useRef();
   const upload = async e => {
@@ -1327,7 +1386,7 @@ function CrewPhotos(props) {
 
 function CrewReceipts(props) {
   const { user, tasks, jobs, receipts, setReceipts, t, lang } = props;
-  const my = tasks.filter(t => t.assignedTo === user.id);
+  const my = tasks.filter(t => Array.isArray(t.assignedTo) ? t.assignedTo.includes(user.id) : t.assignedTo === user.id);
   const [task, setTask] = useState(""); const [store, setStore] = useState(""); const [amount, setAmount] = useState(""); const [note, setNote] = useState(""); const [paidBy, setPaidBy] = useState("crew"); const [busy, setBusy] = useState(false);
   const fileRef = useRef();
   const upload = async e => {
@@ -1380,7 +1439,7 @@ function CrewReceipts(props) {
 
 function CrewLog(props) {
   const { user, tasks, jobs, logs, setLogs, lang, t, settings } = props;
-  const my = tasks.filter(t => t.assignedTo === user.id);
+  const my = tasks.filter(t => Array.isArray(t.assignedTo) ? t.assignedTo.includes(user.id) : t.assignedTo === user.id);
   const [task, setTask] = useState(""); const [en, setEn] = useState(""); const [es, setEs] = useState(""); const [weather, setWeather] = useState(""); const [busy, setBusy] = useState(false); const [done, setDone] = useState(false);
   const today = new Date().toISOString().split("T")[0];
   const loggedToday = logs.some(l => l.crewId === user.id && l.date === today);
