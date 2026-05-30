@@ -31,7 +31,7 @@ const sbDelete = (t, id)       => sbFetch(`${t}?id=eq.${id}`, { method: "DELETE"
 
 // ─── SNAKE ↔ CAMEL TRANSFORMS ──────────────────────────────────────────
 const fromProfile = r => ({ id: r.id, name: r.name, role: r.role, email: r.email, phone: r.phone || "", pin: r.pin, active: r.active !== false });
-const fromJob     = r => ({ id: r.id, name: r.name, address: r.address || "", lat: r.lat, lng: r.lng, budget: r.budget, status: r.status, closedAt: r.closed_at, gsmJobId: r.gsm_job_id });
+const fromJob     = r => ({ id: r.id, name: r.name, address: r.address || "", lat: r.lat, lng: r.lng, budget: r.budget, status: r.status, closedAt: r.closed_at, gsmJobId: r.gsm_job_id, gsmSync: r.gsm_sync || false });
 const fromTask    = r => ({ id: r.id, jobId: r.job_id, title: r.title, titleEs: r.title_es || "", assignedTo: r.assigned_to, status: r.status, dueDate: r.due_date || "", createdAt: (r.created_at || "").slice(0, 10) });
 const fromLog     = r => ({ id: r.id, taskId: r.task_id, jobId: r.job_id, crewId: r.crew_id, en: r.text_en, es: r.text_es, weather: r.weather, date: r.log_date });
 const fromPhoto   = r => ({ id: r.id, taskId: r.task_id, jobId: r.job_id, crewId: r.crew_id, dataUrl: r.data_url, type: r.photo_type, sizeKB: r.size_kb, date: r.created_at });
@@ -900,37 +900,69 @@ function AdminPhotos({ photos, tasks, jobs }) {
 function Jobs({ jobs, setJobs, tasks }) {
   const [modal, setModal] = useState(false);
   const [confirm, setConfirm] = useState(null);
-  const [nj, setNj] = useState({ name: "", address: "" });
+  const [syncConfirm, setSyncConfirm] = useState(null);
+  const [nj, setNj] = useState({ name: "", address: "", gsmSync: false });
   const [showClosed, setShowClosed] = useState(false);
+
   const add = async () => {
     if (!nj.name) return;
     const id = "j" + Date.now();
-    const job = { id, name: nj.name, address: nj.address, status: "active" };
-    setJobs(p => [...p, job]); setNj({ name: "", address: "" }); setModal(false);
-    try { await sbPost("field_jobs", job); } catch { enqueue({ table: "field_jobs", payload: job }); }
+    const job = { id, name: nj.name, address: nj.address, status: "active", gsmSync: nj.gsmSync, gsmJobId: null };
+    setJobs(p => [...p, job]); setNj({ name: "", address: "", gsmSync: false }); setModal(false);
+    try { await sbPost("field_jobs", { id, name: nj.name, address: nj.address, status: "active", gsm_sync: nj.gsmSync }); }
+    catch { enqueue({ table: "field_jobs", payload: { id, name: nj.name, address: nj.address, status: "active", gsm_sync: nj.gsmSync } }); }
   };
+
   const setStatus = async (id, status) => {
     const closedAt = status === "closed" ? new Date().toISOString().split("T")[0] : null;
     setJobs(p => p.map(j => j.id === id ? { ...j, status, closedAt } : j)); setConfirm(null);
     try { await sbPatch("field_jobs", id, { status, closed_at: closedAt }); } catch {}
   };
 
+  const toggleSync = async (job) => {
+    if (!job.gsmSync) { setSyncConfirm(job); return; }
+    const next = false;
+    setJobs(p => p.map(j => j.id === job.id ? { ...j, gsmSync: next } : j));
+    try { await sbPatch("field_jobs", job.id, { gsm_sync: next }); } catch {}
+  };
+
+  const confirmSync = async (job) => {
+    setJobs(p => p.map(j => j.id === job.id ? { ...j, gsmSync: true } : j));
+    try { await sbPatch("field_jobs", job.id, { gsm_sync: true }); } catch {}
+    setSyncConfirm(null);
+  };
+
   const active = jobs.filter(j => j.status !== "closed");
   const closed = jobs.filter(j => j.status === "closed");
   const jobStats = job => { const jt = tasks.filter(t => t.jobId === job.id); return { total: jt.length, done: jt.filter(t => t.status === "done").length }; };
 
-  return (
-    <div><div className="flexb" style={{ marginBottom: 20 }}><h2 className="h2">Jobs</h2>
-      <button className="btn btn-p" onClick={() => setModal(true)}><Icon n="plus" s={16} /> Add Job</button></div>
+  const SyncBadge = ({ job }) => (
+    <button onClick={() => toggleSync(job)} title={job.gsmSync ? "Syncing to GSM Builder — click to disable" : "Click to sync tasks & receipts to GSM Builder"}
+      style={{ display: "flex", alignItems: "center", gap: 5, padding: "3px 9px", borderRadius: 20, fontSize: 11, fontWeight: 700, border: "none", cursor: "pointer",
+        background: job.gsmSync ? "rgba(16,185,129,.15)" : "rgba(100,116,139,.12)",
+        color: job.gsmSync ? "var(--green)" : "var(--slate)" }}>
+      <span style={{ width: 7, height: 7, borderRadius: "50%", background: job.gsmSync ? "var(--green)" : "var(--slate)", display: "inline-block" }} />
+      {job.gsmSync ? "GSM Builder ON" : "GSM Builder OFF"}
+    </button>
+  );
 
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(270px,1fr))", gap: 14 }}>
+  return (
+    <div>
+      <div className="flexb" style={{ marginBottom: 8 }}><h2 className="h2">Jobs</h2>
+        <button className="btn btn-p" onClick={() => setModal(true)}><Icon n="plus" s={16} /> Add Job</button></div>
+      <p className="muted" style={{ marginBottom: 18, fontSize: 13 }}>
+        Toggle <strong style={{ color: "var(--green)" }}>GSM Builder</strong> per job to push tasks, receipts, and billing into the accounting system. Jobs staying in QuickBooks leave it OFF.
+      </p>
+
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(280px,1fr))", gap: 14 }}>
         {active.map(job => { const s = jobStats(job); const allDone = s.total > 0 && s.done === s.total;
-          return <div key={job.id} className="card" style={{ borderLeft: "4px solid var(--sky)" }}>
-            <div style={{ fontFamily: "'Barlow Condensed'", fontSize: 19, fontWeight: 800, marginBottom: 5 }}>{job.name}</div>
-            <div className="muted" style={{ marginBottom: 10 }}>{job.address}</div>
+          return <div key={job.id} className="card" style={{ borderLeft: `4px solid ${job.gsmSync ? "var(--green)" : "var(--sky)"}` }}>
+            <div style={{ fontFamily: "'Barlow Condensed'", fontSize: 19, fontWeight: 800, marginBottom: 4 }}>{job.name}</div>
+            <div className="muted" style={{ marginBottom: 10, fontSize: 13 }}>{job.address}</div>
             <div className="flexb" style={{ marginBottom: 12 }}>
-              <span className="tag tag-done">active</span>
-              <span className="muted" style={{ fontSize: 12 }}>{s.done}/{s.total} tasks</span></div>
+              <SyncBadge job={job} />
+              <span className="muted" style={{ fontSize: 12 }}>{s.done}/{s.total} tasks</span>
+            </div>
             {allDone && <div style={{ fontSize: 12, color: "var(--green)", marginBottom: 10 }}>✓ All tasks complete — ready to close</div>}
             <button className="btn btn-s btn-sm btn-full" onClick={() => setConfirm(job)}>
               <Icon n="check" s={13} /> Close Job</button></div>; })}
@@ -939,30 +971,61 @@ function Jobs({ jobs, setJobs, tasks }) {
       {closed.length > 0 && <div style={{ marginTop: 28 }}>
         <button className="btn btn-s btn-sm" onClick={() => setShowClosed(!showClosed)}>
           <Icon n={showClosed ? "x" : "briefcase"} s={14} /> {showClosed ? "Hide" : "Show"} Closed Jobs ({closed.length})</button>
-        {showClosed && <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(270px,1fr))", gap: 14, marginTop: 16 }}>
+        {showClosed && <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(280px,1fr))", gap: 14, marginTop: 16 }}>
           {closed.map(job => { const s = jobStats(job);
             return <div key={job.id} className="card" style={{ borderLeft: "4px solid var(--slate)", opacity: .75 }}>
-              <div style={{ fontFamily: "'Barlow Condensed'", fontSize: 19, fontWeight: 800, marginBottom: 5 }}>{job.name}</div>
+              <div style={{ fontFamily: "'Barlow Condensed'", fontSize: 19, fontWeight: 800, marginBottom: 4 }}>{job.name}</div>
               <div className="muted" style={{ marginBottom: 10 }}>{job.address}</div>
               <div className="flexb" style={{ marginBottom: 12 }}>
                 <span className="tag" style={{ background: "rgba(100,116,139,.2)", color: "var(--silver)" }}>closed</span>
                 <span className="muted" style={{ fontSize: 12 }}>{job.closedAt}</span></div>
-              <div className="muted" style={{ fontSize: 12, marginBottom: 10 }}>{s.done}/{s.total} tasks · history preserved</div>
+              <div className="muted" style={{ fontSize: 12, marginBottom: 10 }}>{s.done}/{s.total} tasks · {job.gsmSync ? "was synced to GSM Builder" : "QuickBooks job"}</div>
               <button className="btn btn-s btn-sm btn-full" onClick={() => setStatus(job.id, "active")}>
                 <Icon n="power" s={13} /> Reopen Job</button></div>; })}</div>}
       </div>}
 
       {modal && <div className="modal-bg" onClick={e => e.target === e.currentTarget && setModal(false)}>
         <div className="modal"><div className="mt">Add Job</div>
-          <div className="fg"><label className="fl">Job Name</label><input className="fi" value={nj.name} onChange={e => setNj(p => ({ ...p, name: e.target.value }))} placeholder="Lot 5 – Harvest Creek" /></div>
-          <div className="fg"><label className="fl">Address</label><input className="fi" value={nj.address} onChange={e => setNj(p => ({ ...p, address: e.target.value }))} placeholder="Chelsea, AL" /></div>
-          <div className="macts"><button className="btn btn-s" onClick={() => setModal(false)}>Cancel</button><button className="btn btn-p" onClick={add}>Add Job</button></div></div></div>}
+          <div className="fg"><label className="fl">Job Name</label>
+            <input className="fi" value={nj.name} onChange={e => setNj(p => ({ ...p, name: e.target.value }))} placeholder="Lot 5 – Harvest Creek" /></div>
+          <div className="fg"><label className="fl">Address</label>
+            <input className="fi" value={nj.address} onChange={e => setNj(p => ({ ...p, address: e.target.value }))} placeholder="Chelsea, AL" /></div>
+          <div style={{ padding: "14px 16px", background: "rgba(0,0,0,.2)", borderRadius: 10, marginBottom: 18 }}>
+            <div className="flexb">
+              <div>
+                <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 3 }}>Sync to GSM Builder Accounting?</div>
+                <div style={{ fontSize: 12, color: "var(--silver)", lineHeight: 1.5 }}>ON = tasks, receipts & billing push to GSM Builder.<br />OFF = stays in field app only (QuickBooks job).</div>
+              </div>
+              <button onClick={() => setNj(p => ({ ...p, gsmSync: !p.gsmSync }))}
+                style={{ width: 48, height: 26, borderRadius: 13, border: "none", cursor: "pointer", position: "relative", flexShrink: 0,
+                  background: nj.gsmSync ? "var(--green)" : "rgba(255,255,255,.15)", transition: ".2s" }}>
+                <span style={{ position: "absolute", top: 3, left: nj.gsmSync ? 25 : 3, width: 20, height: 20, borderRadius: "50%", background: "#fff", transition: ".2s" }} />
+              </button>
+            </div>
+            {nj.gsmSync && <p style={{ fontSize: 11, color: "var(--green)", marginTop: 8 }}>✓ This job will sync tasks & receipts to GSM Builder</p>}
+          </div>
+          <div className="macts"><button className="btn btn-s" onClick={() => setModal(false)}>Cancel</button>
+            <button className="btn btn-p" onClick={add}>Add Job</button></div></div></div>}
 
       {confirm && <div className="modal-bg" onClick={e => e.target === e.currentTarget && setConfirm(null)}>
-        <div className="modal"><div className="mt">Close “{confirm.name}”?</div>
+        <div className="modal"><div className="mt">Close "{confirm.name}"?</div>
           <p className="muted" style={{ lineHeight: 1.6 }}>This moves the job to Closed Jobs. Crew will stop seeing it and its tasks. All photos, receipts, and history stay saved and you can reopen it anytime.</p>
           <div className="macts"><button className="btn btn-s" onClick={() => setConfirm(null)}>Cancel</button>
             <button className="btn btn-g" onClick={() => setStatus(confirm.id, "closed")}><Icon n="check" s={14} /> Close Job</button></div></div></div>}
+
+      {syncConfirm && <div className="modal-bg" onClick={e => e.target === e.currentTarget && setSyncConfirm(null)}>
+        <div className="modal"><div className="mt">Enable GSM Builder Sync?</div>
+          <p className="muted" style={{ lineHeight: 1.6, marginBottom: 12 }}>
+            Turning ON sync for <strong style={{ color: "var(--white)" }}>{syncConfirm.name}</strong> means:
+          </p>
+          <ul style={{ color: "var(--silver)", fontSize: 13, lineHeight: 1.8, paddingLeft: 18, marginBottom: 16 }}>
+            <li>Tasks will appear in the GSM Builder calendar</li>
+            <li>Receipts will auto-create bills in GSM Builder accounting</li>
+            <li>AI will scan, file, and post each receipt to the job folder</li>
+          </ul>
+          <p className="muted" style={{ fontSize: 12 }}>You can turn this OFF again anytime from the job card.</p>
+          <div className="macts"><button className="btn btn-s" onClick={() => setSyncConfirm(null)}>Cancel</button>
+            <button className="btn btn-g" onClick={() => confirmSync(syncConfirm)}><Icon n="check" s={14} /> Enable Sync</button></div></div></div>}
     </div>
   );
 }
