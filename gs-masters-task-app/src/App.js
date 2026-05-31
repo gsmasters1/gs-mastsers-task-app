@@ -387,38 +387,63 @@ td{padding:9px 11px;font-size:13px;border-bottom:1px solid rgba(255,255,255,.04)
 select.fi option{background:var(--steel2);color:var(--white)}
 
 /* ── LIGHT MODE ── */
-.app.light{--steel:#f1f5f9;--steel2:#ffffff;--steel3:#e8edf2;--card:rgba(255,255,255,.97);--border:rgba(15,25,36,.12);--slate:#475569;--silver:#64748b;--mist:#334155;--white:#0f172a;background:#f1f5f9}
-.app.light .login{background:radial-gradient(ellipse at 20% 30%,rgba(59,130,246,.08),transparent 55%),radial-gradient(ellipse at 85% 70%,rgba(245,158,11,.06),transparent 50%),#f1f5f9}
-.app.light .login-card{background:rgba(255,255,255,.95);border-color:rgba(59,130,246,.2);box-shadow:0 24px 70px rgba(0,0,0,.1)}
-.app.light .topbar{background:rgba(255,255,255,.97);border-color:rgba(15,25,36,.1);box-shadow:0 1px 8px rgba(0,0,0,.08)}
-.app.light .side{background:rgba(241,245,249,.98);border-color:rgba(15,25,36,.1)}
+.app.light{
+  --steel:#f1f5f9;--steel2:#ffffff;--steel3:#e8edf2;
+  --card:rgba(255,255,255,.97);--border:rgba(15,25,36,.12);
+  --slate:#475569;--silver:#64748b;--mist:#334155;--white:#0f172a;
+  background:#f1f5f9;
+  color:#0f172a;  /* cascade dark text to ALL children */
+}
+.app.light .login{background:radial-gradient(ellipse at 20% 30%,rgba(59,130,246,.08),transparent 55%),radial-gradient(ellipse at 85% 70%,rgba(245,158,11,.06),transparent 50%),#f1f5f9;color:#0f172a}
+.app.light .login-card{background:rgba(255,255,255,.95);border-color:rgba(59,130,246,.2);box-shadow:0 24px 70px rgba(0,0,0,.1);color:#0f172a}
+.app.light .logo-title,.app.light .logo-sub,.app.light .fl{color:#0f172a}
+.app.light .topbar{background:rgba(255,255,255,.97);border-color:rgba(15,25,36,.1);box-shadow:0 1px 8px rgba(0,0,0,.08);color:#0f172a}
+.app.light .tb-title,.app.light .tb-name{color:#0f172a}
+.app.light .side{background:rgba(241,245,249,.98);border-color:rgba(15,25,36,.1);color:#0f172a}
 .app.light .nav{color:#475569}
 .app.light .nav:hover{background:rgba(59,130,246,.08);color:#0f172a}
 .app.light .nav.on{background:rgba(59,130,246,.12);color:var(--sky-dim);border-color:rgba(59,130,246,.25)}
 .app.light .nav-sec{color:#94a3b8}
-.app.light .content{background:#f1f5f9}
-.app.light .card{background:rgba(255,255,255,.95);box-shadow:0 2px 12px rgba(0,0,0,.06)}
+.app.light .content{background:#f1f5f9;color:#0f172a}
+.app.light .h2{color:#0f172a}
+.app.light .card{background:rgba(255,255,255,.95);box-shadow:0 2px 12px rgba(0,0,0,.06);color:#0f172a}
+.app.light .ct{color:#1e293b}
+.app.light .muted{color:#475569}
 .app.light .fi{background:#fff;border-color:rgba(15,25,36,.18);color:#0f172a}
 .app.light .fi:focus{border-color:var(--sky);background:#fff}
 .app.light .fi::placeholder{color:#94a3b8}
 .app.light select.fi option{background:#fff;color:#0f172a}
+.app.light .btn-s{background:rgba(0,0,0,.06);color:#334155;border-color:rgba(15,25,36,.15)}
+.app.light .btn-s:hover{background:rgba(0,0,0,.1);color:#0f172a}
 .app.light .trow{background:rgba(255,255,255,.5)}
 .app.light .trow:hover{background:rgba(59,130,246,.04)}
-.app.light .log{background:rgba(0,0,0,.04)}
-.app.light .modal{background:#fff;border-color:rgba(15,25,36,.12)}
-.app.light .jobhead{background:linear-gradient(135deg,#e8edf5,#f1f5f9)}
+.app.light .ten{color:#0f172a}
+.app.light .tes{color:#475569}
+.app.light .log{background:rgba(0,0,0,.04);color:#0f172a}
+.app.light .log-en{color:#0f172a}
+.app.light .log-es{color:var(--sky-dim)}
+.app.light .log-m{color:#64748b}
+.app.light .modal{background:#fff;border-color:rgba(15,25,36,.12);color:#0f172a}
+.app.light .mt{color:#0f172a}
+.app.light .jobhead{background:linear-gradient(135deg,#e8edf5,#f1f5f9);color:#0f172a}
+.app.light .jobname,.app.light .jobaddr{color:#0f172a}
+.app.light .jobaddr{color:#475569}
 .app.light .jobbody{border-color:rgba(15,25,36,.1)}
-.app.light .cnav{background:rgba(255,255,255,.98);border-color:rgba(15,25,36,.1)}
+.app.light .cnav{background:rgba(255,255,255,.98);border-color:rgba(15,25,36,.1);color:#0f172a}
 .app.light .cnav-i{color:#64748b}
 .app.light .cnav-i.on{color:var(--sky-dim)}
-.app.light .stat{background:rgba(255,255,255,.8);border-color:rgba(15,25,36,.1)}
+.app.light .cnav-l{color:inherit}
+.app.light .stat{background:rgba(255,255,255,.8);border-color:rgba(15,25,36,.1);color:#0f172a}
+.app.light .stat-l{color:#475569}
 .app.light .bar{background:rgba(0,0,0,.08)}
 .app.light th{background:rgba(0,0,0,.04);color:#64748b}
-.app.light td{border-color:rgba(0,0,0,.05)}
+.app.light td{border-color:rgba(0,0,0,.05);color:#0f172a}
 .app.light .badge-admin{background:rgba(245,158,11,.12);color:#b45309;border-color:rgba(245,158,11,.25)}
 .app.light .badge-crew{background:rgba(59,130,246,.1);color:var(--sky-dim);border-color:rgba(59,130,246,.2)}
-.app.light .net-on{background:rgba(16,185,129,.1)}
-.app.light .net-off{background:rgba(249,115,22,.1)}
+.app.light .net-on{background:rgba(16,185,129,.1);color:#059669}
+.app.light .net-off{background:rgba(249,115,22,.1);color:#c2410c}
+.app.light .empty{color:#64748b}
+.app.light .fl{color:#334155}
 `;
 
 
@@ -535,7 +560,7 @@ export default function App() {
 
   const saveSettings = (s) => { setSettings(s); localStorage.setItem("gsm_set", JSON.stringify(s)); };
 
-  if (!user) return <Login onLogin={login} t={t} lang={lang} setLang={setLang} />;
+  if (!user) return <Login onLogin={login} t={t} lang={lang} setLang={setLang} theme={theme} toggleTheme={toggleTheme} />;
 
   if (revoked) return <LockedOut user={user} lang={lang} onAck={logout} />;
 
@@ -585,7 +610,7 @@ function LockedOut({ user, lang, onAck }) {
 }
 
 // ─── LOGIN ────────────────────────────────────────────────────────────
-function Login({ onLogin, t, lang, setLang }) {
+function Login({ onLogin, t, lang, setLang, theme, toggleTheme }) {
   const [email, setEmail] = useState(""), [pin, setPin] = useState(""), [err, setErr] = useState(""), [busy, setBusy] = useState(false);
   const go = async () => {
     if (!email || !pin) return setErr(lang === "en" ? "Enter email and PIN." : "Ingresa email y PIN.");
@@ -600,7 +625,7 @@ function Login({ onLogin, t, lang, setLang }) {
     setBusy(false);
   };
   return (
-    <div className="login"><style>{CSS}</style>
+    <div className={`app${theme === "light" ? " light" : ""}`}><div className="login"><style>{CSS}</style>
       <div className="login-card">
         <div className="logo-mark"><Icon n="briefcase" s={32} c="#fff" /></div>
         <div className="logo-title">GS MASTERS</div>
@@ -614,12 +639,15 @@ function Login({ onLogin, t, lang, setLang }) {
           {err && <p style={{ color: "var(--red)", fontSize: 13, marginBottom: 12 }}>{err}</p>}
           <button className="btn btn-p btn-full" onClick={go} disabled={busy}>{busy ? <span className="spin" /> : t.login}</button>
         </div>
-        <div style={{ textAlign: "center", marginTop: 14 }}>
+        <div style={{ display: "flex", gap: 8, justifyContent: "center", marginTop: 14 }}>
           <button className="btn btn-s btn-sm" onClick={() => setLang(lang === "en" ? "es" : "en")}>
             <Icon n="translate" s={14} /> {lang === "en" ? "Español" : "English"}</button>
+          <button className="btn btn-s btn-sm" onClick={toggleTheme}>
+            {theme === "dark" ? "☀️ Light" : "🌙 Dark"}
+          </button>
         </div>
       </div>
-    </div>
+    </div></div>
   );
 }
 
@@ -650,6 +678,7 @@ function TopBar({ user, onLogout, t, lang, setLang, online, showMenu, menuOpen, 
 // ─── ADMIN ────────────────────────────────────────────────────────────
 function Admin(props) {
   const { t, tab, setTab, menuOpen, setMenuOpen } = props;
+  const [statusFilter, setStatusFilter] = useState("all");
   const nav = [
     { k: "dash", i: "home", l: "Dashboard" }, { k: "tasks", i: "tasks", l: t.tasks },
     { k: "cal", i: "calendar", l: "Calendar" }, { k: "report", i: "report", l: "Reports" },
@@ -657,7 +686,8 @@ function Admin(props) {
     { k: "photos", i: "photo", l: "Photos" }, { k: "jobs", i: "briefcase", l: "Jobs" },
     { k: "crew", i: "users", l: "Crew" }, { k: "set", i: "settings", l: "Settings" },
   ];
-  const pick = k => { setTab(k); setMenuOpen(false); };
+  const pick = k => { setTab(k); setStatusFilter("all"); setMenuOpen(false); };
+  const navTo = (destTab, filter) => { setTab(destTab); setStatusFilter(filter); setMenuOpen(false); };
   return (
     <div className="layout">
       {menuOpen && <div className="side-scrim" onClick={() => setMenuOpen(false)} />}
@@ -665,8 +695,8 @@ function Admin(props) {
         {nav.map(n => <div key={n.k} className={`nav ${tab === n.k ? "on" : ""}`} onClick={() => pick(n.k)}>
           <Icon n={n.i} s={17} /> {n.l}</div>)}</div>
       <div className="content">
-        {tab === "dash" && <Dash {...props} />}
-        {tab === "tasks" && <AdminTasks {...props} />}
+        {tab === "dash" && <Dash {...props} navTo={navTo} />}
+        {tab === "tasks" && <AdminTasks {...props} statusFilter={statusFilter} setStatusFilter={setStatusFilter} />}
         {tab === "cal" && <Calendar {...props} />}
         {tab === "report" && <Report {...props} />}
         {tab === "receipts" && <AdminReceipts {...props} />}
@@ -679,48 +709,72 @@ function Admin(props) {
   );
 }
 
-function Dash({ tasks, jobs, users, receipts, setTab }) {
+function Dash({ tasks, jobs, users, receipts, setTab, navTo }) {
   const today = new Date().toISOString().split("T")[0];
   const activeJobs = jobs.filter(j => j.status !== "closed");
-  const done = tasks.filter(t => t.status === "done").length;
-  const pending = tasks.filter(t => t.status === "pending").length;
-  const overdue = tasks.filter(t => t.status === "pending" && t.dueDate < today).length;
+  const done  = tasks.filter(t => t.status === "done").length;
+  const overdue = tasks.filter(t => t.status === "pending" && t.dueDate && t.dueDate < today).length;
+  const pending = tasks.filter(t => t.status === "pending" && (!t.dueDate || t.dueDate >= today)).length;
   return (
     <div>
       <h2 className="h2 fade" style={{ marginBottom: 22 }}>Dashboard</h2>
       <div className="stats">
-        {[["Total Tasks", tasks.length, "var(--sky2)", "tasks"], ["Completed", done, "var(--green)", "tasks"],
-          ["Pending", pending, "var(--accent)", "tasks"], ["Overdue", overdue, "var(--red)", "tasks"],
-          ["Active Jobs", activeJobs.length, "var(--silver)", "jobs"]
-        ].map(([l, n, c, dest], i) => <button key={l} className={`stat stat-btn fade fade-${i % 3 + 1}`} onClick={() => setTab(dest)}>
-          <div className="stat-n" style={{ color: c }}>{n}</div>
-          <div className="stat-l">{l}</div></button>)}
+        {[
+          ["Total Tasks",  tasks.length,    "var(--sky2)",    "tasks", "all"],
+          ["Completed",    done,            "var(--green)",   "tasks", "done"],
+          ["Pending",      pending,         "var(--accent)",  "tasks", "pending"],
+          ["Overdue",      overdue,         "var(--red)",     "tasks", "overdue"],
+          ["Active Jobs",  activeJobs.length,"var(--silver)", "jobs",  "all"],
+        ].map(([l, n, c, dest, filter], i) => (
+          <button key={l} className={`stat stat-btn fade fade-${i % 3 + 1}`} onClick={() => navTo ? navTo(dest, filter) : setTab(dest)}>
+            <div className="stat-n" style={{ color: c }}>{n}</div>
+            <div className="stat-l">{l}</div>
+          </button>
+        ))}
       </div>
       <div className="card fade">
         <div className="ct">Job Progress</div>
-        {activeJobs.map(job => {
-          const jt = tasks.filter(t => t.jobId === job.id);
-          const jd = jt.filter(t => t.status === "done").length;
-          const pct = jt.length ? Math.round(jd / jt.length * 100) : 0;
-          return <div key={job.id} className="job-prog" onClick={() => setTab("tasks")} style={{ marginBottom: 14, cursor: "pointer" }}>
-            <div className="flexb" style={{ marginBottom: 6 }}><span style={{ fontWeight: 600 }}>{job.name}</span>
-              <span className="muted">{jd}/{jt.length} · {pct}%</span></div>
-            <div className="bar"><div className="bar-f" style={{ width: pct + "%", background: "linear-gradient(90deg,var(--sky-dim),var(--sky))" }} /></div>
-          </div>;
-        })}
+        {activeJobs.filter(job => tasks.some(t => t.jobId === job.id)).length === 0
+          ? <div className="empty" style={{ padding: "20px 0" }}><p style={{ fontSize: 13 }}>No tasks assigned yet — add tasks to jobs to see progress.</p></div>
+          : activeJobs.map(job => {
+              const jt = tasks.filter(t => t.jobId === job.id);
+              if (!jt.length) return null;
+              const jd = jt.filter(t => t.status === "done").length;
+              const pct = Math.round(jd / jt.length * 100);
+              const allDone = jd === jt.length;
+              return <div key={job.id} className="job-prog" onClick={() => setTab("tasks")} style={{ marginBottom: 14, cursor: "pointer" }}>
+                <div className="flexb" style={{ marginBottom: 6 }}>
+                  <span style={{ fontWeight: 600 }}>{job.name}</span>
+                  <span className="muted">{jd}/{jt.length} · {pct}%{allDone ? " ✓" : ""}</span>
+                </div>
+                <div className="bar"><div className="bar-f" style={{ width: pct + "%", background: allDone ? "linear-gradient(90deg,#059669,var(--green))" : "linear-gradient(90deg,var(--sky-dim),var(--sky))" }} /></div>
+              </div>;
+            })
+        }
       </div>
     </div>
   );
 }
 
 function AdminTasks(props) {
-  const { tasks, setTasks, jobs, users, t, settings } = props;
-  const [filter, setFilter] = useState("all");
+  const { tasks, setTasks, jobs, users, t, settings, statusFilter = "all", setStatusFilter } = props;
+  const [jobFilter, setJobFilter] = useState("all");
   const [modal, setModal] = useState(false);
   const [nt, setNt] = useState({ title: "", titleEs: "", jobId: "", assignedTo: [], dueDate: "" });
   const [busy, setBusy] = useState(false);
   const today = new Date().toISOString().split("T")[0];
-  const shown = filter === "all" ? jobs : jobs.filter(j => j.id === filter);
+
+  // Apply status filter first, then job filter
+  const statusFiltered = tasks.filter(task => {
+    if (statusFilter === "done")    return task.status === "done";
+    if (statusFilter === "overdue") return task.status === "pending" && task.dueDate && task.dueDate < today;
+    if (statusFilter === "pending") return task.status === "pending" && (!task.dueDate || task.dueDate >= today);
+    return true;
+  });
+  const jobsWithTasks = jobs.filter(j => statusFiltered.some(t => t.jobId === j.id));
+  const shown = jobFilter === "all" ? jobsWithTasks : jobsWithTasks.filter(j => j.id === jobFilter);
+
+  const filterLabel = { all: "All Tasks", done: "Completed Only", pending: "Pending Only", overdue: "Overdue Only" };
 
   const toggleCrew = (id) => setNt(p => ({ ...p, assignedTo: p.assignedTo.includes(id) ? p.assignedTo.filter(x => x !== id) : [...p.assignedTo, id] }));
 
@@ -752,15 +806,28 @@ function AdminTasks(props) {
     <div>
       <div className="flexb" style={{ marginBottom: 20 }}><h2 className="h2">{t.tasks}</h2>
         <button className="btn btn-p" onClick={() => setModal(true)}><Icon n="plus" s={16} /> Add Task</button></div>
-      <div className="toolbar"><Icon n="filter" s={16} c="var(--silver)" />
-        <select className="fi" style={{ width: "auto", padding: "8px 13px" }} value={filter} onChange={e => setFilter(e.target.value)}>
-          <option value="all">All Jobs</option>{jobs.map(j => <option key={j.id} value={j.id}>{j.name}</option>)}</select></div>
+
+      <div className="toolbar">
+        <Icon n="filter" s={16} c="var(--silver)" />
+        {statusFilter !== "all" && (
+          <span style={{ display: "flex", alignItems: "center", gap: 6, padding: "4px 10px", borderRadius: 20, fontSize: 12, fontWeight: 700,
+            background: statusFilter === "done" ? "rgba(16,185,129,.15)" : statusFilter === "overdue" ? "rgba(239,68,68,.15)" : "rgba(245,158,11,.15)",
+            color: statusFilter === "done" ? "var(--green)" : statusFilter === "overdue" ? "var(--red)" : "var(--accent)" }}>
+            {filterLabel[statusFilter]}
+            <button onClick={() => setStatusFilter("all")} style={{ background: "none", border: "none", cursor: "pointer", color: "inherit", padding: 0, lineHeight: 1, fontSize: 14 }}>✕</button>
+          </span>
+        )}
+        <select className="fi" style={{ width: "auto", padding: "8px 13px" }} value={jobFilter} onChange={e => setJobFilter(e.target.value)}>
+          <option value="all">All Jobs</option>{jobs.map(j => <option key={j.id} value={j.id}>{j.name}</option>)}</select>
+      </div>
+
+      {shown.length === 0 && <div className="empty"><p>No {filterLabel[statusFilter].toLowerCase()} for the selected job.</p></div>}
       {shown.map(job => {
-        const jt = tasks.filter(t => t.jobId === job.id);
+        const jt = statusFiltered.filter(t => t.jobId === job.id);
         if (!jt.length) return null;
         return <div key={job.id} className="jobsec">
           <div className="jobhead"><div><div className="jobname">{job.name}</div><div className="jobaddr">{job.address}</div></div>
-            <span className="tag-l">{jt.length} tasks</span></div>
+            <span className="tag-l">{jt.length} task{jt.length !== 1 ? "s" : ""}</span></div>
           <div className="jobbody">{jt.map(task => {
             const s = st(task), crew = (task.assignedTo || []).map(id => users.find(u => u.id === id)).filter(Boolean);
             return <div key={task.id} className="trow">
@@ -885,76 +952,289 @@ function Report({ tasks, jobs, users, logs, t }) {
   );
 }
 
-function AdminReceipts({ receipts, setReceipts, jobs, users }) {
-  // Receipts here double as the queue that feeds the GSM Builder accounting
-  // app. "Export for Bills" produces the JSON payload AI will read & post.
-  const total = receipts.reduce((s, r) => s + (+r.amount || 0), 0);
+function AdminReceipts({ receipts, setReceipts, jobs, tasks, users, user }) {
+  const [modal, setModal] = useState(false);
+  const [nr, setNr] = useState({ jobId: "", taskId: "", crewId: "", store: "", amount: "", note: "", paidBy: "company", dataUrl: null });
+  const [busy, setBusy] = useState(false);
+  const fileRef = useRef();
+  const today = new Date().toISOString().split("T")[0];
+  const jobTasks = tasks.filter(t => t.jobId === nr.jobId);
+
+  const addReceipt = async () => {
+    if (!nr.jobId || !nr.store || !nr.amount) return;
+    setBusy(true);
+    const id = "r" + Date.now();
+    const receipt = { id, jobId: nr.jobId, taskId: nr.taskId || null, crewId: nr.crewId || user.id,
+      dataUrl: nr.dataUrl, store: nr.store, amount: nr.amount, note: nr.note,
+      paidBy: nr.paidBy, reimbursementStatus: nr.paidBy === "crew" ? "pending" : "na", createdAt: today };
+    setReceipts(p => [...p, receipt]);
+    const row = { id, job_id: nr.jobId, task_id: nr.taskId || null, crew_id: nr.crewId || user.id,
+      data_url: nr.dataUrl, store: nr.store, amount: parseFloat(nr.amount) || 0, note: nr.note,
+      paid_by: nr.paidBy, reimbursement_status: nr.paidBy === "crew" ? "pending" : "na" };
+    try { await sbPost("field_receipts", row); } catch { enqueue({ table: "field_receipts", payload: row }); }
+    setNr({ jobId: "", taskId: "", crewId: "", store: "", amount: "", note: "", paidBy: "company", dataUrl: null });
+    setModal(false); setBusy(false);
+  };
+
+  const photoCapture = async e => {
+    const file = e.target.files[0]; if (!file) return;
+    const { dataUrl } = await compressImage(file, 1000, 0.6);
+    setNr(p => ({ ...p, dataUrl }));
+  };
+
+  const markReimbursed = async (id) => {
+    setReceipts(p => p.map(r => r.id === id ? { ...r, reimbursementStatus: "paid", reimbursementDate: today } : r));
+    try { await sbPatch("field_receipts", id, { reimbursement_status: "paid", reimbursement_date: today }); } catch {}
+  };
+
   const exportBills = () => {
     const payload = receipts.map(r => ({
-      receipt_id: r.id,
-      vendor: r.store || "",
-      amount: +r.amount || 0,
-      job_id: r.jobId,
-      job_name: jobs.find(j => j.id === r.jobId)?.name || "",
-      memo: r.note || "",
-      receipt_date: r.createdAt,
-      submitted_by: users.find(u => u.id === r.crewId)?.name || "",
-      image: r.dataUrl ? "[base64 attached]" : null,
-      status: "pending_review",   // GSM Builder AI sets to 'posted' once read
+      receipt_id: r.id, vendor: r.store || "", amount: +r.amount || 0,
+      job_id: r.jobId, job_name: jobs.find(j => j.id === r.jobId)?.name || "",
+      memo: r.note || "", receipt_date: r.createdAt,
+      submitted_by: users.find(u => u.id === r.crewId)?.name || "Admin",
+      image: r.dataUrl ? "[base64 attached]" : null, status: "pending_review",
     }));
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
     const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url; a.download = `gsm-bills-export-${new Date().toISOString().split("T")[0]}.json`; a.click();
-    URL.revokeObjectURL(url);
+    const a = document.createElement("a"); a.href = url;
+    a.download = "gsm-bills-export-" + today + ".json"; a.click(); URL.revokeObjectURL(url);
   };
+
+  const pendingReimb = receipts.filter(r => r.paidBy === "crew" && r.reimbursementStatus !== "paid");
+  const total = receipts.reduce((s, r) => s + (+r.amount || 0), 0);
+
   return (
     <div>
-      <div className="flexb" style={{ marginBottom: 8 }}><h2 className="h2">Receipts</h2>
-        {receipts.length > 0 && <button className="btn btn-p btn-sm" onClick={exportBills}>
-          <Icon n="receipt" s={14} /> Export for Bills</button>}</div>
-      <p className="muted" style={{ marginBottom: 18, fontSize: 13 }}>
-        Field receipts captured by crew. These are ready to feed the GSM Builder accounting app, where AI reads each one and posts it as a bill against the job.
-      </p>
-      {receipts.length === 0 ? <div className="empty"><Icon n="receipt" s={48} c="var(--slate)" /><p>No receipts yet.</p></div>
+      <div className="flexb" style={{ marginBottom: 8 }}>
+        <h2 className="h2">Receipts</h2>
+        <div style={{ display: "flex", gap: 8 }}>
+          {receipts.length > 0 && <button className="btn btn-s btn-sm" onClick={exportBills}><Icon n="receipt" s={14} /> Export for Bills</button>}
+          <button className="btn btn-p" onClick={() => setModal(true)}><Icon n="plus" s={16} /> Add Receipt</button>
+        </div>
+      </div>
+
+      {pendingReimb.length > 0 && (
+        <div style={{ marginBottom: 16, padding: "10px 16px", background: "rgba(249,115,22,.1)", border: "1px solid rgba(249,115,22,.3)", borderRadius: 10, color: "var(--orange)", fontSize: 13 }}>
+          Crew reimbursement owed: <strong>${pendingReimb.reduce((s,r)=>s+(+r.amount||0),0).toFixed(2)}</strong> across {pendingReimb.length} receipt{pendingReimb.length!==1?"s":""}
+        </div>
+      )}
+
+      {receipts.length === 0
+        ? <div className="empty"><Icon n="receipt" s={48} c="var(--slate)" /><p>No receipts yet. Add one above or have crew capture in the field.</p></div>
         : <div className="card">
           <div className="flexb" style={{ marginBottom: 14, paddingBottom: 14, borderBottom: "1px solid var(--border)" }}>
-            <span className="muted">{receipts.length} receipt{receipts.length !== 1 ? "s" : ""} captured</span>
-            <span style={{ fontFamily: "'Barlow Condensed'", fontWeight: 800, fontSize: 20, color: "var(--accent)" }}>${total.toFixed(2)}</span></div>
-          <div className="tbl-wrap"><table><thead><tr><th>Date</th><th>Crew</th><th>Job</th><th>Vendor</th><th>Memo</th><th>Paid By</th><th>Reimburse</th><th style={{ textAlign: "right" }}>Amount</th></tr></thead>
-          <tbody>{receipts.map(r => { const j = jobs.find(x => x.id === r.jobId), c = users.find(u => u.id === r.crewId);
-            const needsReimb = r.paidBy === "crew" && r.reimbursementStatus !== "paid";
+            <span className="muted">{receipts.length} receipt{receipts.length!==1?"s":""}</span>
+            <span style={{ fontFamily: "'Barlow Condensed'", fontWeight: 800, fontSize: 20, color: "var(--accent)" }}>${total.toFixed(2)}</span>
+          </div>
+          <div className="tbl-wrap"><table><thead><tr>
+            <th>Date</th><th>By</th><th>Job</th><th>Vendor</th><th>Memo</th>
+            <th>Paid By</th><th>Reimburse</th><th>Photo</th><th style={{ textAlign: "right" }}>Amount</th>
+          </tr></thead>
+          <tbody>{receipts.map(r => {
+            const j=jobs.find(x=>x.id===r.jobId), cr=users.find(u=>u.id===r.crewId);
+            const needsReimb=r.paidBy==="crew"&&r.reimbursementStatus!=="paid";
             return <tr key={r.id}>
               <td data-l="Date" className="muted">{r.createdAt}</td>
-              <td data-l="Crew">{c?.name}</td>
+              <td data-l="By">{cr?.name||"Admin"}</td>
               <td data-l="Job"><span className="tag-l" style={{ fontSize: 11 }}>{j?.name}</span></td>
               <td data-l="Vendor">{r.store}</td>
               <td data-l="Memo" className="muted">{r.note}</td>
-              <td data-l="Paid By"><span className={`tag ${r.paidBy === "crew" ? "tag-overdue" : "tag-done"}`}>{r.paidBy === "crew" ? "Crew" : "Company"}</span></td>
-              <td data-l="Reimburse">{r.paidBy === "crew" ? <span className={`tag ${needsReimb ? "tag-pending" : "tag-done"}`}>{needsReimb ? "Pending" : "Paid"}</span> : <span className="muted">—</span>}</td>
-              <td data-l="Amount" style={{ textAlign: "right", fontWeight: 600, color: needsReimb ? "var(--orange)" : "var(--accent)" }}>${(+r.amount).toFixed(2)}</td>
-            </tr>; })}</tbody></table></div></div>}
-      {receipts.filter(r => r.paidBy === "crew" && r.reimbursementStatus !== "paid").length > 0 && (
-        <div style={{ marginTop: 12, padding: "10px 14px", background: "rgba(249,115,22,.1)", border: "1px solid rgba(249,115,22,.3)", borderRadius: 10, color: "var(--orange)", fontSize: 13 }}>
-          ⚠ {receipts.filter(r => r.paidBy === "crew" && r.reimbursementStatus !== "paid").length} receipt{receipts.filter(r => r.paidBy === "crew" && r.reimbursementStatus !== "paid").length !== 1 ? "s" : ""} need reimbursement — total ${receipts.filter(r => r.paidBy === "crew" && r.reimbursementStatus !== "paid").reduce((s, r) => s + (+r.amount || 0), 0).toFixed(2)}
+              <td data-l="Paid By"><span className={"tag " + (r.paidBy==="crew"?"tag-overdue":"tag-done")}>{r.paidBy==="crew"?"Crew":"Company"}</span></td>
+              <td data-l="Reimburse">{r.paidBy==="crew"
+                ?needsReimb
+                  ?<button className="btn btn-sm" style={{ background:"rgba(249,115,22,.15)",color:"var(--orange)",padding:"4px 10px",fontSize:11,border:"1px solid rgba(249,115,22,.4)" }} onClick={()=>markReimbursed(r.id)}>Mark Paid</button>
+                  :<span className="tag tag-done">Reimbursed</span>
+                :<span className="muted">—</span>}</td>
+              <td data-l="Photo">{r.dataUrl?<img src={r.dataUrl} alt="rcpt" style={{ width:40,height:40,objectFit:"cover",borderRadius:6 }} />:<span className="muted">—</span>}</td>
+              <td data-l="Amount" style={{ textAlign:"right",fontWeight:700,color:needsReimb?"var(--orange)":"var(--accent)" }}>${(+r.amount).toFixed(2)}</td>
+            </tr>;
+          })}</tbody></table></div>
         </div>
-      )}
+      }
+
+      {modal && <div className="modal-bg" onClick={e=>e.target===e.currentTarget&&setModal(false)}>
+        <div className="modal"><div className="mt">Add Receipt</div>
+          <div className="grid2">
+            <div className="fg"><label className="fl">Job</label>
+              <select className="fi" value={nr.jobId} onChange={e=>setNr(p=>({...p,jobId:e.target.value,taskId:""}))}>
+                <option value="">Select Job</option>{jobs.filter(j=>j.status!=="closed").map(j=><option key={j.id} value={j.id}>{j.name}</option>)}</select></div>
+            <div className="fg"><label className="fl">Task (optional)</label>
+              <select className="fi" value={nr.taskId} onChange={e=>setNr(p=>({...p,taskId:e.target.value}))} disabled={!nr.jobId}>
+                <option value="">General / No task</option>{jobTasks.map(t=><option key={t.id} value={t.id}>{t.title}</option>)}</select></div>
+          </div>
+          <div className="fg"><label className="fl">Submitted By</label>
+            <select className="fi" value={nr.crewId} onChange={e=>setNr(p=>({...p,crewId:e.target.value}))}>
+              <option value="">Admin (me)</option>
+              {users.filter(u=>u.role==="crew").map(u=><option key={u.id} value={u.id}>{u.name}</option>)}
+            </select></div>
+          <div className="grid2">
+            <div className="fg"><label className="fl">Vendor / Store</label>
+              <input className="fi" value={nr.store} onChange={e=>setNr(p=>({...p,store:e.target.value}))} placeholder="Home Depot" /></div>
+            <div className="fg"><label className="fl">Amount ($)</label>
+              <input className="fi" type="number" value={nr.amount} onChange={e=>setNr(p=>({...p,amount:e.target.value}))} placeholder="0.00" /></div>
+          </div>
+          <div className="fg"><label className="fl">Notes / Memo</label>
+            <input className="fi" value={nr.note} onChange={e=>setNr(p=>({...p,note:e.target.value}))} placeholder="What was purchased" /></div>
+          <div className="fg"><label className="fl">Who Paid?</label>
+            <div style={{ display:"flex",gap:8,flexWrap:"wrap" }}>
+              <button className={"btn btn-sm " + (nr.paidBy==="company"?"btn-p":"btn-s")} onClick={()=>setNr(p=>({...p,paidBy:"company"}))}>Company Card</button>
+              <button className={"btn btn-sm " + (nr.paidBy==="crew"?"btn-a":"btn-s")} onClick={()=>setNr(p=>({...p,paidBy:"crew"}))}>Crew Paid — Needs Reimbursement</button>
+            </div></div>
+          <div className="fg"><label className="fl">Receipt Photo (optional)</label>
+            <input ref={fileRef} type="file" accept="image/*" capture="environment" style={{ display:"none" }} onChange={photoCapture} />
+            {nr.dataUrl
+              ?<div style={{ display:"flex",gap:10,alignItems:"center" }}>
+                  <img src={nr.dataUrl} alt="receipt" style={{ width:64,height:64,objectFit:"cover",borderRadius:8 }} />
+                  <button className="btn btn-s btn-sm" onClick={()=>setNr(p=>({...p,dataUrl:null}))}>Remove</button>
+                </div>
+              :<div style={{ display:"flex",gap:8 }}>
+                  <button className="btn btn-s btn-sm" onClick={()=>fileRef.current?.click()}><Icon n="camera" s={14} /> Take Photo</button>
+                  <button className="btn btn-s btn-sm" onClick={()=>{fileRef.current?.removeAttribute("capture");fileRef.current?.click();}}><Icon n="photo" s={14} /> From Library</button>
+                </div>
+            }</div>
+          <div className="macts">
+            <button className="btn btn-s" onClick={()=>setModal(false)}>Cancel</button>
+            <button className="btn btn-p" onClick={addReceipt} disabled={busy||!nr.jobId||!nr.store||!nr.amount}>
+              {busy?<span className="spin" />:<><Icon n="check" s={14} /> Save Receipt</>}
+            </button>
+          </div>
+        </div>
+      </div>}
     </div>
   );
 }
 
-function AdminPhotos({ photos, tasks, jobs }) {
+
+function AdminPhotos({ photos, setPhotos, tasks, jobs, users, user }) {
+  const [jobFilter, setJobFilter] = useState("all");
+  const [uploadJob, setUploadJob] = useState("");
+  const [uploadTask, setUploadTask] = useState("");
+  const [uploadType, setUploadType] = useState("progress");
+  const [busy, setBusy] = useState(false);
+  const [saved, setSaved] = useState(0); // count saved this session for this job
+  const fileRef = useRef();
+
+  const jobTasks = tasks.filter(t => t.jobId === uploadJob);
+  const sessionPhotos = photos.filter(p => p.jobId === uploadJob);
+
+  const upload = async e => {
+    const file = e.target.files[0];
+    if (!file || !uploadJob) return;
+    setBusy(true);
+    const { dataUrl, sizeKB } = await compressImage(file);
+    const id = "p" + Date.now();
+    const photo = { id, dataUrl, type: uploadType, taskId: uploadTask || null, jobId: uploadJob, crewId: user.id, sizeKB, date: new Date().toISOString() };
+    setPhotos(p => [...p, photo]);
+    const row = { id, data_url: dataUrl, photo_type: uploadType, task_id: uploadTask || null, job_id: uploadJob, crew_id: user.id, size_kb: sizeKB };
+    try { await sbPost("field_photos", row); } catch { enqueue({ table: "field_photos", payload: row }); }
+    e.target.value = "";
+    setSaved(s => s + 1);
+    setBusy(false);
+  };
+
+  const nextJob = () => {
+    setUploadJob(""); setUploadTask(""); setUploadType("progress"); setSaved(0);
+    fileRef.current && (fileRef.current.value = "");
+  };
+
+  const shown = jobFilter === "all" ? photos : photos.filter(p => p.jobId === jobFilter);
+  const byJob = jobs.filter(j => shown.some(p => p.jobId === j.id));
+
   return (
-    <div><h2 className="h2" style={{ marginBottom: 20 }}>Photo Gallery</h2>
-      {photos.length === 0 ? <div className="empty"><Icon n="photo" s={48} c="var(--slate)" /><p>No photos yet. Crew photos appear here.</p></div>
-        : <div className="card"><div className="pgrid">{photos.map((p, i) => {
-          const job = jobs.find(j => j.id === p.jobId);
-          return <div key={i} className="pthumb">{p.dataUrl ? <img src={p.dataUrl} alt={p.type} /> : <Icon n="camera" s={28} c="var(--slate)" />}
-            <div className="plabel" style={{ color: p.type === "before" ? "var(--orange)" : p.type === "after" ? "var(--green)" : "var(--sky2)" }}>{p.type}</div></div>;
-        })}</div></div>}
+    <div>
+      <div className="flexb" style={{ marginBottom: 20 }}>
+        <h2 className="h2">Photos</h2>
+        <span className="muted" style={{ fontSize: 13 }}>{photos.length} total</span>
+      </div>
+
+      <div className="card" style={{ marginBottom: 22 }}>
+        <div className="ct">Add Photo</div>
+        <div className="grid2">
+          <div className="fg"><label className="fl">Job</label>
+            <select className="fi" value={uploadJob} onChange={e => { setUploadJob(e.target.value); setUploadTask(""); }}>
+              <option value="">Select Job</option>
+              {jobs.filter(j => j.status !== "closed").map(j => <option key={j.id} value={j.id}>{j.name}</option>)}
+            </select></div>
+          <div className="fg"><label className="fl">Task (optional)</label>
+            <select className="fi" value={uploadTask} onChange={e => setUploadTask(e.target.value)} disabled={!uploadJob}>
+              <option value="">General / No task</option>
+              {jobTasks.map(t => <option key={t.id} value={t.id}>{t.title}</option>)}
+            </select></div>
+        </div>
+        <div className="fg"><label className="fl">Photo Type</label>
+          <div style={{ display: "flex", gap: 8 }}>
+            {["before", "progress", "after"].map(x => (
+              <button key={x} className={"btn btn-sm " + (uploadType === x ? "btn-p" : "btn-s")} onClick={() => setUploadType(x)}
+                style={{ textTransform: "capitalize" }}>{x}</button>
+            ))}
+          </div></div>
+        <input ref={fileRef} type="file" accept="image/*" capture="environment" style={{ display: "none" }} onChange={upload} />
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+          <button className="btn btn-p" disabled={!uploadJob || busy} onClick={() => { fileRef.current?.setAttribute("capture","environment"); fileRef.current?.click(); }}>
+            {busy ? <span className="spin" /> : <><Icon n="camera" s={16} /> Take Photo</>}</button>
+          <button className="btn btn-s" disabled={!uploadJob || busy} onClick={() => { fileRef.current?.removeAttribute("capture"); fileRef.current?.click(); }}>
+            <Icon n="photo" s={16} /> From Library</button>
+          {saved > 0 && (
+            <button className="btn btn-g btn-sm" onClick={nextJob}>
+              <Icon n="check" s={14} /> Done with this job — Next Job
+            </button>
+          )}
+        </div>
+        {!uploadJob && <p style={{ fontSize: 11, color: "var(--orange)", marginTop: 8 }}>Select a job first</p>}
+        {saved > 0 && (
+          <div style={{ marginTop: 12 }}>
+            <p style={{ fontSize: 12, color: "var(--green)", marginBottom: 8, fontWeight: 600 }}>
+              ✓ {saved} photo{saved !== 1 ? "s" : ""} saved for {jobs.find(j => j.id === uploadJob)?.name}
+            </p>
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+              {sessionPhotos.slice(-6).map((p, i) => (
+                <div key={i} style={{ width: 56, height: 56, borderRadius: 8, overflow: "hidden", position: "relative", border: "2px solid var(--green)" }}>
+                  <img src={p.dataUrl} alt={p.type} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                  <div style={{ position: "absolute", bottom: 0, left: 0, right: 0, background: "rgba(0,0,0,.6)", fontSize: 9, textAlign: "center", color: "#fff", padding: "1px 0" }}>{p.type}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+
+      <div className="toolbar">
+        <Icon n="filter" s={16} c="var(--silver)" />
+        <select className="fi" style={{ width: "auto", padding: "8px 13px" }} value={jobFilter} onChange={e => setJobFilter(e.target.value)}>
+          <option value="all">All Jobs</option>
+          {jobs.map(j => <option key={j.id} value={j.id}>{j.name}</option>)}
+        </select>
+      </div>
+
+      {shown.length === 0
+        ? <div className="empty"><Icon n="photo" s={48} c="var(--slate)" /><p>No photos yet. Add one above or have crew capture in the field.</p></div>
+        : byJob.map(job => {
+            const jp = shown.filter(p => p.jobId === job.id);
+            return (
+              <div key={job.id} className="card" style={{ marginBottom: 16 }}>
+                <div className="ct" style={{ marginBottom: 12 }}>{job.name} <span className="muted" style={{ fontWeight: 400, fontSize: 13 }}>({jp.length} photo{jp.length !== 1 ? "s" : ""})</span></div>
+                <div className="pgrid">
+                  {jp.map((p, i) => {
+                    const who = users.find(u => u.id === p.crewId);
+                    return (
+                      <div key={i} className="pthumb" title={(who?.name || "Admin") + " · " + (p.date || "").slice(0, 10)}>
+                        {p.dataUrl ? <img src={p.dataUrl} alt={p.type} /> : <Icon n="camera" s={28} c="var(--slate)" />}
+                        <div className="plabel" style={{ color: p.type === "before" ? "var(--orange)" : p.type === "after" ? "var(--green)" : "var(--sky2)" }}>
+                          {p.type}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            );
+          })
+      }
     </div>
   );
 }
+
 
 function Jobs({ jobs, setJobs, tasks }) {
   const [modal, setModal] = useState(false);
@@ -1018,13 +1298,35 @@ function Jobs({ jobs, setJobs, tasks }) {
           return <div key={job.id} className="card" style={{ borderLeft: `4px solid ${job.gsmSync ? "var(--green)" : "var(--sky)"}` }}>
             <div style={{ fontFamily: "'Barlow Condensed'", fontSize: 19, fontWeight: 800, marginBottom: 4 }}>{job.name}</div>
             <div className="muted" style={{ marginBottom: 10, fontSize: 13 }}>{job.address}</div>
-            <div className="flexb" style={{ marginBottom: 12 }}>
+            <div className="flexb" style={{ marginBottom: job.gsmSync ? 8 : 12 }}>
               <SyncBadge job={job} />
               <span className="muted" style={{ fontSize: 12 }}>{s.done}/{s.total} tasks</span>
             </div>
-            {allDone && <div style={{ fontSize: 12, color: "var(--green)", marginBottom: 10 }}>✓ All tasks complete — ready to close</div>}
-            <button className="btn btn-s btn-sm btn-full" onClick={() => setConfirm(job)}>
-              <Icon n="check" s={13} /> Close Job</button></div>; })}
+            {job.gsmSync && (
+              <div style={{ marginBottom: 12, padding: "8px 10px", background: "rgba(16,185,129,.08)", borderRadius: 8, border: "1px solid rgba(16,185,129,.2)" }}>
+                <label style={{ fontSize: 10, color: "var(--green)", display: "block", marginBottom: 4, letterSpacing: 1, textTransform: "uppercase", fontWeight: 700 }}>GSM Builder Job ID</label>
+                <input className="fi" style={{ padding: "6px 10px", fontSize: 12 }}
+                  placeholder="JOB-001" defaultValue={job.gsmJobId || ""}
+                  onBlur={async e => {
+                    const val = e.target.value.trim().toUpperCase();
+                    if (val === (job.gsmJobId || "")) return;
+                    setJobs(p => p.map(j => j.id === job.id ? { ...j, gsmJobId: val } : j));
+                    try { await sbPatch("field_jobs", job.id, { gsm_job_id: val || null }); } catch {}
+                  }} />
+                <div style={{ fontSize: 10, color: job.gsmJobId ? "var(--green)" : "var(--silver)", marginTop: 4 }}>
+                  {job.gsmJobId ? "Linked to GSM Builder " + job.gsmJobId : "Enter the Job ID from GSM Builder (e.g. JOB-001)"}
+                </div>
+              </div>
+            )}
+            {s.total > 0 && <div style={{ marginBottom: 12 }}>
+              <div className="bar"><div className="bar-f" style={{ width: (s.total ? Math.round(s.done/s.total*100) : 0) + "%", background: allDone ? "linear-gradient(90deg,#059669,var(--green))" : "linear-gradient(90deg,var(--sky-dim),var(--sky))" }} /></div>
+              <div style={{ fontSize: 11, color: "var(--silver)", marginTop: 4 }}>{s.done}/{s.total} tasks complete</div>
+            </div>}
+            {s.total === 0 && <div style={{ fontSize: 12, color: "var(--slate)", marginBottom: 12 }}>No tasks added yet</div>}
+            {allDone
+              ? <button className="btn btn-g btn-sm btn-full" onClick={() => setConfirm(job)}><Icon n="check" s={13} /> All Done — Close Job</button>
+              : <div style={{ fontSize: 11, color: "var(--slate)", textAlign: "center", padding: "8px 0" }}>Complete all tasks to close this job</div>
+            }</div>; })}
       </div>
 
       {closed.length > 0 && <div style={{ marginTop: 28 }}>
