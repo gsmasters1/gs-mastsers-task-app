@@ -30,13 +30,14 @@ const sbPatch  = (t, id, d)    => sbFetch(`${t}?id=eq.${id}`, { method: "PATCH",
 const sbDelete = (t, id)       => sbFetch(`${t}?id=eq.${id}`, { method: "DELETE", prefer: "return=minimal" });
 
 // ─── SNAKE ↔ CAMEL TRANSFORMS ──────────────────────────────────────────
-const fromProfile = r => ({ id: r.id, name: r.name, role: r.role, email: r.email, phone: r.phone || "", pin: r.pin, active: r.active !== false });
+const fromProfile = r => ({ id: r.id, name: r.name, role: r.role, email: r.email, phone: r.phone || "", pin: r.pin, active: r.active !== false, archived: r.archived === true });
 const fromJob     = r => ({ id: r.id, name: r.name, address: r.address || "", lat: r.lat, lng: r.lng, budget: r.budget, status: r.status, closedAt: r.closed_at, gsmJobId: r.gsm_job_id, gsmSync: r.gsm_sync || false });
 const fromTask    = r => ({ id: r.id, jobId: r.job_id, title: r.title, titleEs: r.title_es || "", assignedTo: Array.isArray(r.assigned_to) ? r.assigned_to : (r.assigned_to ? [r.assigned_to] : []), status: r.status, dueDate: r.due_date || "", createdAt: (r.created_at || "").slice(0, 10) });
 const fromLog     = r => ({ id: r.id, taskId: r.task_id, jobId: r.job_id, crewId: r.crew_id, en: r.text_en, es: r.text_es, weather: r.weather, date: r.log_date });
 const fromPhoto   = r => ({ id: r.id, taskId: r.task_id, jobId: r.job_id, crewId: r.crew_id, dataUrl: r.data_url, type: r.photo_type, sizeKB: r.size_kb, date: r.created_at });
 const fromReceipt = r => ({ id: r.id, taskId: r.task_id, jobId: r.job_id, crewId: r.crew_id, dataUrl: r.data_url, store: r.store, amount: r.amount, note: r.note, paidBy: r.paid_by || "crew", reimbursementStatus: r.reimbursement_status || "pending", billStatus: r.bill_status, createdAt: (r.created_at || "").slice(0, 10) });
 const fromMat     = r => ({ id: r.id, taskId: r.task_id, jobId: r.job_id, crewId: r.crew_id, en: r.text_en, es: r.text_es, fulfilled: r.fulfilled });
+const fromCheckin = r => ({ id: r.id, crewId: r.crew_id, jobId: r.job_id, checkIn: r.check_in, checkOut: r.check_out, hours: r.hours, date: r.work_date, latIn: r.lat_in, lngIn: r.lng_in });
 
 // ─── OFFLINE QUEUE ──────────────────────────────────────────────────────
 const QUEUE_KEY = "gsm_offline_queue";
@@ -617,6 +618,14 @@ export default function App() {
     setUsers(u => u.map(x => x.id === id ? { ...x, active } : x));
     try { await sbPatch("field_profiles", id, { active }); } catch {}
   };
+  const archiveCrew = async (id) => {
+    setUsers(u => u.map(x => x.id === id ? { ...x, active: false, archived: true } : x));
+    try { await sbPatch("field_profiles", id, { active: false, archived: true }); } catch {}
+  };
+  const unarchiveCrew = async (id) => {
+    setUsers(u => u.map(x => x.id === id ? { ...x, active: true, archived: false } : x));
+    try { await sbPatch("field_profiles", id, { active: true, archived: false }); } catch {}
+  };
   const addUser = async (member) => {
     const id = "u" + Date.now();
     const row = { id, name: member.name, role: "crew", email: member.email, phone: member.phone || "", pin: member.pin, active: true };
@@ -683,7 +692,7 @@ export default function App() {
 
   const shared = { user, lang, t, jobs, setJobs, tasks, setTasks, receipts, setReceipts,
                    logs, setLogs, photos, setPhotos, mats, setMats, settings, saveSettings, users,
-                   online, setActive, addUser, updateUser, removeUser };
+                   online, setActive, addUser, updateUser, removeUser, archiveCrew, unarchiveCrew };
 
   return (
     <div className={`app${theme === "light" ? " light" : ""}`}>
@@ -793,7 +802,8 @@ function Admin(props) {
     { k: "tasks", i: "tasks", l: t.tasks }, { k: "cal", i: "calendar", l: "Calendar" },
     { k: "report", i: "report", l: "Reports" }, { k: "receipts", i: "receipt", l: t.receipts },
     { k: "photos", i: "photo", l: "Photos" }, { k: "jobs", i: "briefcase", l: "Jobs" },
-    { k: "crew", i: "users", l: "Crew" }, { k: "set", i: "settings", l: "Settings" },
+    { k: "crew", i: "users", l: "Crew" }, { k: "hours", i: "calendar", l: "Hours" },
+    { k: "set", i: "settings", l: "Settings" },
   ];
   const pick = k => { setTab(k); setStatusFilter("all"); setMenuOpen(false); };
   const navTo = (destTab, filter) => { setTab(destTab); setStatusFilter(filter); setMenuOpen(false); };
@@ -813,6 +823,7 @@ function Admin(props) {
         {tab === "photos" && <AdminPhotos {...props} />}
         {tab === "jobs" && <Jobs {...props} />}
         {tab === "crew" && <CrewMgmt {...props} />}
+        {tab === "hours" && <AdminHours {...props} />}
         {tab === "set" && <Settings {...props} />}
       </div>
     </div>
@@ -1518,7 +1529,7 @@ function Jobs({ jobs, setJobs, tasks }) {
   );
 }
 
-function CrewMgmt({ users, tasks, setActive, addUser, updateUser, removeUser, settings }) {
+function CrewMgmt({ users, tasks, setActive, addUser, updateUser, removeUser, archiveCrew, unarchiveCrew, settings }) {
   const [modal, setModal] = useState(null); // 'add' | user object (edit)
   const [invite, setInvite] = useState(null);
   const [confirm, setConfirm] = useState(null);
@@ -1541,9 +1552,9 @@ function CrewMgmt({ users, tasks, setActive, addUser, updateUser, removeUser, se
     <div>
       <div className="flexb" style={{ marginBottom: 8 }}><h2 className="h2">Crew</h2>
         <button className="btn btn-p" onClick={openAdd}><Icon n="plus" s={16} /> Add Crew</button></div>
-      <p className="muted" style={{ marginBottom: 18, fontSize: 13 }}>Add a member to generate their login + a text-ready invite. Deactivating locks their app on every device within seconds and blocks new logins.</p>
+      <p className="muted" style={{ marginBottom: 18, fontSize: 13 }}>Add a member to generate their login + invite. Deactivate blocks access immediately. Archive moves them out of active crew but keeps all their records for bookkeeping.</p>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(270px,1fr))", gap: 14 }}>
-        {users.filter(u => u.role === "crew").map(m => { const mt = tasks.filter(t => (Array.isArray(t.assignedTo) ? t.assignedTo.includes(m.id) : t.assignedTo === m.id)), done = mt.filter(t => t.status === "done").length;
+        {users.filter(u => u.role === "crew" && !u.archived).map(m => { const mt = tasks.filter(t => (Array.isArray(t.assignedTo) ? t.assignedTo.includes(m.id) : t.assignedTo === m.id)), done = mt.filter(t => t.status === "done").length;
           const active = isActive(m);
           return <div key={m.id} className="card" style={{ borderTop: `4px solid ${active ? "var(--sky)" : "var(--red)"}`, opacity: active ? 1 : .75 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 14 }}>
@@ -1558,9 +1569,37 @@ function CrewMgmt({ users, tasks, setActive, addUser, updateUser, removeUser, se
               <div style={{ display: "flex", gap: 6 }}>
                 <button className="btn btn-s btn-sm btn-ic" title="Invite" onClick={() => setInvite(m)}><Icon n="translate" s={13} /></button>
                 <button className="btn btn-s btn-sm btn-ic" title="Edit" onClick={() => openEdit(m)}><Icon n="pen" s={13} /></button></div></div>
-            <button className={`btn btn-sm btn-full ${active ? "btn-s" : "btn-g"}`} onClick={() => setActive(m.id, !active)}>
-              <Icon n={active ? "lock" : "power"} s={13} /> {active ? "Deactivate" : "Reactivate"}</button>
+            <div style={{ display: "flex", gap: 6 }}>
+              <button className={`btn btn-sm ${active ? "btn-s" : "btn-g"}`} style={{ flex: 1 }} onClick={() => setActive(m.id, !active)}>
+                <Icon n={active ? "lock" : "power"} s={13} /> {active ? "Deactivate" : "Reactivate"}
+              </button>
+              <button className="btn btn-sm btn-s" title="Archive — removes from active crew, keeps all records" onClick={() => archiveCrew(m.id)}
+                style={{ padding: "8px 10px", color: "var(--slate)" }}>📦</button>
+            </div>
           </div>; })}</div>
+
+      {/* ── Archived crew ── */}
+      {users.filter(u => u.role === "crew" && u.archived).length > 0 && (
+        <div style={{ marginTop: 28 }}>
+          <div style={{ fontFamily: "'Barlow Condensed'", fontSize: 14, fontWeight: 700, color: "var(--slate)", letterSpacing: 1, textTransform: "uppercase", marginBottom: 10 }}>
+            📦 Archived Crew — kept for bookkeeping, no app access
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(270px,1fr))", gap: 10 }}>
+            {users.filter(u => u.role === "crew" && u.archived).map(m => (
+              <div key={m.id} className="card" style={{ borderTop: "4px solid var(--slate)", opacity: .7 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10 }}>
+                  <div style={{ width: 38, height: 38, borderRadius: "50%", background: "rgba(100,116,139,.3)", display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "'Barlow Condensed'", fontWeight: 800, fontSize: 16 }}>{m.name[0]}</div>
+                  <div><div style={{ fontWeight: 700 }}>{m.name}</div><div className="muted" style={{ fontSize: 12 }}>{m.email}</div></div>
+                </div>
+                <span className="tag" style={{ background: "rgba(100,116,139,.15)", color: "var(--slate)", marginBottom: 10, display: "inline-block" }}>archived</span>
+                <button className="btn btn-s btn-sm btn-full" onClick={() => unarchiveCrew(m.id)}>
+                  <Icon n="power" s={13} /> Restore to Active
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {modal && <div className="modal-bg" onClick={e => e.target === e.currentTarget && setModal(null)}>
         <div className="modal"><div className="mt">{modal === "add" ? "Add Crew Member" : "Edit Crew Member"}</div>
@@ -1673,6 +1712,105 @@ function Settings({ settings, saveSettings }) {
           <p className="muted" style={{ fontSize: 11, marginTop: 4 }}>Without this, Spanish translations must be typed manually. Get free key at console.cloud.google.com → Translate API.</p>
         </div>
         <button className="btn btn-p" onClick={save} style={{ minWidth: 140 }}>{saved ? <><Icon n="check" s={16} /> Saved!</> : "Save Settings"}</button>
+      </div>
+    </div>
+  );
+}
+
+// ─── ADMIN HOURS ──────────────────────────────────────────────────────
+function AdminHours({ jobs, users }) {
+  const [checkins, setCheckins] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [dateRange, setDateRange] = useState(7); // days back
+  const [refreshing, setRefreshing] = useState(false);
+
+  const load = async () => {
+    setRefreshing(true);
+    try {
+      const since = new Date(Date.now() - dateRange * 86400000).toISOString().split("T")[0];
+      const rows = await sbGet("field_checkins", `work_date=gte.${since}&order=work_date.desc,check_in.desc`);
+      if (rows) setCheckins(rows.map(fromCheckin));
+    } catch {}
+    setLoading(false); setRefreshing(false);
+  };
+
+  useEffect(() => { load(); }, [dateRange]);
+
+  const crewName = id => users.find(u => u.id === id)?.name || "Unknown";
+  const jobName  = id => jobs.find(j => j.id === id)?.name  || id;
+  const fmt = ts => ts ? new Date(ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "—";
+
+  // Summary: total hours per crew per job
+  const summary = {};
+  checkins.filter(c => c.checkOut).forEach(c => {
+    const key = `${c.crewId}|${c.jobId}`;
+    if (!summary[key]) summary[key] = { crewId: c.crewId, jobId: c.jobId, hours: 0, days: new Set() };
+    summary[key].hours += +(c.hours || 0);
+    summary[key].days.add(c.date);
+  });
+  const summaryRows = Object.values(summary).sort((a, b) => b.hours - a.hours);
+  const totalHours = summaryRows.reduce((s, r) => s + r.hours, 0);
+  const openCount  = checkins.filter(c => !c.checkOut).length;
+
+  return (
+    <div>
+      <div className="flexb" style={{ marginBottom: 20 }}>
+        <h2 className="h2">Hours Tracking</h2>
+        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          <select className="fi" style={{ width: "auto", padding: "8px 12px" }} value={dateRange} onChange={e => setDateRange(+e.target.value)}>
+            <option value={1}>Today</option>
+            <option value={7}>Last 7 days</option>
+            <option value={14}>Last 14 days</option>
+            <option value={30}>Last 30 days</option>
+          </select>
+          <button className="btn btn-s btn-sm" onClick={load} disabled={refreshing}>{refreshing ? <span className="spin" /> : "↻ Refresh"}</button>
+        </div>
+      </div>
+
+      {openCount > 0 && (
+        <div style={{ padding: "10px 14px", background: "rgba(16,185,129,.12)", border: "1px solid rgba(16,185,129,.25)", borderRadius: 10, marginBottom: 16, fontSize: 13, color: "var(--green)", fontWeight: 600 }}>
+          ● {openCount} worker{openCount !== 1 ? "s" : ""} currently clocked in
+        </div>
+      )}
+
+      {/* Summary cards */}
+      <div className="card" style={{ marginBottom: 20 }}>
+        <div className="ct">Summary — {dateRange === 1 ? "Today" : `Last ${dateRange} days`} &nbsp;<span className="muted" style={{ fontWeight: 400, fontSize: 13 }}>({totalHours.toFixed(1)} total hrs)</span></div>
+        {summaryRows.length === 0
+          ? <div className="empty" style={{ padding: "20px 0" }}><p>No completed check-ins in this period.</p></div>
+          : <div className="tbl-wrap"><table><thead><tr><th>Crew</th><th>Job</th><th>Days</th><th style={{ textAlign: "right" }}>Hours</th></tr></thead>
+            <tbody>{summaryRows.map((r, i) => (
+              <tr key={i}>
+                <td data-l="Crew">{crewName(r.crewId)}</td>
+                <td data-l="Job"><span className="tag-l" style={{ fontSize: 11 }}>{jobName(r.jobId)}</span></td>
+                <td data-l="Days" className="muted">{r.days.size}</td>
+                <td data-l="Hours" style={{ textAlign: "right", fontWeight: 700, color: "var(--accent)", fontFamily: "'Barlow Condensed'", fontSize: 16 }}>{r.hours.toFixed(1)}</td>
+              </tr>
+            ))}</tbody></table></div>
+        }
+      </div>
+
+      {/* Raw log */}
+      <div className="card">
+        <div className="ct">Check-in Log</div>
+        {loading ? <div style={{ padding: 20, textAlign: "center" }}><span className="spin" style={{ width: 24, height: 24, display: "inline-block" }} /></div>
+          : checkins.length === 0 ? <div className="empty" style={{ padding: "20px 0" }}><p>No check-ins found.</p></div>
+          : <div className="tbl-wrap"><table><thead><tr><th>Date</th><th>Crew</th><th>Job</th><th>In</th><th>Out</th><th style={{ textAlign: "right" }}>Hours</th></tr></thead>
+            <tbody>{checkins.map(c => (
+              <tr key={c.id}>
+                <td data-l="Date" className="muted" style={{ whiteSpace: "nowrap" }}>{c.date}</td>
+                <td data-l="Crew">{crewName(c.crewId)}</td>
+                <td data-l="Job"><span className="tag-l" style={{ fontSize: 11 }}>{jobName(c.jobId)}</span></td>
+                <td data-l="In" style={{ whiteSpace: "nowrap" }}>{fmt(c.checkIn)}</td>
+                <td data-l="Out" style={{ whiteSpace: "nowrap", color: c.checkOut ? "inherit" : "var(--green)", fontWeight: c.checkOut ? 400 : 700 }}>
+                  {c.checkOut ? fmt(c.checkOut) : "● On site"}
+                </td>
+                <td data-l="Hours" style={{ textAlign: "right", fontWeight: 700, color: c.checkOut ? "var(--accent)" : "var(--green)", fontFamily: "'Barlow Condensed'", fontSize: 15 }}>
+                  {c.checkOut ? (+(c.hours||0)).toFixed(1) : "..."}
+                </td>
+              </tr>
+            ))}</tbody></table></div>
+        }
       </div>
     </div>
   );
@@ -2009,6 +2147,8 @@ function CrewTasks(props) {
   };
   const st = task => task.status === "done" ? "done" : (task.dueDate && task.dueDate < today ? "overdue" : "pending");
 
+  const [openCheckins, setOpenCheckins] = useState({}); // { jobId: checkinRecord }
+
   const checkIn = async (job) => {
     const loc = await getLocation();
     setGps(loc);
@@ -2016,6 +2156,24 @@ function CrewTasks(props) {
       const dist = distanceMi(loc, { lat: job.lat, lng: job.lng });
       setCheckedJob({ id: job.id, dist });
     } else setCheckedJob({ id: job.id, dist: null });
+    // Save check-in to DB
+    const id = "ci" + Date.now();
+    const row = { id, crew_id: user.id, job_id: job.id, check_in: new Date().toISOString(), lat_in: loc?.lat || null, lng_in: loc?.lng || null, work_date: today };
+    setOpenCheckins(p => ({ ...p, [job.id]: { id, jobId: job.id, checkIn: new Date().toISOString() } }));
+    try { await sbPost("field_checkins", row); } catch { enqueue({ table: "field_checkins", payload: row }); }
+  };
+
+  const checkOut = async (job) => {
+    const open = openCheckins[job.id];
+    if (!open) return;
+    const loc = await getLocation();
+    const now = new Date();
+    const inTime = new Date(open.checkIn);
+    const hours = Math.round(((now - inTime) / 3600000) * 100) / 100;
+    const patch = { check_out: now.toISOString(), lat_out: loc?.lat || null, lng_out: loc?.lng || null, hours };
+    try { await sbFetch(`field_checkins?id=eq.${open.id}`, { method: "PATCH", body: JSON.stringify(patch), prefer: "return=minimal" }); } catch {}
+    setOpenCheckins(p => { const n = { ...p }; delete n[job.id]; return n; });
+    setCheckedJob(null);
   };
 
   const groups = [...new Set(my.map(t => t.jobId))];
@@ -2053,9 +2211,14 @@ function CrewTasks(props) {
                   </a>
                 )}
               </div>
-              <button className={`btn btn-sm ${ci ? "btn-g" : "btn-s"}`} onClick={() => checkIn(job)}>
-                <Icon n="pin" s={13} /> {ci ? t.checkedIn : t.checkIn}
-              </button>
+              {openCheckins[jid]
+                ? <button className="btn btn-sm btn-a" onClick={() => checkOut(job)}>
+                    <Icon n="power" s={13} /> {lang === "es" ? "Salir del trabajo" : "Check Out"}
+                  </button>
+                : <button className={`btn btn-sm ${ci ? "btn-g" : "btn-s"}`} onClick={() => checkIn(job)}>
+                    <Icon n="pin" s={13} /> {ci ? t.checkedIn : t.checkIn}
+                  </button>
+              }
             </div>
 
             {/* ── Quick-action strip ── */}
