@@ -81,6 +81,20 @@ function compressImage(file, maxW = 1280, quality = 0.7) {
   });
 }
 
+// ─── TAP-TO-NAVIGATE ADDRESS ─────────────────────────────────────────────
+const MapAddr = ({ addr, cls = "jobaddr" }) => {
+  if (!addr) return null;
+  const url = "https://maps.google.com/?q=" + encodeURIComponent(addr);
+  return (
+    <a href={url} target="_blank" rel="noreferrer" className={cls}
+      style={{ display:"inline-flex", alignItems:"center", gap:4, textDecoration:"none", color:"inherit" }}
+      onClick={e => e.stopPropagation()}>
+      <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="var(--sky2)" strokeWidth="2.5"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z M12 13a3 3 0 1 0 0-6 3 3 0 0 0 0 6z"/></svg>
+      {addr}
+    </a>
+  );
+};
+
 // ─── GPS HELPER ─────────────────────────────────────────────────────────
 function getLocation() {
   return new Promise((resolve) => {
@@ -102,10 +116,12 @@ function distanceMi(a, b) {
 // ─── GOOGLE TRANSLATE ───────────────────────────────────────────────────
 async function translateText(text, target, key) {
   if (!key || !text) return text;
+  // Use es-419 (Latin American Spanish) for Mexican crew — NOT generic "es"
+  const lang = target === "es" ? "es-419" : target;
   try {
     const r = await fetch(`https://translation.googleapis.com/language/translate/v2?key=${key}`,
       { method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ q: text, target, format: "text" }) });
+        body: JSON.stringify({ q: text, target: lang, format: "text" }) });
     const d = await r.json();
     return d?.data?.translations?.[0]?.translatedText || text;
   } catch { return text; }
@@ -136,14 +152,82 @@ const DEMO_RECEIPTS = [
 ];
 
 const T = {
-  en: { tasks:"Tasks", photos:"Photos", receipts:"Receipts", log:"Log Day", login:"Sign In",
-        pending:"Pending", done:"Done", overdue:"Overdue", noTasks:"All caught up!",
-        checkIn:"Check In", checkedIn:"Checked in", weather:"Weather",
-        sunny:"Sunny", cloudy:"Cloudy", rainy:"Rainy", hot:"Hot" },
-  es: { tasks:"Tareas", photos:"Fotos", receipts:"Recibos", log:"Registro", login:"Entrar",
-        pending:"Pendiente", done:"Hecho", overdue:"Atrasado", noTasks:"¡Todo al día!",
-        checkIn:"Registrarse", checkedIn:"Registrado", weather:"Clima",
-        sunny:"Soleado", cloudy:"Nublado", rainy:"Lluvioso", hot:"Caluroso" },
+  en: {
+    // nav
+    tasks:"Tasks", photos:"Photos", receipts:"Receipts", log:"Log Day", login:"Sign In",
+    // status
+    pending:"Pending", done:"Done", overdue:"Overdue", noTasks:"All caught up!",
+    // check-in
+    checkIn:"Check In", checkedIn:"Checked in",
+    // weather
+    weather:"Weather", sunny:"Sunny", cloudy:"Cloudy", rainy:"Rainy", hot:"Hot",
+    // shared
+    task:"Task", job:"Job", choose:"Choose...", cancel:"Cancel", submit:"Submit",
+    // photos
+    photoType:"Photo Type", before:"Before", after:"After", concern:"Concern",
+    takePhoto:"Take Photo", library:"From Library",
+    photoNote:"Photos compressed before upload to save data.",
+    photoSaved:"Photo saved", retake:"Retake", photo:"Photo",
+    // receipts
+    store:"Store", amount:"Amount", notes:"Notes", whatBought:"What was bought",
+    whoPaid:"Who paid?", iPaid:"I paid — need reimbursement", companyPaid:"Company paid",
+    submitReceipt:"Submit Receipt", receiptSubmitted:"Receipt submitted!",
+    photoReady:"Photo ready", receiptPhoto:"Receipt photo (optional)",
+    reimbursed:"Reimbursed", awaitingReimb:"Awaiting reimbursement",
+    flaggedReimb:"Will be flagged for reimbursement",
+    requireFields:"Task, store, and amount required to submit",
+    snapReceipt:"Fill out the form and submit your receipt.",
+    // log
+    logYourDay:"Log Your Day", tellUs:"Tell us what you did today.",
+    whatEn:"What did you do? (English)", whatEs:"What did you do? (Spanish)",
+    logSubmitted:"Log submitted!", notLogged:"You haven't logged today yet",
+    generalLog:"General log", descWork:"Describe your work...", descWorkEs:"Describe tu trabajo...",
+    // auto-log
+    completedTask:"Completed",
+    // GPS
+    onSite:"On site", fromSite:"from site",
+    // net / greeting
+    online:"Online", offline:"Offline",
+    yourTasks:"Your tasks today",
+  },
+  es: {
+    // nav
+    tasks:"Tareas", photos:"Fotos", receipts:"Recibos", log:"Registro del Día", login:"Entrar",
+    // status
+    pending:"Pendiente", done:"Listo", overdue:"Atrasado", noTasks:"¡Todo al día!",
+    // check-in
+    checkIn:"Registrarse", checkedIn:"Registrado",
+    // weather
+    weather:"Clima", sunny:"Soleado", cloudy:"Nublado", rainy:"Lluvioso", hot:"Caluroso",
+    // shared
+    task:"Tarea", job:"Trabajo", choose:"Elegir...", cancel:"Cancelar", submit:"Enviar",
+    // photos
+    photoType:"Tipo de Foto", before:"Antes", after:"Después", concern:"Problema",
+    takePhoto:"Tomar Foto", library:"De Galería",
+    photoNote:"Fotos comprimidas antes de subir para ahorrar datos.",
+    photoSaved:"Foto guardada", retake:"Cambiar foto", photo:"Foto",
+    // receipts
+    store:"Tienda", amount:"Monto", notes:"Notas", whatBought:"¿Qué compraste?",
+    whoPaid:"¿Quién pagó?", iPaid:"Yo pagué — necesito reembolso", companyPaid:"La empresa pagó",
+    submitReceipt:"Enviar Recibo", receiptSubmitted:"¡Recibo enviado!",
+    photoReady:"Foto lista", receiptPhoto:"Foto del recibo (opcional)",
+    reimbursed:"Reembolsado", awaitingReimb:"Esperando reembolso",
+    flaggedReimb:"Se marcará para reembolso",
+    requireFields:"Tarea, tienda y monto son requeridos",
+    snapReceipt:"Llena el formulario y envía tu recibo.",
+    // log
+    logYourDay:"Registro del Día", tellUs:"Cuéntanos qué hiciste hoy.",
+    whatEn:"¿Qué hiciste? (Inglés)", whatEs:"¿Qué hiciste? (Español)",
+    logSubmitted:"¡Registro enviado!", notLogged:"Aún no has registrado hoy",
+    generalLog:"Registro general", descWork:"Describe tu trabajo...", descWorkEs:"Describe tu trabajo...",
+    // auto-log
+    completedTask:"Completada",
+    // GPS
+    onSite:"En el sitio", fromSite:"del sitio",
+    // net / greeting
+    online:"En línea", offline:"Sin conexión",
+    yourTasks:"Tus tareas de hoy",
+  },
 };
 
 // ─── ICONS ──────────────────────────────────────────────────────────────
@@ -503,6 +587,31 @@ export default function App() {
     load();
   }, [user?.id]);
 
+  // ── LIVE SYNC — 30s polling both directions ────────────────────────
+  useEffect(() => {
+    if (!user) return;
+    const sync = async () => {
+      if (!navigator.onLine) return;
+      try {
+        const [dbTasks, dbLogs, dbPhotos, dbReceipts, dbMats] = await Promise.all([
+          sbGet("field_tasks",            "order=created_at"),
+          sbGet("field_logs",             "order=created_at.desc"),
+          sbGet("field_photos",           "order=created_at.desc"),
+          sbGet("field_receipts",         "order=created_at.desc"),
+          sbGet("field_material_requests","order=created_at.desc"),
+        ]);
+        if (dbTasks)    setTasks(dbTasks.map(fromTask));
+        if (dbLogs)     setLogs(dbLogs.map(fromLog));
+        if (dbPhotos)   setPhotos(dbPhotos.map(fromPhoto));
+        if (dbReceipts) setReceipts(dbReceipts.map(fromReceipt));
+        if (dbMats)     setMats(dbMats.map(fromMat));
+      } catch {}
+    };
+    const iv = setInterval(sync, 30000);
+    window.addEventListener("focus", sync);
+    return () => { clearInterval(iv); window.removeEventListener("focus", sync); };
+  }, [user?.id]);
+
   // ── CREW MUTATIONS ────────────────────────────────────────────────
   const setActive = async (id, active) => {
     setUsers(u => u.map(x => x.id === id ? { ...x, active } : x));
@@ -662,7 +771,7 @@ function TopBar({ user, onLogout, t, lang, setLang, online, showMenu, menuOpen, 
         <span className="tb-title">GS MASTERS FIELD</span></div>
       <div className="tb-right">
         <span className={`net-dot ${online ? "net-on" : "net-off"}`}>
-          <Icon n={online ? "wifi" : "wifiOff"} s={12} /> <span className="net-txt">{online ? "Online" : "Offline"}</span></span>
+          <Icon n={online ? "wifi" : "wifiOff"} s={12} /> <span className="net-txt">{online ? t.online : t.offline}</span></span>
         <button className="btn btn-s btn-sm btn-ic" onClick={toggleTheme} title={theme === "dark" ? "Switch to Light Mode" : "Switch to Dark Mode"}
           style={{ fontSize: 15 }}>{theme === "dark" ? "☀️" : "🌙"}</button>
         <button className="btn btn-s btn-sm" onClick={() => setLang(lang === "en" ? "es" : "en")}>
@@ -680,9 +789,9 @@ function Admin(props) {
   const { t, tab, setTab, menuOpen, setMenuOpen } = props;
   const [statusFilter, setStatusFilter] = useState("all");
   const nav = [
-    { k: "dash", i: "home", l: "Dashboard" }, { k: "tasks", i: "tasks", l: t.tasks },
-    { k: "cal", i: "calendar", l: "Calendar" }, { k: "report", i: "report", l: "Reports" },
-    { k: "receipts", i: "receipt", l: t.receipts },
+    { k: "dash", i: "home", l: "Dashboard" }, { k: "activity", i: "report", l: "Live Activity" },
+    { k: "tasks", i: "tasks", l: t.tasks }, { k: "cal", i: "calendar", l: "Calendar" },
+    { k: "report", i: "report", l: "Reports" }, { k: "receipts", i: "receipt", l: t.receipts },
     { k: "photos", i: "photo", l: "Photos" }, { k: "jobs", i: "briefcase", l: "Jobs" },
     { k: "crew", i: "users", l: "Crew" }, { k: "set", i: "settings", l: "Settings" },
   ];
@@ -696,6 +805,7 @@ function Admin(props) {
           <Icon n={n.i} s={17} /> {n.l}</div>)}</div>
       <div className="content">
         {tab === "dash" && <Dash {...props} navTo={navTo} />}
+        {tab === "activity" && <AdminActivity {...props} />}
         {tab === "tasks" && <AdminTasks {...props} statusFilter={statusFilter} setStatusFilter={setStatusFilter} />}
         {tab === "cal" && <Calendar {...props} />}
         {tab === "report" && <Report {...props} />}
@@ -788,6 +898,16 @@ function AdminTasks(props) {
     setTasks(p => [...p, task]);
     const row = { id, job_id: nt.jobId, title: nt.title, title_es: es || nt.title, assigned_to: nt.assignedTo, due_date: nt.dueDate || null, status: "pending" };
     try { await sbPost("field_tasks", row); } catch { enqueue({ table: "field_tasks", payload: row }); }
+    // Twilio SMS to each assigned crew member
+    const jobName = jobs.find(j => j.id === nt.jobId)?.name || "";
+    const appUrl = settings?.appUrl || window.location.origin;
+    for (const crewId of nt.assignedTo) {
+      const member = users.find(u => u.id === crewId);
+      if (member?.phone) {
+        const msg = `New task: "${nt.title}"\nJob: ${jobName}${nt.dueDate ? `\nDue: ${nt.dueDate}` : ""}\nOpen app: ${appUrl}`;
+        fetch("/.netlify/functions/send-sms", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ to: member.phone, body: msg }) }).catch(() => {});
+      }
+    }
     setNt({ title: "", titleEs: "", jobId: "", assignedTo: [], dueDate: "" }); setModal(false); setBusy(false);
   };
   const toggle = async (id) => {
@@ -826,7 +946,7 @@ function AdminTasks(props) {
         const jt = statusFiltered.filter(t => t.jobId === job.id);
         if (!jt.length) return null;
         return <div key={job.id} className="jobsec">
-          <div className="jobhead"><div><div className="jobname">{job.name}</div><div className="jobaddr">{job.address}</div></div>
+          <div className="jobhead"><div><div className="jobname">{job.name}</div><MapAddr addr={job.address} /></div>
             <span className="tag-l">{jt.length} task{jt.length !== 1 ? "s" : ""}</span></div>
           <div className="jobbody">{jt.map(task => {
             const s = st(task), crew = (task.assignedTo || []).map(id => users.find(u => u.id === id)).filter(Boolean);
@@ -1240,16 +1360,17 @@ function Jobs({ jobs, setJobs, tasks }) {
   const [modal, setModal] = useState(false);
   const [confirm, setConfirm] = useState(null);
   const [syncConfirm, setSyncConfirm] = useState(null);
-  const [nj, setNj] = useState({ name: "", address: "", gsmSync: false });
+  const [nj, setNj] = useState({ name: "", street: "", city: "", state: "AL", gsmSync: false });
   const [showClosed, setShowClosed] = useState(false);
 
   const add = async () => {
-    if (!nj.name) return;
+    if (!nj.name || !nj.street) return;
     const id = "j" + Date.now();
-    const job = { id, name: nj.name, address: nj.address, status: "active", gsmSync: nj.gsmSync, gsmJobId: null };
-    setJobs(p => [...p, job]); setNj({ name: "", address: "", gsmSync: false }); setModal(false);
-    try { await sbPost("field_jobs", { id, name: nj.name, address: nj.address, status: "active", gsm_sync: nj.gsmSync }); }
-    catch { enqueue({ table: "field_jobs", payload: { id, name: nj.name, address: nj.address, status: "active", gsm_sync: nj.gsmSync } }); }
+    const address = [nj.street, nj.city, nj.state].filter(Boolean).join(", ");
+    const job = { id, name: nj.name, address, status: "active", gsmSync: nj.gsmSync, gsmJobId: null };
+    setJobs(p => [...p, job]); setNj({ name: "", street: "", city: "", state: "AL", gsmSync: false }); setModal(false);
+    try { await sbPost("field_jobs", { id, name: nj.name, address, status: "active", gsm_sync: nj.gsmSync }); }
+    catch { enqueue({ table: "field_jobs", payload: { id, name: nj.name, address, status: "active", gsm_sync: nj.gsmSync } }); }
   };
 
   const setStatus = async (id, status) => {
@@ -1297,7 +1418,7 @@ function Jobs({ jobs, setJobs, tasks }) {
         {active.map(job => { const s = jobStats(job); const allDone = s.total > 0 && s.done === s.total;
           return <div key={job.id} className="card" style={{ borderLeft: `4px solid ${job.gsmSync ? "var(--green)" : "var(--sky)"}` }}>
             <div style={{ fontFamily: "'Barlow Condensed'", fontSize: 19, fontWeight: 800, marginBottom: 4 }}>{job.name}</div>
-            <div className="muted" style={{ marginBottom: 10, fontSize: 13 }}>{job.address}</div>
+            <MapAddr addr={job.address} cls="muted" />
             <div className="flexb" style={{ marginBottom: job.gsmSync ? 8 : 12 }}>
               <SyncBadge job={job} />
               <span className="muted" style={{ fontSize: 12 }}>{s.done}/{s.total} tasks</span>
@@ -1348,9 +1469,15 @@ function Jobs({ jobs, setJobs, tasks }) {
       {modal && <div className="modal-bg" onClick={e => e.target === e.currentTarget && setModal(false)}>
         <div className="modal"><div className="mt">Add Job</div>
           <div className="fg"><label className="fl">Job Name</label>
-            <input className="fi" value={nj.name} onChange={e => setNj(p => ({ ...p, name: e.target.value }))} placeholder="Lot 5 – Harvest Creek" /></div>
-          <div className="fg"><label className="fl">Address</label>
-            <input className="fi" value={nj.address} onChange={e => setNj(p => ({ ...p, address: e.target.value }))} placeholder="Chelsea, AL" /></div>
+            <input className="fi" value={nj.name} onChange={e => setNj(p => ({ ...p, name: e.target.value }))} placeholder="Henderson Residence" /></div>
+          <div className="fg"><label className="fl">Street Address</label>
+            <input className="fi" value={nj.street} onChange={e => setNj(p => ({ ...p, street: e.target.value }))} placeholder="123 Oak Ridge Drive" /></div>
+          <div className="grid2">
+            <div className="fg"><label className="fl">City</label>
+              <input className="fi" value={nj.city} onChange={e => setNj(p => ({ ...p, city: e.target.value }))} placeholder="Chelsea" /></div>
+            <div className="fg"><label className="fl">State</label>
+              <input className="fi" value={nj.state} onChange={e => setNj(p => ({ ...p, state: e.target.value }))} placeholder="AL" style={{ maxWidth: 80 }} /></div>
+          </div>
           <div style={{ padding: "14px 16px", background: "rgba(0,0,0,.2)", borderRadius: 10, marginBottom: 18 }}>
             <div className="flexb">
               <div>
@@ -1451,10 +1578,17 @@ function CrewMgmt({ users, tasks, setActive, addUser, updateUser, removeUser, se
         <div className="modal"><div className="mt">Invite for {invite.name}</div>
           <p className="muted" style={{ marginBottom: 14, fontSize: 13 }}>Copy this and text it to them. It has the app link and their login.</p>
           <textarea className="fi" readOnly value={inviteText(invite)} style={{ minHeight: 180, fontFamily: "monospace", fontSize: 12 }} onFocus={e => e.target.select()} />
-          <div className="macts">
+          <div className="macts" style={{ flexWrap: "wrap", gap: 8 }}>
             <button className="btn btn-s" onClick={() => setInvite(null)}>Close</button>
             <button className="btn btn-p" onClick={() => { navigator.clipboard?.writeText(inviteText(invite)); }}><Icon n="check" s={14} /> Copy</button>
-            <a className="btn btn-g" href={`sms:${invite.phone}?body=${encodeURIComponent(inviteText(invite))}`} style={{ textDecoration: "none" }}><Icon n="translate" s={14} /> Text It</a></div></div></div>}
+            <button className="btn btn-g" onClick={async () => {
+              if (!invite.phone) { alert("No phone on file for this crew member."); return; }
+              const res = await fetch("/.netlify/functions/send-sms", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ to: invite.phone, body: inviteText(invite) }) });
+              const d = await res.json();
+              alert(d.ok ? "✓ Text sent via Twilio!" : "SMS failed — check Twilio env vars in Netlify.");
+            }}><Icon n="translate" s={14} /> Text (Twilio)</button>
+            <a className="btn btn-s" href={`mailto:${invite.email}?subject=${encodeURIComponent("GS Masters Field App — Your Login")}&body=${encodeURIComponent(inviteText(invite))}`} style={{ textDecoration: "none" }}>✉ Email</a>
+          </div></div></div>}
 
       {confirm && <div className="modal-bg" onClick={e => e.target === e.currentTarget && setConfirm(null)}>
         <div className="modal"><div className="mt">Remove {confirm.name}?</div>
@@ -1495,28 +1629,210 @@ function TestReminder({ f }) {
 }
 
 function Settings({ settings, saveSettings }) {
-  const [f, setF] = useState({ sbUrl: settings.sbUrl || "", sbKey: settings.sbKey || "", driveFolder: settings.driveFolder || "",
-    twSid: settings.twSid || "", twToken: settings.twToken || "", twPhone: settings.twPhone || "", gtKey: settings.gtKey || "", reminder: settings.reminder || "17:00", appUrl: settings.appUrl || "" });
+  const [f, setF] = useState({ gtKey: settings.gtKey || "", reminder: settings.reminder || "17:00", appUrl: settings.appUrl || "https://quiet-seahorse-2ba028.netlify.app" });
   const [saved, setSaved] = useState(false);
-  const save = () => { saveSettings(f); if (f.sbUrl) localStorage.setItem("sb_url", f.sbUrl); if (f.sbKey) localStorage.setItem("sb_key", f.sbKey); setSaved(true); setTimeout(() => setSaved(false), 2000); };
-  const F = ({ l, k, type = "text", ph = "" }) => <div className="fg"><label className="fl">{l}</label>
-    <input className="fi" type={type} value={f[k]} placeholder={ph} onChange={e => setF(p => ({ ...p, [k]: e.target.value }))} /></div>;
-  const Sec = ({ title, children }) => <div style={{ marginBottom: 24 }}>
-    <div style={{ fontFamily: "'Barlow Condensed'", fontSize: 16, fontWeight: 700, color: "var(--sky2)", letterSpacing: 1, marginBottom: 14, paddingBottom: 8, borderBottom: "1px solid var(--border)" }}>{title}</div>{children}</div>;
+
+  const save = async () => {
+    saveSettings(f);
+    // Persist to Supabase so it survives browser clears
+    try {
+      await sbPost("field_integration_settings", { id: 1, app_url: f.appUrl, gt_key: f.gtKey, reminder_time: f.reminder });
+    } catch {
+      try { await sbFetch("field_integration_settings?id=eq.1", { method: "PATCH", body: JSON.stringify({ app_url: f.appUrl, gt_key: f.gtKey, reminder_time: f.reminder }), prefer: "return=minimal" }); } catch {}
+    }
+    setSaved(true); setTimeout(() => setSaved(false), 2000);
+  };
+
+  const StatusRow = ({ label, value, color = "var(--green)" }) => (
+    <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 0", borderBottom: "1px solid var(--border)" }}>
+      <div style={{ width: 8, height: 8, borderRadius: "50%", background: color, flexShrink: 0 }} />
+      <span style={{ flex: 1, fontSize: 13 }}>{label}</span>
+      <span style={{ fontSize: 11, color: "var(--silver)", fontFamily: "monospace" }}>{value}</span>
+    </div>
+  );
+
   return (
     <div><h2 className="h2" style={{ marginBottom: 20 }}>Settings</h2>
+      <div className="card" style={{ marginBottom: 16 }}>
+        <div style={{ fontFamily: "'Barlow Condensed'", fontSize: 16, fontWeight: 700, color: "var(--sky2)", letterSpacing: 1, marginBottom: 14, paddingBottom: 8, borderBottom: "1px solid var(--border)" }}>Infrastructure — Already Configured</div>
+        <StatusRow label="Supabase Database" value="mkibgjnzbgfqjkhowafr.supabase.co" />
+        <StatusRow label="Twilio SMS" value="Credentials in Netlify env vars" />
+        <StatusRow label="Daily Reminder" value="5:00 PM Central — Netlify cron" />
+        <p className="muted" style={{ fontSize: 11, marginTop: 10 }}>These are hardcoded at the server level. No entry needed here.</p>
+      </div>
+
       <div className="card">
-        <Sec title="🔗 App Link"><F l="Your App URL (for crew invites)" k="appUrl" ph="https://gsmfield.netlify.app" /></Sec>
-        <Sec title="⚡ Supabase Backend"><F l="Supabase URL" k="sbUrl" ph="https://xxxx.supabase.co" /><F l="Supabase Anon Key" k="sbKey" type="password" ph="eyJ..." /></Sec>
-        <Sec title="📁 Google Drive"><F l="Drive Folder ID (GS Masters Inc)" k="driveFolder" ph="1ABC...xyz" /></Sec>
-        <Sec title="📱 Twilio SMS"><F l="Account SID" k="twSid" ph="ACxxxx" /><F l="Auth Token" k="twToken" type="password" /><F l="From Number" k="twPhone" ph="+12055550100" /></Sec>
-        <Sec title="🌐 Google Translate"><F l="Translate API Key" k="gtKey" type="password" ph="AIzaSy..." /></Sec>
-        <Sec title="⏰ Reminders"><div className="fg"><label className="fl">Daily Log Reminder</label>
-          <input className="fi" type="time" value={f.reminder} onChange={e => setF(p => ({ ...p, reminder: e.target.value }))} /></div>
-          <p className="muted" style={{ fontSize: 12, marginBottom: 12 }}>Crew gets an SMS with a one-tap link to their log screen if they haven't logged by this time. The schedule runs on the server (Netlify) so it fires even when no one has the app open.</p>
-          <TestReminder f={f} /></Sec>
+        <div style={{ fontFamily: "'Barlow Condensed'", fontSize: 16, fontWeight: 700, color: "var(--sky2)", letterSpacing: 1, marginBottom: 14, paddingBottom: 8, borderBottom: "1px solid var(--border)" }}>Optional Settings</div>
+        <div className="fg">
+          <label className="fl">App URL — used in crew invite text messages</label>
+          <input className="fi" value={f.appUrl} onChange={e => setF(p => ({ ...p, appUrl: e.target.value }))} placeholder="https://quiet-seahorse-2ba028.netlify.app" />
+        </div>
+        <div className="fg">
+          <label className="fl">Google Translate API Key — auto-translates tasks to Spanish</label>
+          <input className="fi" type="password" value={f.gtKey} onChange={e => setF(p => ({ ...p, gtKey: e.target.value }))} placeholder="AIzaSy... (optional)" />
+          <p className="muted" style={{ fontSize: 11, marginTop: 4 }}>Without this, Spanish translations must be typed manually. Get free key at console.cloud.google.com → Translate API.</p>
+        </div>
         <button className="btn btn-p" onClick={save} style={{ minWidth: 140 }}>{saved ? <><Icon n="check" s={16} /> Saved!</> : "Save Settings"}</button>
       </div>
+    </div>
+  );
+}
+
+// ─── ADMIN LIVE ACTIVITY ──────────────────────────────────────────────
+function AdminActivity({ jobs, tasks, users, logs: initLogs, photos: initPhotos, receipts: initReceipts, setTasks, setLogs, setPhotos, setReceipts }) {
+  const [logs,     setLocalLogs]     = useState(initLogs);
+  const [photos,   setLocalPhotos]   = useState(initPhotos);
+  const [receipts, setLocalReceipts] = useState(initReceipts);
+  const [localTasks, setLocalTasks]  = useState(tasks);
+  const [refreshing, setRefreshing]  = useState(false);
+  const [lastAt, setLastAt]          = useState(new Date());
+
+  const refresh = useCallback(async () => {
+    setRefreshing(true);
+    try {
+      const [dbTasks, dbLogs, dbPhotos, dbReceipts] = await Promise.all([
+        sbGet("field_tasks",    "order=created_at"),
+        sbGet("field_logs",     "order=created_at.desc"),
+        sbGet("field_photos",   "order=created_at.desc"),
+        sbGet("field_receipts", "order=created_at.desc"),
+      ]);
+      if (dbTasks)    { setLocalTasks(dbTasks.map(fromTask));       setTasks(dbTasks.map(fromTask)); }
+      if (dbLogs)     { setLocalLogs(dbLogs.map(fromLog));           setLogs(dbLogs.map(fromLog)); }
+      if (dbPhotos)   { setLocalPhotos(dbPhotos.map(fromPhoto));     setPhotos(dbPhotos.map(fromPhoto)); }
+      if (dbReceipts) { setLocalReceipts(dbReceipts.map(fromReceipt)); setReceipts(dbReceipts.map(fromReceipt)); }
+      setLastAt(new Date());
+    } catch {}
+    setRefreshing(false);
+  }, [setTasks, setLogs, setPhotos, setReceipts]);
+
+  useEffect(() => {
+    refresh();
+    const iv = setInterval(refresh, 30000);
+    return () => clearInterval(iv);
+  }, [refresh]);
+
+  const activeJobs = jobs.filter(j => j.status !== "closed");
+  const typeColor = k => ({ before:"var(--orange)", after:"var(--green)", concern:"var(--red)", progress:"var(--sky2)" })[k] || "var(--sky2)";
+  const typeLabel = k => ({ before:"Before", after:"After", concern:"Concern", progress:"Concern" })[k] || k;
+
+  const jobActivity = (job) => {
+    const items = [];
+    localLogs.filter(l => l.jobId === job.id).forEach(l => {
+      items.push({ ts: l.date, type: "log", data: l });
+    });
+    photos.filter(p => p.jobId === job.id).forEach(p => {
+      items.push({ ts: (p.date || "").slice(0,10), type: "photo", data: p });
+    });
+    receipts.filter(r => r.jobId === job.id).forEach(r => {
+      items.push({ ts: r.createdAt, type: "receipt", data: r });
+    });
+    return items.sort((a, b) => b.ts.localeCompare(a.ts));
+  };
+
+  const crewName = id => users.find(u => u.id === id)?.name || "Crew";
+  const taskPct  = job => { const jt = localTasks.filter(t => t.jobId === job.id); return jt.length ? `${jt.filter(t=>t.status==="done").length}/${jt.length}` : "0 tasks"; };
+
+  return (
+    <div>
+      <div className="flexb" style={{ marginBottom: 20 }}>
+        <h2 className="h2">Live Activity</h2>
+        <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+          <span style={{ fontSize: 11, color: "var(--slate)" }}>Updated {lastAt.toLocaleTimeString()}</span>
+          <button className="btn btn-s btn-sm" onClick={refresh} disabled={refreshing}>
+            {refreshing ? <span className="spin" /> : "↻ Refresh"}
+          </button>
+          <span style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 11, color: "var(--green)", fontWeight: 600 }}>
+            <span style={{ width: 7, height: 7, borderRadius: "50%", background: "var(--green)", animation: "pulse 2s infinite", display: "inline-block" }} /> Live (30s)
+          </span>
+        </div>
+      </div>
+
+      {activeJobs.map(job => {
+        const activity = jobActivity(job);
+        const jt = localTasks.filter(t => t.jobId === job.id);
+        const done = jt.filter(t => t.status === "done").length;
+        const pct = jt.length ? Math.round(done / jt.length * 100) : 0;
+        return (
+          <div key={job.id} className="card" style={{ marginBottom: 20 }}>
+            <div className="flexb" style={{ marginBottom: 10 }}>
+              <div>
+                <div style={{ fontFamily: "'Barlow Condensed'", fontSize: 20, fontWeight: 800 }}>{job.name}</div>
+                <div className="muted" style={{ fontSize: 12 }}>{job.address}</div>
+              </div>
+              <div style={{ textAlign: "right" }}>
+                <div style={{ fontFamily: "'Barlow Condensed'", fontWeight: 700, color: pct === 100 ? "var(--green)" : "var(--sky2)" }}>{done}/{jt.length} tasks · {pct}%</div>
+                <div className="bar" style={{ width: 120, marginTop: 4 }}><div className="bar-f" style={{ width: pct+"%", background: pct===100?"linear-gradient(90deg,#059669,var(--green))":"linear-gradient(90deg,var(--sky-dim),var(--sky))" }} /></div>
+              </div>
+            </div>
+
+            {/* Task completion grid */}
+            {jt.length > 0 && (
+              <div style={{ marginBottom: 14, padding: "10px 12px", background: "rgba(0,0,0,.2)", borderRadius: 10 }}>
+                {jt.map(task => (
+                  <div key={task.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "4px 0", borderBottom: "1px solid rgba(255,255,255,.03)" }}>
+                    <span style={{ fontSize: 14 }}>{task.status === "done" ? "✅" : "⬜"}</span>
+                    <span style={{ flex: 1, fontSize: 13, textDecoration: task.status === "done" ? "line-through" : "none", opacity: task.status === "done" ? .6 : 1 }}>{task.title}</span>
+                    <span style={{ fontSize: 11, color: "var(--silver)" }}>{(task.assignedTo||[]).map(id=>users.find(u=>u.id===id)?.name?.split(" ")[0]).filter(Boolean).join(", ")}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* Activity timeline */}
+            {activity.length === 0
+              ? <div className="empty" style={{ padding: "16px 0" }}><p style={{ fontSize: 13 }}>No activity yet for this job.</p></div>
+              : activity.map((item, i) => {
+                if (item.type === "log") {
+                  const l = item.data;
+                  const isCompletion = l.en?.startsWith("Completed:");
+                  return (
+                    <div key={i} style={{ display: "flex", gap: 10, padding: "8px 0", borderBottom: "1px solid rgba(255,255,255,.04)" }}>
+                      <span style={{ fontSize: 16, flexShrink: 0 }}>{isCompletion ? "✅" : "📝"}</span>
+                      <div style={{ flex: 1 }}>
+                        <div style={{ fontSize: 13, fontWeight: 600, color: isCompletion ? "var(--green)" : "var(--white)" }}>{l.en}</div>
+                        {l.es && l.es !== l.en && <div style={{ fontSize: 12, color: "var(--sky2)", fontStyle: "italic" }}>{l.es}</div>}
+                        <div style={{ fontSize: 11, color: "var(--slate)", marginTop: 2 }}>{crewName(l.crewId)} · {l.date}{l.weather ? ` · ${l.weather}` : ""}</div>
+                      </div>
+                    </div>
+                  );
+                }
+                if (item.type === "photo") {
+                  const p = item.data;
+                  return (
+                    <div key={i} style={{ display: "flex", gap: 10, padding: "8px 0", borderBottom: "1px solid rgba(255,255,255,.04)", alignItems: "center" }}>
+                      <span style={{ fontSize: 16, flexShrink: 0 }}>📷</span>
+                      {p.dataUrl && <img src={p.dataUrl} alt={p.type} style={{ width: 48, height: 48, objectFit: "cover", borderRadius: 6, border: `2px solid ${typeColor(p.type)}`, flexShrink: 0 }} />}
+                      <div>
+                        <span style={{ fontSize: 12, fontWeight: 700, color: typeColor(p.type), textTransform: "uppercase", letterSpacing: 1 }}>{typeLabel(p.type)} Photo</span>
+                        <div style={{ fontSize: 11, color: "var(--slate)", marginTop: 2 }}>{crewName(p.crewId)} · {(p.date||"").slice(0,10)}</div>
+                      </div>
+                    </div>
+                  );
+                }
+                if (item.type === "receipt") {
+                  const r = item.data;
+                  return (
+                    <div key={i} style={{ display: "flex", gap: 10, padding: "8px 0", borderBottom: "1px solid rgba(255,255,255,.04)", alignItems: "center" }}>
+                      <span style={{ fontSize: 16, flexShrink: 0 }}>🧾</span>
+                      {r.dataUrl && <img src={r.dataUrl} alt="receipt" style={{ width: 40, height: 40, objectFit: "cover", borderRadius: 6, flexShrink: 0 }} />}
+                      <div style={{ flex: 1 }}>
+                        <div style={{ fontSize: 13, fontWeight: 600 }}>{r.store} <span style={{ color: "var(--accent)", fontFamily: "'Barlow Condensed'", fontSize: 16 }}>${(+r.amount).toFixed(2)}</span></div>
+                        {r.note && <div style={{ fontSize: 12, color: "var(--silver)" }}>{r.note}</div>}
+                        <div style={{ fontSize: 11, color: "var(--slate)", marginTop: 2 }}>{crewName(r.crewId)} · {r.createdAt}
+                          {r.paidBy === "crew" && <span style={{ marginLeft: 8, color: r.reimbursementStatus === "paid" ? "var(--green)" : "var(--orange)", fontWeight: 700 }}>
+                            {r.reimbursementStatus === "paid" ? "✓ Reimbursed" : "⚠ Needs Reimbursement"}
+                          </span>}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                }
+                return null;
+              })
+            }
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -1542,7 +1858,7 @@ function Crew(props) {
 }
 
 function CrewTasks(props) {
-  const { user, tasks, setTasks, jobs, lang, t, settings } = props;
+  const { user, tasks, setTasks, jobs, lang, t, settings, photos, setPhotos, receipts, setReceipts, logs, setLogs } = props;
   const closedJobIds = new Set(jobs.filter(j => j.status === "closed").map(j => j.id));
   const my = tasks.filter(t => (Array.isArray(t.assignedTo) ? t.assignedTo.includes(user.id) : t.assignedTo === user.id) && !closedJobIds.has(t.jobId));
   const today = new Date().toISOString().split("T")[0];
@@ -1550,12 +1866,138 @@ function CrewTasks(props) {
   const [gps, setGps] = useState(null);
   const [matModal, setMatModal] = useState(null);
   const [mat, setMat] = useState("");
-  const [signModal, setSignModal] = useState(null);
+  // Job-level quick actions
+  const [activePanel, setActivePanel] = useState(null); // { jobId, type: 'photo'|'receipt'|'issue' }
+  const [photoType, setPhotoType] = useState("before");
+  const [photoBusy, setPhotoBusy] = useState(false);
+  const [photoSuccess, setPhotoSuccess] = useState(null); // jobId of last saved
+  const [rcForm, setRcForm] = useState({ store: "", amount: "", note: "", paidBy: "crew", dataUrl: null });
+  const [rcBusy, setRcBusy] = useState(false);
+  const [issueText, setIssueText] = useState(""); const [issueDataUrl, setIssueDataUrl] = useState(null); const [issueBusy, setIssueBusy] = useState(false);
+  const issuePhotoRef = useRef();
+  const photoRef = useRef();
+  const rcPhotoRef = useRef();
+
+  const PHOTO_TYPES = [
+    { k: "before",  l: t.before,  c: "var(--orange)" },
+    { k: "after",   l: t.after,   c: "var(--green)"  },
+    { k: "concern", l: t.concern, c: "var(--red)"    },
+  ];
+
+  const togglePanel = (jobId, type) => {
+    if (activePanel?.jobId === jobId && activePanel?.type === type) {
+      setActivePanel(null);
+    } else {
+      setActivePanel({ jobId, type });
+      if (type === "receipt") setRcForm({ store: "", amount: "", note: "", paidBy: "crew", dataUrl: null });
+    }
+  };
+
+  const captureJobPhoto = async (e) => {
+    const file = e.target.files[0]; if (!file || !activePanel) return;
+    setPhotoBusy(true);
+    const { dataUrl, sizeKB } = await compressImage(file);
+    const id = "p" + Date.now();
+    const jobId = activePanel.jobId;
+    const dbType = photoType === "concern" ? "progress" : photoType;
+    const photo = { id, dataUrl, type: photoType, taskId: null, jobId, crewId: user.id, sizeKB, date: new Date().toISOString() };
+    setPhotos(p => [...p, photo]);
+    const row = { id, data_url: dataUrl, photo_type: dbType, task_id: null, job_id: jobId, crew_id: user.id, size_kb: sizeKB };
+    try { await sbPost("field_photos", row); } catch { enqueue({ table: "field_photos", payload: row }); }
+    e.target.value = "";
+    setPhotoBusy(false);
+    setActivePanel(null);
+    setPhotoSuccess(jobId);
+    setTimeout(() => setPhotoSuccess(null), 3000);
+  };
+
+  const captureRcPhoto = async (e) => {
+    const file = e.target.files[0]; if (!file) return;
+    const { dataUrl } = await compressImage(file, 1000, 0.6);
+    setRcForm(p => ({ ...p, dataUrl }));
+    e.target.value = "";
+  };
+
+  const submitJobReceipt = async (jobId) => {
+    if (!rcForm.store || !rcForm.amount) return;
+    setRcBusy(true);
+    const id = "r" + Date.now();
+    const receipt = { id, dataUrl: rcForm.dataUrl, taskId: null, jobId, crewId: user.id, store: rcForm.store, amount: rcForm.amount, note: rcForm.note, paidBy: rcForm.paidBy, reimbursementStatus: rcForm.paidBy === "crew" ? "pending" : "na", createdAt: today };
+    setReceipts(p => [...p, receipt]);
+    const row = { id, data_url: rcForm.dataUrl, task_id: null, job_id: jobId, crew_id: user.id, store: rcForm.store, amount: parseFloat(rcForm.amount) || 0, note: rcForm.note, paid_by: rcForm.paidBy, reimbursement_status: rcForm.paidBy === "crew" ? "pending" : "na" };
+    try { await sbPost("field_receipts", row); } catch { enqueue({ table: "field_receipts", payload: row }); }
+    // GSM Builder sync
+    const job = jobs.find(j => j.id === jobId);
+    if (job?.gsmSync && job?.gsmJobId) {
+      fetch("/.netlify/functions/gsm-sync", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ type: "receipt", gsmJobId: job.gsmJobId, data: receipt }),
+      }).catch(() => {});
+    }
+    // Twilio notify admin of crew receipt
+    if (rcForm.paidBy === "crew") {
+      const msg = `[Field App] ${user.name} submitted a receipt needing reimbursement: ${rcForm.store} $${parseFloat(rcForm.amount).toFixed(2)} — ${job?.name || jobId}`;
+      fetch("/.netlify/functions/send-sms", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ to: "+12053699710", body: msg }) }).catch(() => {});
+    }
+    setRcForm({ store: "", amount: "", note: "", paidBy: "crew", dataUrl: null });
+    setRcBusy(false);
+    setActivePanel(null);
+  };
+
+  const captureIssuePhoto = async (e) => {
+    const file = e.target.files[0]; if (!file) return;
+    const { dataUrl } = await compressImage(file, 1000, 0.6);
+    setIssueDataUrl(dataUrl); e.target.value = "";
+  };
+
+  const submitIssue = async (jobId) => {
+    if (!issueText.trim() && !issueDataUrl) return;
+    setIssueBusy(true);
+    const logId = "l" + Date.now();
+    const job = jobs.find(j => j.id === jobId);
+    const enText = `[Issue] ${issueText}`;
+    const esText = `[Problema] ${issueText}`;
+    const log = { id: logId, en: enText, es: esText, weather: "", taskId: null, jobId, crewId: user.id, date: today };
+    setLogs(p => [...p, log]);
+    const row = { id: logId, text_en: enText, text_es: esText, task_id: null, job_id: jobId, crew_id: user.id, log_date: today };
+    try { await sbPost("field_logs", row); } catch { enqueue({ table: "field_logs", payload: row }); }
+    // Save photo if attached
+    if (issueDataUrl) {
+      const pid = "p" + Date.now();
+      const photo = { id: pid, dataUrl: issueDataUrl, type: "concern", taskId: null, jobId, crewId: user.id, sizeKB: 0, date: new Date().toISOString() };
+      setPhotos(p => [...p, photo]);
+      const prow = { id: pid, data_url: issueDataUrl, photo_type: "progress", task_id: null, job_id: jobId, crew_id: user.id, size_kb: 0 };
+      try { await sbPost("field_photos", prow); } catch { enqueue({ table: "field_photos", payload: prow }); }
+    }
+    // Twilio alert admin
+    const msg = `⚠️ Field Issue — ${job?.name || jobId}\nWorker: ${user.name}\n"${issueText}"\nOpen app to review.`;
+    fetch("/.netlify/functions/send-sms", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ to: "+12053699710", body: msg }) }).catch(() => {});
+    setIssueText(""); setIssueDataUrl(null); setIssueBusy(false);
+    setActivePanel(null);
+  };
+
   const toggle = async (id) => {
-    const task = tasks.find(t => t.id === id);
+    const task = tasks.find(tk => tk.id === id);
     const next = task.status === "done" ? "pending" : "done";
-    setTasks(p => p.map(t => t.id === id ? { ...t, status: next } : t));
+    setTasks(p => p.map(tk => tk.id === id ? { ...tk, status: next } : tk));
     try { await sbPatch("field_tasks", id, { status: next, completed_at: next === "done" ? new Date().toISOString() : null }); } catch {}
+    if (next === "done") {
+      const logId = "l" + Date.now();
+      const enText = `${T.en.completedTask}: ${task.title}`;
+      const esText = `${T.es.completedTask}: ${task.titleEs || task.title}`;
+      const log = { id: logId, en: enText, es: esText, weather: "", taskId: id, jobId: task.jobId, crewId: user.id, date: today };
+      setLogs(p => [...p, log]);
+      const row = { id: logId, text_en: enText, text_es: esText, task_id: id, job_id: task.jobId, crew_id: user.id, log_date: today };
+      try { await sbPost("field_logs", row); } catch { enqueue({ table: "field_logs", payload: row }); }
+      // GSM Builder sync
+      const job = jobs.find(j => j.id === task.jobId);
+      if (job?.gsmSync && job?.gsmJobId) {
+        fetch("/.netlify/functions/gsm-sync", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ type: "task_done", gsmJobId: job.gsmJobId, data: { id: logId, taskId: id, taskTitle: task.title, crewName: user.name, date: today } }),
+        }).catch(() => {});
+      }
+    }
   };
   const submitMat = async (taskId) => {
     if (!mat.trim()) return;
@@ -1577,20 +2019,197 @@ function CrewTasks(props) {
   };
 
   const groups = [...new Set(my.map(t => t.jobId))];
+
   return (
     <div>
+      {/* shared hidden file inputs — activePanel tracks which job they belong to */}
+      <input ref={photoRef} type="file" accept="image/*" style={{ display: "none" }} onChange={captureJobPhoto} />
+      <input ref={rcPhotoRef} type="file" accept="image/*" style={{ display: "none" }} onChange={captureRcPhoto} />
+      <input ref={issuePhotoRef} type="file" accept="image/*" capture="environment" style={{ display: "none" }} onChange={captureIssuePhoto} />
+
       <div style={{ marginBottom: 18 }}>
         <h2 className="h2">{lang === "es" ? `Hola, ${user.name.split(" ")[0]}` : `Hey, ${user.name.split(" ")[0]}`}</h2>
-        <p className="muted">{lang === "es" ? "Tus tareas de hoy" : "Your tasks today"}</p></div>
-      {my.length === 0 ? <div className="empty"><Icon n="check" s={48} c="var(--green)" /><p style={{ marginTop: 12 }}>{t.noTasks}</p></div>
-        : groups.map(jid => { const job = jobs.find(j => j.id === jid), jt = my.filter(t => t.jobId === jid);
+        <p className="muted">{t.yourTasks}</p>
+      </div>
+
+      {my.length === 0
+        ? <div className="empty"><Icon n="check" s={48} c="var(--green)" /><p style={{ marginTop: 12 }}>{t.noTasks}</p></div>
+        : groups.map(jid => {
+          const job = jobs.find(j => j.id === jid), jt = my.filter(t => t.jobId === jid);
           const ci = checkedJob?.id === jid;
+          const panel = activePanel?.jobId === jid ? activePanel.type : null;
+
           return <div key={jid} className="jobsec">
-            <div className="jobhead"><div><div className="jobname">{job?.name}</div><div className="jobaddr">{job?.address}</div></div>
+
+            {/* ── Job header ── */}
+            <div className="jobhead">
+              <div>
+                <div className="jobname">{job?.name}</div>
+                {job?.address && (
+                  <a href={`https://maps.google.com/?q=${encodeURIComponent(job.address)}`} target="_blank" rel="noreferrer"
+                    style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 12, color: "var(--sky2)", textDecoration: "none", marginTop: 2, padding: "2px 6px", background: "rgba(59,130,246,.12)", borderRadius: 6, border: "1px solid rgba(59,130,246,.25)" }}
+                    onClick={e => e.stopPropagation()}>
+                    <Icon n="pin" s={12} c="var(--sky2)" /> {job.address} — Navigate
+                  </a>
+                )}
+              </div>
               <button className={`btn btn-sm ${ci ? "btn-g" : "btn-s"}`} onClick={() => checkIn(job)}>
-                <Icon n="pin" s={13} /> {ci ? t.checkedIn : t.checkIn}</button></div>
-            {ci && checkedJob.dist != null && <div style={{ padding: "6px 18px", fontSize: 12, color: checkedJob.dist < 0.5 ? "var(--green)" : "var(--orange)", background: "rgba(0,0,0,.2)" }}>
-              📍 {checkedJob.dist < 0.5 ? (lang === "es" ? "En el sitio" : "On site") : `${checkedJob.dist.toFixed(1)} mi ${lang === "es" ? "del sitio" : "from site"}`}</div>}
+                <Icon n="pin" s={13} /> {ci ? t.checkedIn : t.checkIn}
+              </button>
+            </div>
+
+            {/* ── Quick-action strip ── */}
+            <div style={{ display: "flex", gap: 5, padding: "7px 12px", background: "rgba(0,0,0,.22)", borderBottom: "1px solid rgba(255,255,255,.04)", flexWrap: "wrap", alignItems: "center" }}>
+              {PHOTO_TYPES.map(pt => (
+                <button key={pt.k}
+                  onClick={() => { setPhotoType(pt.k); togglePanel(jid, "photo"); }}
+                  style={{ display: "inline-flex", alignItems: "center", gap: 4, padding: "5px 10px", borderRadius: 8,
+                    fontSize: 11, fontWeight: 700, fontFamily: "'Barlow Condensed'", letterSpacing: .5, border: "none", cursor: "pointer",
+                    background: panel === "photo" && photoType === pt.k ? `rgba(${pt.k==="before"?"249,115,22":pt.k==="after"?"16,185,129":"239,68,68"},.18)` : "rgba(255,255,255,.07)",
+                    color: panel === "photo" && photoType === pt.k ? pt.c : "var(--silver)",
+                    outline: panel === "photo" && photoType === pt.k ? `1px solid ${pt.c}` : "none" }}>
+                  <Icon n="camera" s={12} /> {pt.l}
+                </button>
+              ))}
+              <div style={{ marginLeft: "auto", display: "flex", gap: 5 }}>
+                <button onClick={() => togglePanel(jid, "receipt")}
+                  style={{ display: "inline-flex", alignItems: "center", gap: 4, padding: "5px 10px", borderRadius: 8,
+                    fontSize: 11, fontWeight: 700, fontFamily: "'Barlow Condensed'", letterSpacing: .5, border: "none", cursor: "pointer",
+                    background: panel === "receipt" ? "rgba(245,158,11,.18)" : "rgba(255,255,255,.07)",
+                    color: panel === "receipt" ? "var(--accent)" : "var(--silver)",
+                    outline: panel === "receipt" ? "1px solid var(--accent)" : "none" }}>
+                  <Icon n="receipt" s={12} /> {lang === "es" ? "Recibo" : "Receipt"}
+                </button>
+                <button onClick={() => { setIssueText(""); setIssueDataUrl(null); togglePanel(jid, "issue"); }}
+                  style={{ display: "inline-flex", alignItems: "center", gap: 4, padding: "5px 10px", borderRadius: 8,
+                    fontSize: 11, fontWeight: 700, fontFamily: "'Barlow Condensed'", letterSpacing: .5, border: "none", cursor: "pointer",
+                    background: panel === "issue" ? "rgba(239,68,68,.18)" : "rgba(255,255,255,.07)",
+                    color: panel === "issue" ? "var(--red)" : "var(--silver)",
+                    outline: panel === "issue" ? "1px solid var(--red)" : "none" }}>
+                  ⚠ {lang === "es" ? "Problema" : "Flag Issue"}
+                </button>
+              </div>
+            </div>
+
+            {/* ── Photo success flash ── */}
+            {photoSuccess === jid && (
+              <div style={{ padding: "6px 14px", background: "rgba(16,185,129,.15)", color: "var(--green)", fontSize: 12, fontWeight: 600, borderBottom: "1px solid rgba(16,185,129,.2)" }}>
+                ✓ {t.photoSaved}
+              </div>
+            )}
+
+            {/* ── Photo panel ── */}
+            {panel === "photo" && (
+              <div style={{ padding: "14px 16px", background: "rgba(8,15,22,.85)", borderBottom: "1px solid rgba(255,255,255,.06)" }}>
+                <div style={{ display: "flex", gap: 6, marginBottom: 12 }}>
+                  {PHOTO_TYPES.map(pt => (
+                    <button key={pt.k} onClick={() => setPhotoType(pt.k)}
+                      style={{ padding: "6px 12px", borderRadius: 8, border: `1px solid ${photoType === pt.k ? pt.c : "transparent"}`,
+                        background: photoType === pt.k ? `rgba(${pt.k==="before"?"249,115,22":pt.k==="after"?"16,185,129":"239,68,68"},.18)` : "rgba(255,255,255,.06)",
+                        color: photoType === pt.k ? pt.c : "var(--silver)", fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "'Barlow Condensed'" }}>
+                      {pt.l}
+                    </button>
+                  ))}
+                </div>
+                <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                  <button className="btn btn-p" disabled={photoBusy}
+                    onClick={() => { photoRef.current?.setAttribute("capture","environment"); photoRef.current?.click(); }}>
+                    {photoBusy ? <span className="spin" /> : <><Icon n="camera" s={15} /> {t.takePhoto}</>}
+                  </button>
+                  <button className="btn btn-s" disabled={photoBusy}
+                    onClick={() => { photoRef.current?.removeAttribute("capture"); photoRef.current?.click(); }}>
+                    <Icon n="photo" s={15} /> {t.library}
+                  </button>
+                  <button onClick={() => setActivePanel(null)}
+                    style={{ marginLeft: "auto", background: "none", border: "none", color: "var(--slate)", cursor: "pointer", fontSize: 18, lineHeight: 1 }}>✕</button>
+                </div>
+                <p style={{ fontSize: 11, color: "var(--slate)", marginTop: 8 }}>
+                  {t.photoType}: {PHOTO_TYPES.find(p=>p.k===photoType)?.l} — {t.photoSaved.toLowerCase()}
+                </p>
+              </div>
+            )}
+
+            {/* ── Receipt panel ── */}
+            {panel === "receipt" && (
+              <div style={{ padding: "14px 16px", background: "rgba(8,15,22,.85)", borderBottom: "1px solid rgba(255,255,255,.06)" }}>
+                <div className="grid2" style={{ marginBottom: 10 }}>
+                  <div><label className="fl">{t.store}</label>
+                    <input className="fi" value={rcForm.store} onChange={e => setRcForm(p => ({ ...p, store: e.target.value }))} placeholder="Home Depot" style={{ padding: "9px 12px" }} /></div>
+                  <div><label className="fl">{t.amount} ($)</label>
+                    <input className="fi" type="number" value={rcForm.amount} onChange={e => setRcForm(p => ({ ...p, amount: e.target.value }))} placeholder="0.00" style={{ padding: "9px 12px" }} /></div>
+                </div>
+                <div style={{ marginBottom: 10 }}><label className="fl">{t.notes}</label>
+                  <input className="fi" value={rcForm.note} onChange={e => setRcForm(p => ({ ...p, note: e.target.value }))} placeholder={t.whatBought} style={{ padding: "9px 12px" }} /></div>
+                <div style={{ display: "flex", gap: 8, marginBottom: 12, flexWrap: "wrap", alignItems: "center" }}>
+                  <button className={`btn btn-sm ${rcForm.paidBy === "crew" ? "btn-a" : "btn-s"}`} onClick={() => setRcForm(p => ({ ...p, paidBy: "crew" }))}>
+                    {t.iPaid}
+                  </button>
+                  <button className={`btn btn-sm ${rcForm.paidBy === "company" ? "btn-p" : "btn-s"}`} onClick={() => setRcForm(p => ({ ...p, paidBy: "company" }))}>
+                    {t.companyPaid}
+                  </button>
+                  <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 8 }}>
+                    {rcForm.dataUrl && <img src={rcForm.dataUrl} alt="receipt" style={{ width: 38, height: 38, objectFit: "cover", borderRadius: 6, border: "2px solid var(--green)" }} />}
+                    <button className="btn btn-s btn-sm"
+                      onClick={() => { rcPhotoRef.current?.setAttribute("capture","environment"); rcPhotoRef.current?.click(); }}>
+                      <Icon n="camera" s={13} /> {rcForm.dataUrl ? t.retake : t.photo}
+                    </button>
+                  </div>
+                </div>
+                {rcForm.paidBy === "crew" && (
+                  <p style={{ fontSize: 11, color: "var(--orange)", marginBottom: 10 }}>
+                    ⚠ {t.flaggedReimb}
+                  </p>
+                )}
+                <div style={{ display: "flex", gap: 8 }}>
+                  <button className="btn btn-p" style={{ flex: 1 }}
+                    disabled={!rcForm.store || !rcForm.amount || rcBusy}
+                    onClick={() => submitJobReceipt(jid)}>
+                    {rcBusy ? <span className="spin" /> : <><Icon n="check" s={15} /> {t.submitReceipt}</>}
+                  </button>
+                  <button onClick={() => setActivePanel(null)}
+                    style={{ background: "none", border: "none", color: "var(--slate)", cursor: "pointer", fontSize: 18, padding: "0 8px" }}>✕</button>
+                </div>
+              </div>
+            )}
+
+            {/* ── Issue / question panel ── */}
+            {panel === "issue" && (
+              <div style={{ padding: "14px 16px", background: "rgba(8,15,22,.85)", borderBottom: "1px solid rgba(239,68,68,.2)" }}>
+                <div style={{ fontFamily: "'Barlow Condensed'", fontSize: 14, fontWeight: 700, color: "var(--red)", marginBottom: 10 }}>
+                  ⚠ {lang === "es" ? "Reportar problema / pregunta" : "Report Issue / Question"} — {lang === "es" ? "se alerta al admin" : "alerts admin immediately"}
+                </div>
+                <div style={{ marginBottom: 10 }}>
+                  <textarea className="fi" rows={3} value={issueText} onChange={e => setIssueText(e.target.value)}
+                    placeholder={lang === "es" ? "Describe el problema o pregunta..." : "Describe the issue or question..."} />
+                </div>
+                <div style={{ display: "flex", gap: 8, marginBottom: 12, alignItems: "center" }}>
+                  {issueDataUrl
+                    ? <img src={issueDataUrl} alt="issue" style={{ width: 48, height: 48, objectFit: "cover", borderRadius: 6, border: "2px solid var(--red)" }} />
+                    : null}
+                  <button className="btn btn-s btn-sm" onClick={() => issuePhotoRef.current?.click()}>
+                    <Icon n="camera" s={13} /> {issueDataUrl ? (lang === "es" ? "Cambiar foto" : "Retake") : (lang === "es" ? "Adjuntar foto" : "Attach Photo")}
+                  </button>
+                </div>
+                <div style={{ display: "flex", gap: 8 }}>
+                  <button className="btn btn-full" style={{ flex: 1, background: "linear-gradient(135deg,#dc2626,var(--red))", color: "#fff", justifyContent: "center" }}
+                    disabled={(!issueText.trim() && !issueDataUrl) || issueBusy}
+                    onClick={() => submitIssue(jid)}>
+                    {issueBusy ? <span className="spin" /> : <><Icon n="check" s={15} /> {lang === "es" ? "Enviar al Admin" : "Send to Admin"}</>}
+                  </button>
+                  <button onClick={() => setActivePanel(null)}
+                    style={{ background: "none", border: "none", color: "var(--slate)", cursor: "pointer", fontSize: 18, padding: "0 8px" }}>✕</button>
+                </div>
+              </div>
+            )}
+
+            {/* ── GPS distance banner ── */}
+            {ci && checkedJob.dist != null && (
+              <div style={{ padding: "6px 18px", fontSize: 12, color: checkedJob.dist < 0.5 ? "var(--green)" : "var(--orange)", background: "rgba(0,0,0,.2)" }}>
+                📍 {checkedJob.dist < 0.5 ? t.onSite : `${checkedJob.dist.toFixed(1)} mi ${t.fromSite}`}
+              </div>
+            )}
+
+            {/* ── Task rows ── */}
             <div className="jobbody">{jt.map(task => { const s = st(task);
               return <div key={task.id} className="trow">
                 <div className="tchk"><input type="checkbox" checked={task.status === "done"} onChange={() => toggle(task.id)} /></div>
@@ -1598,89 +2217,88 @@ function CrewTasks(props) {
                   <div className="ten" style={{ textDecoration: task.status === "done" ? "line-through" : "none", opacity: task.status === "done" ? .6 : 1 }}>{task.title}</div>
                   <div className="tes">{task.titleEs}</div>
                   <div className="tmeta"><span className={`tag tag-${s}`}>{t[s]}</span>
-                    {task.dueDate && <span className="tag" style={{ background: "rgba(255,255,255,.06)", color: "var(--silver)" }}>{task.dueDate}</span>}</div></div>
+                    {task.dueDate && <span className="tag" style={{ background: "rgba(255,255,255,.06)", color: "var(--silver)" }}>{task.dueDate}</span>}</div>
+                </div>
                 <div className="tact">
                   <button className="btn btn-s btn-sm btn-ic" title="Materials" onClick={() => setMatModal(task.id)}><Icon n="tools" s={14} /></button>
-                  {task.status === "done" && <button className="btn btn-s btn-sm btn-ic" title="Sign-off" onClick={() => setSignModal(task)}><Icon n="pen" s={14} /></button>}</div>
-              </div>; })}</div></div>; })}
+                </div>
+              </div>; })}
+            </div>
+
+          </div>;
+        })}
+
       {matModal && <div className="modal-bg" onClick={e => e.target === e.currentTarget && setMatModal(null)}>
-        <div className="modal"><div className="mt">{lang === "es" ? "Solicitar Materiales" : "Request Materials"}</div>
-          <div className="fg"><label className="fl">{lang === "es" ? "¿Qué necesitas?" : "What do you need?"}</label>
+        <div className="modal"><div className="mt">{t.materials}</div>
+          <div className="fg"><label className="fl">{t.whatNeed}</label>
             <textarea className="fi" value={mat} onChange={e => setMat(e.target.value)} placeholder={lang === "es" ? "ej. madera 2x4..." : "e.g. 2x4 lumber..."} /></div>
-          <div className="macts"><button className="btn btn-s" onClick={() => setMatModal(null)}>Cancel</button>
-            <button className="btn btn-a" onClick={() => submitMat(matModal)}><Icon n="tools" s={14} /> {lang === "es" ? "Enviar" : "Submit"}</button></div></div></div>}
-      {signModal && <SignModal task={signModal} lang={lang} onClose={() => setSignModal(null)} />}
+          <div className="macts"><button className="btn btn-s" onClick={() => setMatModal(null)}>{t.cancel}</button>
+            <button className="btn btn-a" onClick={() => submitMat(matModal)}><Icon n="tools" s={14} /> {t.submit}</button></div></div></div>}
     </div>
   );
 }
 
-function SignModal({ task, lang, onClose }) {
-  const cv = useRef(); const [drawing, setDrawing] = useState(false); const [name, setName] = useState(""); const [busy, setBusy] = useState(false);
-  const pos = e => { const r = cv.current.getBoundingClientRect(); const t = e.touches?.[0] || e; return { x: t.clientX - r.left, y: t.clientY - r.top }; };
-  const start = e => { setDrawing(true); const c = cv.current.getContext("2d"); const p = pos(e); c.beginPath(); c.moveTo(p.x, p.y); };
-  const move = e => { if (!drawing) return; e.preventDefault(); const c = cv.current.getContext("2d"); const p = pos(e); c.lineWidth = 2.5; c.lineCap = "round"; c.strokeStyle = "#0f1923"; c.lineTo(p.x, p.y); c.stroke(); };
-  const clear = () => cv.current.getContext("2d").clearRect(0, 0, cv.current.width, cv.current.height);
-  const save = async () => {
-    if (!name) return;
-    setBusy(true);
-    const sigData = cv.current.toDataURL("image/png");
-    const id = "sig" + Date.now();
-    const row = { id, task_id: task.id, job_id: task.jobId, signed_name: name, signature_data: sigData };
-    try { await sbPost("field_signoffs", row); } catch { enqueue({ table: "field_signoffs", payload: row }); }
-    setBusy(false); onClose();
-  };
-  return (
-    <div className="modal-bg" onClick={e => e.target === e.currentTarget && onClose()}>
-      <div className="modal"><div className="mt">{lang === "es" ? "Firma de Aprobación" : "Client Sign-Off"}</div>
-        <p className="muted" style={{ marginBottom: 14 }}>{task.title}</p>
-        <div className="fg"><label className="fl">{lang === "es" ? "Nombre" : "Name"}</label>
-          <input className="fi" value={name} onChange={e => setName(e.target.value)} placeholder={lang === "es" ? "Nombre del cliente" : "Client name"} /></div>
-        <label className="fl">{lang === "es" ? "Firma aquí" : "Sign here"}</label>
-        <canvas ref={cv} className="sig-pad" width={440} height={160}
-          onMouseDown={start} onMouseMove={move} onMouseUp={() => setDrawing(false)} onMouseLeave={() => setDrawing(false)}
-          onTouchStart={start} onTouchMove={move} onTouchEnd={() => setDrawing(false)} />
-        <div className="macts"><button className="btn btn-s" onClick={clear}>{lang === "es" ? "Borrar" : "Clear"}</button>
-          <button className="btn btn-g" onClick={save} disabled={busy}>{busy ? <span className="spin" /> : <><Icon n="check" s={14} /> {lang === "es" ? "Guardar" : "Save"}</>}</button></div></div>
-    </div>
-  );
-}
 
 function CrewPhotos(props) {
   const { user, tasks, jobs, photos, setPhotos, t } = props;
-  const my = tasks.filter(t => Array.isArray(t.assignedTo) ? t.assignedTo.includes(user.id) : t.assignedTo === user.id);
+  const my = tasks.filter(tk => Array.isArray(tk.assignedTo) ? tk.assignedTo.includes(user.id) : tk.assignedTo === user.id);
   const [task, setTask] = useState(""); const [type, setType] = useState("before"); const [busy, setBusy] = useState(false);
   const fileRef = useRef();
+  const TYPES = [
+    { k: "before",  l: t.before,  c: "var(--orange)" },
+    { k: "after",   l: t.after,   c: "var(--green)"  },
+    { k: "concern", l: t.concern, c: "var(--red)"    },
+  ];
+  const typeLabel = k => TYPES.find(x => x.k === k)?.l || k;
+  const typeColor = k => ({ before:"var(--orange)", after:"var(--green)", concern:"var(--red)", progress:"var(--sky2)" })[k] || "var(--sky2)";
   const upload = async e => {
     const file = e.target.files[0]; if (!file || !task) return;
     setBusy(true);
     const { dataUrl, sizeKB } = await compressImage(file);
-    const tk = tasks.find(t => t.id === task);
+    const tk = tasks.find(x => x.id === task);
     const id = "p" + Date.now();
+    const dbType = type === "concern" ? "progress" : type;
     const photo = { id, dataUrl, type, taskId: task, jobId: tk?.jobId, crewId: user.id, sizeKB, date: new Date().toISOString() };
     setPhotos(p => [...p, photo]);
-    const row = { id, data_url: dataUrl, photo_type: type, task_id: task, job_id: tk?.jobId, crew_id: user.id, size_kb: sizeKB };
+    const row = { id, data_url: dataUrl, photo_type: dbType, task_id: task, job_id: tk?.jobId, crew_id: user.id, size_kb: sizeKB };
     try { await sbPost("field_photos", row); } catch { enqueue({ table: "field_photos", payload: row }); }
-    setBusy(false);
+    e.target.value = ""; setBusy(false);
   };
   return (
     <div><h2 className="h2" style={{ marginBottom: 18 }}>{t.photos}</h2>
       <div className="card">
-        <div className="fg"><label className="fl">Task</label>
-          <select className="fi" value={task} onChange={e => setTask(e.target.value)}><option value="">Choose...</option>
-            {my.map(tk => { const j = jobs.find(j => j.id === tk.jobId); return <option key={tk.id} value={tk.id}>{j?.name} — {tk.title}</option>; })}</select></div>
-        <div className="fg"><label className="fl">Type</label>
-          <div style={{ display: "flex", gap: 8 }}>{["before", "after", "progress"].map(x => <button key={x} className={`btn btn-sm ${type === x ? "btn-p" : "btn-s"}`} onClick={() => setType(x)}>{x}</button>)}</div></div>
+        <div className="fg"><label className="fl">{t.task}</label>
+          <select className="fi" value={task} onChange={e => setTask(e.target.value)}>
+            <option value="">{t.choose}</option>
+            {my.map(tk => { const j = jobs.find(j => j.id === tk.jobId); return <option key={tk.id} value={tk.id}>{j?.name} — {tk.title}</option>; })}
+          </select></div>
+        <div className="fg"><label className="fl">{t.photoType}</label>
+          <div style={{ display: "flex", gap: 8 }}>
+            {TYPES.map(x => (
+              <button key={x.k} className={`btn btn-sm ${type === x.k ? "btn-p" : "btn-s"}`}
+                onClick={() => setType(x.k)} style={{ color: type === x.k ? "#fff" : x.c }}>{x.l}</button>
+            ))}
+          </div></div>
         <input ref={fileRef} type="file" accept="image/*" capture="environment" style={{ display: "none" }} onChange={upload} />
         <div style={{ display: "flex", gap: 8 }}>
-          <button className="btn btn-p" disabled={!task || busy} onClick={() => fileRef.current?.click()}>{busy ? <span className="spin" /> : <><Icon n="camera" s={16} /> Take Photo</>}</button>
-          <button className="btn btn-s" disabled={!task || busy} onClick={() => { fileRef.current?.removeAttribute("capture"); fileRef.current?.click(); }}><Icon n="photo" s={16} /> Library</button></div>
-        <p className="muted" style={{ fontSize: 11, marginTop: 8 }}>Photos auto-compressed before upload to save data & storage.</p>
+          <button className="btn btn-p" disabled={!task || busy}
+            onClick={() => { fileRef.current?.setAttribute("capture","environment"); fileRef.current?.click(); }}>
+            {busy ? <span className="spin" /> : <><Icon n="camera" s={16} /> {t.takePhoto}</>}
+          </button>
+          <button className="btn btn-s" disabled={!task || busy}
+            onClick={() => { fileRef.current?.removeAttribute("capture"); fileRef.current?.click(); }}>
+            <Icon n="photo" s={16} /> {t.library}
+          </button>
+        </div>
+        <p className="muted" style={{ fontSize: 11, marginTop: 8 }}>{t.photoNote}</p>
       </div>
       {[...new Set(photos.filter(p => p.crewId === user.id).map(p => p.taskId))].map(tid => {
-        const tk = tasks.find(t => t.id === tid), j = jobs.find(j => j.id === tk?.jobId), tp = photos.filter(p => p.taskId === tid);
+        const tk = tasks.find(x => x.id === tid), j = jobs.find(j => j.id === tk?.jobId), tp = photos.filter(p => p.taskId === tid);
         return <div key={tid} className="card"><div className="ct" style={{ fontSize: 15 }}>{j?.name} — {tk?.title}</div>
-          <div className="pgrid">{tp.map((p, i) => <div key={i} className="pthumb"><img src={p.dataUrl} alt={p.type} />
-            <div className="plabel" style={{ color: p.type === "before" ? "var(--orange)" : p.type === "after" ? "var(--green)" : "var(--sky2)" }}>{p.type} · {p.sizeKB}kb</div></div>)}</div></div>;
+          <div className="pgrid">{tp.map((p, i) => <div key={i} className="pthumb">
+            {p.dataUrl ? <img src={p.dataUrl} alt={p.type} /> : <Icon n="camera" s={28} c="var(--slate)" />}
+            <div className="plabel" style={{ color: typeColor(p.type) }}>{typeLabel(p.type)} · {p.sizeKB}kb</div>
+          </div>)}</div></div>;
       })}
     </div>
   );
@@ -1689,11 +2307,17 @@ function CrewPhotos(props) {
 function CrewReceipts(props) {
   const { user, tasks, jobs, receipts, setReceipts, t, lang } = props;
   const my = tasks.filter(t => Array.isArray(t.assignedTo) ? t.assignedTo.includes(user.id) : t.assignedTo === user.id);
-  const [task, setTask] = useState(""); const [store, setStore] = useState(""); const [amount, setAmount] = useState(""); const [note, setNote] = useState(""); const [paidBy, setPaidBy] = useState("crew"); const [busy, setBusy] = useState(false);
+  const [task, setTask] = useState(""); const [store, setStore] = useState(""); const [amount, setAmount] = useState(""); const [note, setNote] = useState(""); const [paidBy, setPaidBy] = useState("crew"); const [dataUrl, setDataUrl] = useState(null); const [busy, setBusy] = useState(false); const [done, setDone] = useState(false);
   const fileRef = useRef();
-  const upload = async e => {
-    const file = e.target.files[0]; if (!file || !task) return; setBusy(true);
-    const { dataUrl } = await compressImage(file, 1000, 0.6);
+  const capturePhoto = async e => {
+    const file = e.target.files[0]; if (!file) return;
+    const { dataUrl: url } = await compressImage(file, 1000, 0.6);
+    setDataUrl(url);
+    e.target.value = "";
+  };
+  const submit = async () => {
+    if (!task || !store || !amount) return;
+    setBusy(true);
     const tk = tasks.find(t => t.id === task);
     const id = "r" + Date.now();
     const today = new Date().toISOString().split("T")[0];
@@ -1701,30 +2325,50 @@ function CrewReceipts(props) {
     setReceipts(p => [...p, receipt]);
     const row = { id, data_url: dataUrl, task_id: task, job_id: tk?.jobId, crew_id: user.id, store, amount: parseFloat(amount) || 0, note, paid_by: paidBy, reimbursement_status: paidBy === "crew" ? "pending" : "na" };
     try { await sbPost("field_receipts", row); } catch { enqueue({ table: "field_receipts", payload: row }); }
-    setStore(""); setAmount(""); setNote(""); setPaidBy("crew"); setBusy(false);
+    setTask(""); setStore(""); setAmount(""); setNote(""); setPaidBy("crew"); setDataUrl(null); setBusy(false);
+    setDone(true); setTimeout(() => setDone(false), 3000);
   };
   return (
     <div><h2 className="h2" style={{ marginBottom: 18 }}>{t.receipts}</h2>
+      {done && <div style={{ padding: "10px 14px", background: "rgba(16,185,129,.15)", border: "1px solid rgba(16,185,129,.3)", borderRadius: 10, marginBottom: 16, color: "var(--green)", fontWeight: 600 }}>✓ {t.receiptSubmitted}</div>}
       <div className="card">
-        <p className="muted" style={{ marginBottom: 14, fontSize: 13 }}>{lang === "es" ? "Toma foto de tu recibo." : "Snap your receipt and log it."}</p>
-        <div className="fg"><label className="fl">{lang === "es" ? "Tarea" : "Task"}</label>
-          <select className="fi" value={task} onChange={e => setTask(e.target.value)}><option value="">Choose...</option>
+        <p className="muted" style={{ marginBottom: 14, fontSize: 13 }}>{t.snapReceipt}</p>
+        <div className="fg"><label className="fl">{t.task}</label>
+          <select className="fi" value={task} onChange={e => setTask(e.target.value)}><option value="">{t.choose}</option>
             {my.map(tk => { const j = jobs.find(j => j.id === tk.jobId); return <option key={tk.id} value={tk.id}>{j?.name} — {tk.title}</option>; })}</select></div>
-        <div className="grid2"><div className="fg"><label className="fl">{lang === "es" ? "Tienda" : "Store"}</label>
+        <div className="grid2"><div className="fg"><label className="fl">{t.store}</label>
           <input className="fi" value={store} onChange={e => setStore(e.target.value)} placeholder="Home Depot" /></div>
-          <div className="fg"><label className="fl">{lang === "es" ? "Monto" : "Amount"} ($)</label>
+          <div className="fg"><label className="fl">{t.amount} ($)</label>
             <input className="fi" type="number" value={amount} onChange={e => setAmount(e.target.value)} placeholder="0.00" /></div></div>
-        <div className="fg"><label className="fl">{lang === "es" ? "Notas" : "Notes"}</label>
-          <input className="fi" value={note} onChange={e => setNote(e.target.value)} placeholder={lang === "es" ? "Qué compraste" : "What was bought"} /></div>
-        <div className="fg"><label className="fl">{lang === "es" ? "¿Quién pagó?" : "Who paid?"}</label>
+        <div className="fg"><label className="fl">{t.notes}</label>
+          <input className="fi" value={note} onChange={e => setNote(e.target.value)} placeholder={t.whatBought} /></div>
+        <div className="fg"><label className="fl">{t.whoPaid}</label>
           <div style={{ display: "flex", gap: 8 }}>
-            <button className={`btn btn-sm ${paidBy === "crew" ? "btn-a" : "btn-s"}`} onClick={() => setPaidBy("crew")}>{lang === "es" ? "Yo pagué (necesito reembolso)" : "I paid (need reimbursement)"}</button>
-            <button className={`btn btn-sm ${paidBy === "company" ? "btn-p" : "btn-s"}`} onClick={() => setPaidBy("company")}>{lang === "es" ? "Empresa pagó" : "Company paid"}</button>
+            <button className={`btn btn-sm ${paidBy === "crew" ? "btn-a" : "btn-s"}`} onClick={() => setPaidBy("crew")}>{t.iPaid}</button>
+            <button className={`btn btn-sm ${paidBy === "company" ? "btn-p" : "btn-s"}`} onClick={() => setPaidBy("company")}>{t.companyPaid}</button>
           </div>
-          {paidBy === "crew" && <p style={{ fontSize: 11, color: "var(--orange)", marginTop: 6 }}>{lang === "es" ? "Se registrará para reembolso" : "Will be flagged for reimbursement"}</p>}
+          {paidBy === "crew" && <p style={{ fontSize: 11, color: "var(--orange)", marginTop: 6 }}>{t.flaggedReimb}</p>}
         </div>
-        <input ref={fileRef} type="file" accept="image/*" capture="environment" style={{ display: "none" }} onChange={upload} />
-        <button className="btn btn-a" disabled={!task || busy} onClick={() => fileRef.current?.click()}>{busy ? <span className="spin" /> : <><Icon n="camera" s={16} /> {lang === "es" ? "Foto Recibo" : "Photo Receipt"}</>}</button>
+        <div className="fg"><label className="fl">{t.receiptPhoto}</label>
+          <input ref={fileRef} type="file" accept="image/*" capture="environment" style={{ display: "none" }} onChange={capturePhoto} />
+          {dataUrl
+            ? <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+                <img src={dataUrl} alt="receipt" style={{ width: 64, height: 64, objectFit: "cover", borderRadius: 8, border: "2px solid var(--green)" }} />
+                <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                  <span style={{ fontSize: 12, color: "var(--green)" }}>✓ {t.photoReady}</span>
+                  <button className="btn btn-s btn-sm" onClick={() => { setDataUrl(null); fileRef.current?.click(); }}><Icon n="camera" s={13} /> {t.retake}</button>
+                </div>
+              </div>
+            : <div style={{ display: "flex", gap: 8 }}>
+                <button className="btn btn-s btn-sm" onClick={() => { fileRef.current?.setAttribute("capture","environment"); fileRef.current?.click(); }}><Icon n="camera" s={14} /> {t.takePhoto}</button>
+                <button className="btn btn-s btn-sm" onClick={() => { fileRef.current?.removeAttribute("capture"); fileRef.current?.click(); }}><Icon n="photo" s={14} /> {t.library}</button>
+              </div>
+          }
+        </div>
+        <button className="btn btn-p btn-full" disabled={!task || !store || !amount || busy} onClick={submit}>
+          {busy ? <span className="spin" /> : <><Icon n="check" s={16} /> {t.submitReceipt}</>}
+        </button>
+        {(!task || !store || !amount) && <p style={{ fontSize: 11, color: "var(--slate)", marginTop: 8, textAlign: "center" }}>{t.requireFields}</p>}
       </div>
       {receipts.filter(r => r.crewId === user.id).map(r => { const j = jobs.find(x => x.id === r.jobId);
         return <div key={r.id} className="card" style={{ display: "flex", gap: 14, alignItems: "center" }}>
@@ -1732,7 +2376,7 @@ function CrewReceipts(props) {
           <div style={{ flex: 1 }}>
             <div style={{ fontWeight: 600 }}>{r.store}</div>
             <div className="muted">{j?.name} · {r.note}</div>
-            {r.paidBy === "crew" && <span className={`tag ${r.reimbursementStatus === "paid" ? "tag-done" : "tag-overdue"}`} style={{ marginTop: 4, display: "inline-block" }}>{r.reimbursementStatus === "paid" ? (lang === "es" ? "Reembolsado" : "Reimbursed") : (lang === "es" ? "Pendiente reembolso" : "Awaiting reimbursement")}</span>}
+            {r.paidBy === "crew" && <span className={`tag ${r.reimbursementStatus === "paid" ? "tag-done" : "tag-overdue"}`} style={{ marginTop: 4, display: "inline-block" }}>{r.reimbursementStatus === "paid" ? t.reimbursed : t.awaitingReimb}</span>}
           </div>
           <div style={{ fontSize: 18, fontWeight: 800, color: "var(--accent)" }}>${(+r.amount).toFixed(2)}</div></div>; })}
     </div>
@@ -1759,19 +2403,19 @@ function CrewLog(props) {
     setEn(""); setEs(""); setWeather(""); setBusy(false); setDone(true); setTimeout(() => setDone(false), 3000);
   };
   return (
-    <div><h2 className="h2">{lang === "es" ? "Registro del Día" : "Log Your Day"}</h2>
-      <p className="muted" style={{ marginBottom: 16 }}>{lang === "es" ? "Cuéntanos qué hiciste hoy." : "Tell us what you did today."}</p>
+    <div><h2 className="h2">{t.logYourDay}</h2>
+      <p className="muted" style={{ marginBottom: 16 }}>{t.tellUs}</p>
       {!loggedToday && <div style={{ padding: "10px 14px", background: "rgba(249,115,22,.12)", border: "1px solid rgba(249,115,22,.3)", borderRadius: 10, marginBottom: 16, color: "var(--orange)", fontSize: 13, display: "flex", alignItems: "center", gap: 8 }}>
-        <Icon n="report" s={16} /> {lang === "es" ? "Aún no has registrado hoy" : "You haven't logged today yet"}</div>}
-      {done && <div style={{ padding: "10px 14px", background: "rgba(16,185,129,.15)", border: "1px solid rgba(16,185,129,.3)", borderRadius: 10, marginBottom: 16, color: "var(--green)", fontWeight: 600 }}>✓ {lang === "es" ? "¡Registro enviado!" : "Log submitted!"}</div>}
+        <Icon n="report" s={16} /> {t.notLogged}</div>}
+      {done && <div style={{ padding: "10px 14px", background: "rgba(16,185,129,.15)", border: "1px solid rgba(16,185,129,.3)", borderRadius: 10, marginBottom: 16, color: "var(--green)", fontWeight: 600 }}>✓ {t.logSubmitted}</div>}
       <div className="card">
-        <div className="fg"><label className="fl">{lang === "es" ? "Tarea" : "Task"}</label>
-          <select className="fi" value={task} onChange={e => setTask(e.target.value)}><option value="">{lang === "es" ? "General" : "General log"}</option>
+        <div className="fg"><label className="fl">{t.task}</label>
+          <select className="fi" value={task} onChange={e => setTask(e.target.value)}><option value="">{t.generalLog}</option>
             {my.map(tk => { const j = jobs.find(j => j.id === tk.jobId); return <option key={tk.id} value={tk.id}>{j?.name} — {tk.title}</option>; })}</select></div>
-        <div className="fg"><label className="fl">{lang === "es" ? "¿Qué hiciste? (Inglés)" : "What did you do? (English)"}</label>
-          <textarea className="fi" value={en} onChange={e => setEn(e.target.value)} placeholder="Describe your work..." /></div>
-        <div className="fg"><label className="fl">{lang === "es" ? "¿Qué hiciste? (Español)" : "What did you do? (Spanish)"}</label>
-          <textarea className="fi" value={es} onChange={e => setEs(e.target.value)} placeholder="Describe tu trabajo..." /></div>
+        <div className="fg"><label className="fl">{t.whatEn}</label>
+          <textarea className="fi" value={en} onChange={e => setEn(e.target.value)} placeholder={t.descWork} /></div>
+        <div className="fg"><label className="fl">{t.whatEs}</label>
+          <textarea className="fi" value={es} onChange={e => setEs(e.target.value)} placeholder={t.descWorkEs} /></div>
         <div className="fg"><label className="fl">{t.weather}</label>
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>{[["sunny", "☀️"], ["cloudy", "☁️"], ["rainy", "🌧️"], ["hot", "🔥"]].map(([k, ic]) =>
             <button key={k} className={`btn btn-sm ${weather === k ? "btn-p" : "btn-s"}`} onClick={() => setWeather(weather === k ? "" : k)}>{ic} {t[k]}</button>)}</div></div>
