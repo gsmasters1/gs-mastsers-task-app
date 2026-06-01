@@ -32,12 +32,13 @@ const sbDelete = (t, id)       => sbFetch(`${t}?id=eq.${id}`, { method: "DELETE"
 // ─── SNAKE ↔ CAMEL TRANSFORMS ──────────────────────────────────────────
 const fromProfile = r => ({ id: r.id, name: r.name, role: r.role, email: r.email, phone: r.phone || "", pin: r.pin, active: r.active !== false, archived: r.archived === true });
 const fromJob     = r => ({ id: r.id, name: r.name, address: r.address || "", lat: r.lat, lng: r.lng, budget: r.budget, status: r.status, closedAt: r.closed_at, gsmJobId: r.gsm_job_id, gsmSync: r.gsm_sync || false });
-const fromTask    = r => ({ id: r.id, jobId: r.job_id, title: r.title, titleEs: r.title_es || "", assignedTo: Array.isArray(r.assigned_to) ? r.assigned_to : (r.assigned_to ? [r.assigned_to] : []), status: r.status, dueDate: r.due_date || "", createdAt: (r.created_at || "").slice(0, 10) });
+const fromTask    = r => ({ id: r.id, jobId: r.job_id, title: r.title, titleEs: r.title_es || "", assignedTo: Array.isArray(r.assigned_to) ? r.assigned_to : (r.assigned_to ? [r.assigned_to] : []), status: r.status, dueDate: r.due_date || "", createdAt: (r.created_at || "").slice(0, 10), priority: r.priority || "normal", recurring: r.recurring || false });
 const fromLog     = r => ({ id: r.id, taskId: r.task_id, jobId: r.job_id, crewId: r.crew_id, en: r.text_en, es: r.text_es, weather: r.weather, date: r.log_date });
-const fromPhoto   = r => ({ id: r.id, taskId: r.task_id, jobId: r.job_id, crewId: r.crew_id, dataUrl: r.data_url, type: r.photo_type, sizeKB: r.size_kb, date: r.created_at });
+const fromPhoto   = r => ({ id: r.id, taskId: r.task_id, jobId: r.job_id, crewId: r.crew_id, dataUrl: r.data_url, type: r.photo_type, sizeKB: r.size_kb, note: r.note || "", date: r.created_at });
 const fromReceipt = r => ({ id: r.id, taskId: r.task_id, jobId: r.job_id, crewId: r.crew_id, dataUrl: r.data_url, store: r.store, amount: r.amount, note: r.note, paidBy: r.paid_by || "crew", reimbursementStatus: r.reimbursement_status || "pending", billStatus: r.bill_status, createdAt: (r.created_at || "").slice(0, 10) });
 const fromMat     = r => ({ id: r.id, taskId: r.task_id, jobId: r.job_id, crewId: r.crew_id, en: r.text_en, es: r.text_es, fulfilled: r.fulfilled });
-const fromCheckin = r => ({ id: r.id, crewId: r.crew_id, jobId: r.job_id, checkIn: r.check_in, checkOut: r.check_out, hours: r.hours, date: r.work_date, latIn: r.lat_in, lngIn: r.lng_in });
+const fromCheckin  = r => ({ id: r.id, crewId: r.crew_id, jobId: r.job_id, checkIn: r.check_in, checkOut: r.check_out, hours: r.hours, date: r.work_date, latIn: r.lat_in, lngIn: r.lng_in });
+const fromDispatch = r => ({ id: r.id, crewId: r.crew_id, date: r.date, jobIds: r.job_ids || [], customStops: r.custom_stops || [], createdBy: r.created_by });
 
 // ─── OFFLINE QUEUE ──────────────────────────────────────────────────────
 const QUEUE_KEY = "gsm_offline_queue";
@@ -190,6 +191,17 @@ const T = {
     // net / greeting
     online:"Online", offline:"Offline",
     yourTasks:"Your tasks today",
+    // crew actions
+    checkOut:"Check Out", materials:"Materials", whatNeed:"What do you need?",
+    flagIssue:"Flag Issue", navigate:"Navigate",
+    photoFor:"Photo for:", receiptFor:"Receipt for:",
+    sendToAdmin:"Send to Admin", reportIssue:"Report Issue / Question",
+    alertsAdmin:"alerts admin immediately",
+    describeIssue:"Describe the issue or question...",
+    attachPhoto:"Attach Photo", noAddressFile:"No address on file — ask Gregory",
+    whereToGoToday:"WHERE TO GO TODAY",
+    googleMaps:"Google Maps", appleMaps:"Apple Maps",
+    checkedOut:"Checked out", onSiteNow:"On site now",
   },
   es: {
     // nav
@@ -228,6 +240,17 @@ const T = {
     // net / greeting
     online:"En línea", offline:"Sin conexión",
     yourTasks:"Tus tareas de hoy",
+    // crew actions
+    checkOut:"Salir del trabajo", materials:"Materiales", whatNeed:"¿Qué necesitas?",
+    flagIssue:"Reportar Problema", navigate:"Navegar",
+    photoFor:"Foto para:", receiptFor:"Recibo para:",
+    sendToAdmin:"Enviar al Admin", reportIssue:"Reportar problema / pregunta",
+    alertsAdmin:"se alerta al admin de inmediato",
+    describeIssue:"Describe el problema o pregunta...",
+    attachPhoto:"Adjuntar foto", noAddressFile:"Sin dirección — pregunta a Gregory",
+    whereToGoToday:"ADÓNDE IR HOY",
+    googleMaps:"Google Maps", appleMaps:"Apple Maps",
+    checkedOut:"Salida registrada", onSiteNow:"En el sitio ahora",
   },
 };
 
@@ -310,6 +333,8 @@ select.fi{appearance:none;cursor:pointer}textarea.fi{resize:vertical;min-height:
 .btn-g{background:linear-gradient(135deg,#059669,var(--green));color:#fff}
 .btn-sm{padding:8px 13px;font-size:12px}.btn-full{width:100%;justify-content:center;padding:15px;font-size:16px}
 .btn-ic{padding:10px;border-radius:10px}
+.btn-ghost{background:none;border:none;color:var(--silver)}
+.btn-ghost:hover{background:rgba(255,255,255,.08);color:var(--white)}
 
 .topbar{display:flex;align-items:center;justify-content:space-between;padding:0 20px;height:62px;
   background:rgba(11,20,29,.96);border-bottom:1px solid var(--border);backdrop-filter:blur(20px);position:sticky;top:0;z-index:100}
@@ -363,6 +388,10 @@ select.fi{appearance:none;cursor:pointer}textarea.fi{resize:vertical;min-height:
 .tag-done{background:rgba(16,185,129,.15);color:var(--green)}
 .tag-pending{background:rgba(59,130,246,.15);color:var(--sky2)}
 .tag-overdue{background:rgba(239,68,68,.15);color:var(--red)}
+.tag-urgent{background:rgba(239,68,68,.2);color:var(--red);border:1px solid rgba(239,68,68,.35);font-weight:800}
+.tag-recurring{background:rgba(245,158,11,.18);color:var(--accent);border:1px solid rgba(245,158,11,.35)}
+.trow-urgent{border-left:3px solid var(--red)!important}
+.trow-recurring{border-left:3px solid var(--accent)!important;background:rgba(245,158,11,.04)!important}
 .tag-l{font-size:11px;padding:3px 8px;border-radius:20px;font-weight:600;background:rgba(59,130,246,.15);color:var(--sky2)}
 .tact{display:flex;gap:6px;flex-shrink:0}
 
@@ -466,7 +495,13 @@ td{padding:9px 11px;font-size:13px;border-bottom:1px solid rgba(255,255,255,.04)
   .content{max-width:1280px;margin:0 auto;width:100%}
 }
 
-@media print{.topbar,.side,.cnav,.toolbar .btn,.modal-bg,.hamburger,.side-scrim{display:none!important}.content{padding:0}body{background:#fff;color:#000}}
+@media print{
+  .topbar,.side,.cnav,.toolbar .btn,.modal-bg,.hamburger,.side-scrim{display:none!important}
+  .content{padding:0}body{background:#fff;color:#000}
+  .cal-grid,.card .ct,.cal-h{display:none!important}
+  .print-task-list{display:block!important}
+  .card{box-shadow:none;border:1px solid #ddd;page-break-inside:avoid}
+}
 
 /* ── DROPDOWN OPTIONS FIX (dark mode: white bg / white text) ── */
 select.fi option{background:var(--steel2);color:var(--white)}
@@ -489,6 +524,7 @@ select.fi option{background:var(--steel2);color:var(--white)}
 .app.light .nav:hover{background:rgba(59,130,246,.08);color:#0f172a}
 .app.light .nav.on{background:rgba(59,130,246,.12);color:var(--sky-dim);border-color:rgba(59,130,246,.25)}
 .app.light .nav-sec{color:#94a3b8}
+.app.light .btn-ghost{color:#475569}.app.light .btn-ghost:hover{background:rgba(0,0,0,.06);color:#0f172a}
 .app.light .content{background:#f1f5f9;color:#0f172a}
 .app.light .h2{color:#0f172a}
 .app.light .card{background:rgba(255,255,255,.95);box-shadow:0 2px 12px rgba(0,0,0,.06);color:#0f172a}
@@ -532,12 +568,136 @@ select.fi option{background:var(--steel2);color:var(--white)}
 `;
 
 
+// ─── PWA INSTALL PROMPT ─────────────────────────────────────────────────
+const isIOS = () => /iphone|ipad|ipod/i.test(navigator.userAgent);
+const isInStandalone = () => window.matchMedia("(display-mode: standalone)").matches || window.navigator.standalone === true;
+
+function InstallPrompt({ lang }) {
+  const [deferredPrompt, setDeferredPrompt] = useState(null);
+  const [show, setShow] = useState(false);
+  const [step, setStep] = useState(0); // for iOS walkthrough
+
+  useEffect(() => {
+    if (isInStandalone()) return; // already installed
+    if (localStorage.getItem("gsm_install_dismissed")) return;
+
+    if (isIOS()) {
+      // Show iOS instructions after a short delay
+      const t = setTimeout(() => setShow(true), 3000);
+      return () => clearTimeout(t);
+    }
+
+    // Android/Chrome — capture the beforeinstallprompt event
+    const handler = (e) => {
+      e.preventDefault();
+      setDeferredPrompt(e);
+      setShow(true);
+    };
+    window.addEventListener("beforeinstallprompt", handler);
+    return () => window.removeEventListener("beforeinstallprompt", handler);
+  }, []);
+
+  const dismiss = () => {
+    localStorage.setItem("gsm_install_dismissed", "1");
+    setShow(false);
+  };
+
+  const installAndroid = async () => {
+    if (!deferredPrompt) return;
+    deferredPrompt.prompt();
+    const { outcome } = await deferredPrompt.userChoice;
+    if (outcome === "accepted") localStorage.setItem("gsm_install_dismissed", "1");
+    setShow(false);
+    setDeferredPrompt(null);
+  };
+
+  if (!show) return null;
+
+  const es = lang === "es";
+
+  if (isIOS()) {
+    const steps = es
+      ? ["Toca el botón de compartir", "Botón de compartir (📤) en la barra inferior de Safari", "Toca «Agregar a pantalla de inicio»", "Toca «Agregar» — aparecerá el ícono en tu pantalla"]
+      : ["Tap the Share button", "The share button (📤) is in Safari's bottom toolbar", "Tap 'Add to Home Screen'", "Tap 'Add' — the icon appears on your home screen"];
+    return (
+      <div style={{ position:"fixed", bottom:0, left:0, right:0, zIndex:500, padding:"0 12px 12px", pointerEvents:"none" }}>
+        <div style={{ background:"rgba(15,25,36,.97)", border:"1px solid rgba(59,130,246,.4)", borderRadius:18, padding:"18px 18px 14px", boxShadow:"0 -8px 40px rgba(0,0,0,.6)", pointerEvents:"all", maxWidth:480, margin:"0 auto" }}>
+          <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom:14 }}>
+            <div>
+              <div style={{ fontFamily:"'Barlow Condensed'", fontSize:18, fontWeight:800, color:"var(--sky2)" }}>
+                {es ? "📲 Guarda la App en tu Teléfono" : "📲 Save the App to Your Phone"}
+              </div>
+              <div style={{ fontSize:12, color:"var(--silver)", marginTop:3 }}>
+                {es ? "Ábrela como una app real — sin buscar el link" : "Open it like a real app — no searching for the link"}
+              </div>
+            </div>
+            <button onClick={dismiss} style={{ background:"none", border:"none", color:"var(--slate)", cursor:"pointer", fontSize:22, lineHeight:1, padding:"0 4px" }}>✕</button>
+          </div>
+
+          {/* Step indicator */}
+          <div style={{ display:"flex", gap:6, marginBottom:14 }}>
+            {steps.map((_, i) => (
+              <div key={i} style={{ flex:1, height:4, borderRadius:2, background: i <= step ? "var(--sky)" : "rgba(255,255,255,.12)", transition:".2s" }} />
+            ))}
+          </div>
+
+          <div style={{ padding:"12px 14px", background:"rgba(59,130,246,.08)", borderRadius:12, border:"1px solid rgba(59,130,246,.2)", marginBottom:14 }}>
+            <div style={{ fontSize:13, fontWeight:600, color:"var(--white)" }}>
+              {es ? `Paso ${step + 1}:` : `Step ${step + 1}:`} {steps[step]}
+            </div>
+            {step === 0 && <div style={{ marginTop:8, textAlign:"center", fontSize:32 }}>📤</div>}
+            {step === 1 && <div style={{ marginTop:8, fontSize:12, color:"var(--silver)" }}>{es ? "En la parte de abajo de Safari, no en la barra de dirección." : "In the bottom bar of Safari — NOT the address bar at the top."}</div>}
+            {step === 2 && <div style={{ marginTop:8, textAlign:"center", fontSize:28 }}>🏠+</div>}
+            {step === 3 && <div style={{ marginTop:8, fontSize:12, color:"var(--green)", fontWeight:600 }}>{es ? "✓ ¡Listo! Ya tienes la app en tu pantalla de inicio." : "✓ Done! The GSM Field app is on your home screen."}</div>}
+          </div>
+
+          <div style={{ display:"flex", gap:8 }}>
+            {step > 0 && <button className="btn btn-s btn-sm" onClick={() => setStep(s => s - 1)}>{es ? "← Atrás" : "← Back"}</button>}
+            {step < steps.length - 1
+              ? <button className="btn btn-p btn-sm" style={{ flex:1, justifyContent:"center" }} onClick={() => setStep(s => s + 1)}>{es ? "Siguiente →" : "Next Step →"}</button>
+              : <button className="btn btn-g btn-sm" style={{ flex:1, justifyContent:"center" }} onClick={dismiss}>{es ? "✓ Listo" : "✓ Done"}</button>}
+            <button className="btn btn-s btn-sm" onClick={dismiss}>{es ? "Ahora no" : "Not now"}</button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Android / Chrome
+  return (
+    <div style={{ position:"fixed", bottom:0, left:0, right:0, zIndex:500, padding:"0 12px 12px" }}>
+      <div style={{ background:"rgba(15,25,36,.97)", border:"1px solid rgba(59,130,246,.4)", borderRadius:18, padding:"16px 18px", boxShadow:"0 -8px 40px rgba(0,0,0,.6)", maxWidth:480, margin:"0 auto", display:"flex", alignItems:"center", gap:14 }}>
+        <img src="/icon-admin.png" alt="GSM" style={{ width:52, height:52, objectFit:"contain", flexShrink:0 }} />
+        <div style={{ flex:1 }}>
+          <div style={{ fontFamily:"'Barlow Condensed'", fontSize:17, fontWeight:800, color:"var(--white)" }}>
+            {es ? "Agregar app a tu teléfono" : "Add App to Your Phone"}
+          </div>
+          <div style={{ fontSize:12, color:"var(--silver)", marginTop:2 }}>
+            {es ? "Abre rápido sin buscar el link" : "Open instantly — no link needed"}
+          </div>
+        </div>
+        <div style={{ display:"flex", gap:8, flexShrink:0 }}>
+          <button className="btn btn-p btn-sm" onClick={installAndroid}>{es ? "Instalar" : "Install"}</button>
+          <button className="btn btn-s btn-sm" onClick={dismiss}>{es ? "No" : "Skip"}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ════════════════════════════════════════════════════════════════════════
 export default function App() {
-  // Restore session on launch — stays logged in across app restarts
+  // Restore session — ?login=1 forces fresh login (crew invite links use this)
   const [user, setUser] = useState(() => {
-    try { return JSON.parse(localStorage.getItem("gsm_session") || "null"); } catch { return null; }
+    try {
+      if (new URLSearchParams(window.location.search).get("login") === "1") {
+        localStorage.removeItem("gsm_session");
+        return null;
+      }
+      return JSON.parse(localStorage.getItem("gsm_session") || "null");
+    } catch { return null; }
   });
+  const [sessionChecked, setSessionChecked] = useState(false);
   const [lang, setLang] = useState(() => localStorage.getItem("gsm_lang") || "en");
   const [theme, setTheme] = useState(() => localStorage.getItem("gsm_theme") || "dark");
   const [online, setOnline] = useState(navigator.onLine);
@@ -554,10 +714,42 @@ export default function App() {
   const [loading, setLoading] = useState(false);
   const [settings, setSettings] = useState(() => JSON.parse(localStorage.getItem("gsm_set") || "{}"));
   const [users, setUsers] = useState([]);
+  const [dispatches, setDispatches] = useState([]);
   const t = T[lang];
 
-  const login = (u) => { localStorage.setItem("gsm_session", JSON.stringify(u)); setUser(u); };
-  const logout = () => { localStorage.removeItem("gsm_session"); setUser(null); setRevoked(false); };
+  const login = (u) => {
+    localStorage.setItem("gsm_session", JSON.stringify(u));
+    // Save slim quick-login record so next time only PIN needed
+    localStorage.setItem("gsm_quick", JSON.stringify({ id: u.id, name: u.name, role: u.role, email: u.email }));
+    setUser(u);
+    setSessionChecked(true);
+  };
+  const logout = (clearQuick = false) => {
+    localStorage.removeItem("gsm_session");
+    if (clearQuick) localStorage.removeItem("gsm_quick");
+    setUser(null); setRevoked(false); setSessionChecked(false);
+  };
+
+  // Validate cached session on every load — refresh role from DB so role changes take effect immediately
+  useEffect(() => {
+    if (!user) { setSessionChecked(true); return; }
+    sbGet("field_profiles", `id=eq.${user.id}&select=id,role,active,name,email`)
+      .then(rows => {
+        const match = rows?.[0];
+        if (!match || match.active === false) {
+          // Account gone or deactivated — clear session
+          localStorage.removeItem("gsm_session");
+          setUser(null);
+        } else if (match.role !== user.role) {
+          // Role changed in DB — update session to reflect new role
+          const updated = { ...user, role: match.role };
+          localStorage.setItem("gsm_session", JSON.stringify(updated));
+          setUser(updated);
+        }
+        setSessionChecked(true);
+      })
+      .catch(() => setSessionChecked(true)); // offline — trust cached session
+  }, []);
   useEffect(() => { localStorage.setItem("gsm_lang", lang); }, [lang]);
 
   // ── LOAD ALL DATA FROM SUPABASE ───────────────────────────────────
@@ -566,7 +758,7 @@ export default function App() {
     const load = async () => {
       setLoading(true);
       try {
-        const [dbUsers, dbJobs, dbTasks, dbLogs, dbPhotos, dbReceipts, dbMats] = await Promise.all([
+        const [dbUsers, dbJobs, dbTasks, dbLogs, dbPhotos, dbReceipts, dbMats, dbDispatch] = await Promise.all([
           sbGet("field_profiles", "order=created_at"),
           sbGet("field_jobs", "order=created_at"),
           sbGet("field_tasks", "order=created_at"),
@@ -574,6 +766,7 @@ export default function App() {
           sbGet("field_photos", "order=created_at.desc"),
           sbGet("field_receipts", "order=created_at.desc"),
           sbGet("field_material_requests", "order=created_at.desc"),
+          sbGet("field_dispatch", "order=date.desc"),
         ]);
         if (dbUsers)    setUsers(dbUsers.map(fromProfile));
         if (dbJobs)     setJobs(dbJobs.map(fromJob));
@@ -582,6 +775,7 @@ export default function App() {
         if (dbPhotos)   setPhotos(dbPhotos.map(fromPhoto));
         if (dbReceipts) setReceipts(dbReceipts.map(fromReceipt));
         if (dbMats)     setMats(dbMats.map(fromMat));
+        if (dbDispatch) setDispatches(dbDispatch.map(fromDispatch));
       } catch (e) { console.error("Load:", e); }
       setLoading(false);
     };
@@ -594,22 +788,24 @@ export default function App() {
     const sync = async () => {
       if (!navigator.onLine) return;
       try {
-        const [dbTasks, dbLogs, dbPhotos, dbReceipts, dbMats] = await Promise.all([
+        const [dbTasks, dbLogs, dbPhotos, dbReceipts, dbMats, dbDispatch] = await Promise.all([
           sbGet("field_tasks",            "order=created_at"),
           sbGet("field_logs",             "order=created_at.desc"),
           sbGet("field_photos",           "order=created_at.desc"),
           sbGet("field_receipts",         "order=created_at.desc"),
           sbGet("field_material_requests","order=created_at.desc"),
+          sbGet("field_dispatch",         "order=date.desc"),
         ]);
         if (dbTasks)    setTasks(dbTasks.map(fromTask));
         if (dbLogs)     setLogs(dbLogs.map(fromLog));
         if (dbPhotos)   setPhotos(dbPhotos.map(fromPhoto));
         if (dbReceipts) setReceipts(dbReceipts.map(fromReceipt));
         if (dbMats)     setMats(dbMats.map(fromMat));
+        if (dbDispatch) setDispatches(dbDispatch.map(fromDispatch));
       } catch {}
     };
-    const iv = setInterval(sync, 30000);
-    window.addEventListener("focus", sync);
+    const iv = setInterval(sync, 300000); // 5 min — tasks/receipts don't need sub-minute sync
+    window.addEventListener("focus", sync); // still instant on tab focus
     return () => { clearInterval(iv); window.removeEventListener("focus", sync); };
   }, [user?.id]);
 
@@ -626,9 +822,49 @@ export default function App() {
     setUsers(u => u.map(x => x.id === id ? { ...x, active: true, archived: false } : x));
     try { await sbPatch("field_profiles", id, { active: true, archived: false }); } catch {}
   };
+
+  const deletePhoto = async (id) => {
+    setPhotos(p => p.filter(x => x.id !== id));
+    try { await sbDelete("field_photos", id); } catch {}
+  };
+  const deleteReceipt = async (id) => {
+    setReceipts(p => p.filter(x => x.id !== id));
+    try { await sbDelete("field_receipts", id); } catch {}
+  };
+  const deleteLog = async (id) => {
+    setLogs(p => p.filter(x => x.id !== id));
+    try { await sbDelete("field_logs", id); } catch {}
+  };
+  const reassignPhoto = async (id, patch) => {
+    setPhotos(p => p.map(x => x.id === id ? { ...x, ...patch } : x));
+    const dbPatch = {};
+    if (patch.jobId  !== undefined) dbPatch.job_id  = patch.jobId;
+    if (patch.taskId !== undefined) dbPatch.task_id = patch.taskId;
+    try { await sbFetch(`field_photos?id=eq.${id}`, { method: "PATCH", body: JSON.stringify(dbPatch), prefer: "return=minimal" }); } catch {}
+  };
+  const reassignReceipt = async (id, patch) => {
+    setReceipts(p => p.map(x => x.id === id ? { ...x, ...patch } : x));
+    const dbPatch = {};
+    if (patch.jobId  !== undefined) dbPatch.job_id  = patch.jobId;
+    if (patch.taskId !== undefined) dbPatch.task_id = patch.taskId;
+    try { await sbFetch(`field_receipts?id=eq.${id}`, { method: "PATCH", body: JSON.stringify(dbPatch), prefer: "return=minimal" }); } catch {}
+  };
+  const upsertDispatch = async (entry) => {
+    const id = "d_" + entry.crewId + "_" + entry.date;
+    const row = { id, crew_id: entry.crewId, date: entry.date, job_ids: entry.jobIds, custom_stops: entry.customStops, created_by: user.id };
+    setDispatches(p => [...p.filter(d => !(d.crewId === entry.crewId && d.date === entry.date)), { id, ...entry, createdBy: user.id }]);
+    try { await sbFetch(`field_dispatch?id=eq.${id}`, { method: "DELETE", prefer: "return=minimal" }); } catch {}
+    try { await sbPost("field_dispatch", row); } catch {}
+  };
+  const deleteDispatch = async (id) => {
+    setDispatches(p => p.filter(d => d.id !== id));
+    try { await sbDelete("field_dispatch", id); } catch {}
+  };
   const addUser = async (member) => {
     const id = "u" + Date.now();
-    const row = { id, name: member.name, role: "crew", email: member.email, phone: member.phone || "", pin: member.pin, active: true };
+    const email = member.email?.trim() || `crew_${id}@gsm.local`;
+    const role = member.role || "crew";
+    const row = { id, name: member.name, role, email, phone: member.phone || "", pin: member.pin, active: true };
     setUsers(u => [...u, { ...row }]);
     try { await sbPost("field_profiles", row); } catch { enqueue({ table: "field_profiles", payload: row }); }
   };
@@ -656,8 +892,8 @@ export default function App() {
       } catch {}
     };
     check();
-    const iv = setInterval(check, 15000);
-    window.addEventListener("focus", check);
+    const iv = setInterval(check, 300000); // 5 min — revocation doesn't need 15s polling
+    window.addEventListener("focus", check); // still checks on tab focus
     return () => { clearInterval(iv); window.removeEventListener("focus", check); };
   }, [user?.id]);
 
@@ -669,16 +905,29 @@ export default function App() {
     return () => { window.removeEventListener("online", on); window.removeEventListener("offline", off); };
   }, []);
 
-  // Deep link: SMS reminder links contain ?log=1 → jump crew to the log screen
+  // Deep link: SMS links route crew to the right tab
   useEffect(() => {
     if (!user || user.role !== "crew") return;
     const params = new URLSearchParams(window.location.search);
     if (params.get("log") === "1") setTab("log");
+    if (params.get("tab") === "tasks") setTab("tasks");
   }, [user]);
 
   const saveSettings = (s) => { setSettings(s); localStorage.setItem("gsm_set", JSON.stringify(s)); };
 
-  if (!user) return <Login onLogin={login} t={t} lang={lang} setLang={setLang} theme={theme} toggleTheme={toggleTheme} />;
+  // Wait for session validation before rendering anything
+  if (!sessionChecked) return (
+    <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", background: "var(--steel)" }}>
+      <style>{CSS}</style>
+      <div className="spin" style={{ width: 36, height: 36 }} />
+    </div>
+  );
+
+  if (!user) {
+    const quickUser = (() => { try { return JSON.parse(localStorage.getItem("gsm_quick") || "null"); } catch { return null; } })();
+    if (quickUser) return <QuickPIN quick={quickUser} onLogin={login} onSwitch={() => { localStorage.removeItem("gsm_quick"); window.location.reload(); }} theme={theme} lang={lang} />;
+    return <Login onLogin={login} t={t} lang={lang} setLang={setLang} theme={theme} toggleTheme={toggleTheme} />;
+  }
 
   if (revoked) return <LockedOut user={user} lang={lang} onAck={logout} />;
 
@@ -692,7 +941,9 @@ export default function App() {
 
   const shared = { user, lang, t, jobs, setJobs, tasks, setTasks, receipts, setReceipts,
                    logs, setLogs, photos, setPhotos, mats, setMats, settings, saveSettings, users,
-                   online, setActive, addUser, updateUser, removeUser, archiveCrew, unarchiveCrew };
+                   online, setActive, addUser, updateUser, removeUser, archiveCrew, unarchiveCrew,
+                   dispatches, setDispatches, upsertDispatch, deleteDispatch,
+                   deletePhoto, deleteReceipt, deleteLog, reassignPhoto, reassignReceipt };
 
   return (
     <div className={`app${theme === "light" ? " light" : ""}`}>
@@ -703,6 +954,7 @@ export default function App() {
       {user.role === "admin"
         ? <Admin {...shared} tab={tab} setTab={setTab} menuOpen={menuOpen} setMenuOpen={setMenuOpen} />
         : <Crew {...shared} tab={tab} setTab={setTab} />}
+      <InstallPrompt lang={lang} />
     </div>
   );
 }
@@ -727,14 +979,122 @@ function LockedOut({ user, lang, onAck }) {
   );
 }
 
+// ─── QUICK PIN ────────────────────────────────────────────────────────
+function QuickPIN({ quick, onLogin, onSwitch, theme, lang }) {
+  const [pin, setPin] = useState("");
+  const [err, setErr] = useState("");
+  const [busy, setBusy] = useState(false);
+  const es = lang === "es";
+
+  const addDigit = (d) => {
+    if (pin.length >= 6) return;
+    const next = pin + d;
+    setPin(next);
+    setErr("");
+    if (next.length >= 4) verify(next);
+  };
+
+  const backspace = () => setPin(p => p.slice(0, -1));
+
+  const verify = async (code) => {
+    setBusy(true);
+    try {
+      const rows = await sbGet("field_profiles", `id=eq.${quick.id}&select=*`);
+      const u = rows?.[0];
+      if (!u || u.pin !== code) {
+        setErr(es ? "PIN incorrecto. Intenta de nuevo." : "Wrong PIN. Try again.");
+        setPin("");
+        setBusy(false);
+        return;
+      }
+      if (u.active === false) {
+        setErr(es ? "Cuenta desactivada." : "Account deactivated.");
+        setBusy(false);
+        return;
+      }
+      onLogin(fromProfile(u));
+    } catch {
+      setErr(es ? "Error de conexión." : "Connection error. Try again.");
+      setBusy(false);
+    }
+  };
+
+  const KEYS = ["1","2","3","4","5","6","7","8","9","","0","⌫"];
+
+  return (
+    <div className={`app${theme === "light" ? " light" : ""}`}>
+      <style>{CSS}</style>
+      <div className="login" style={{ padding: 24 }}>
+        <div className="login-card" style={{ maxWidth: 340 }}>
+          {/* Avatar */}
+          <div style={{ textAlign:"center", marginBottom: 24 }}>
+            <div style={{ width:72, height:72, borderRadius:"50%", background:"linear-gradient(135deg,var(--sky-dim),var(--sky))", display:"flex", alignItems:"center", justifyContent:"center", margin:"0 auto 14px", fontFamily:"'Barlow Condensed'", fontWeight:800, fontSize:32, color:"#fff" }}>
+              {quick.name[0]}
+            </div>
+            <div style={{ fontFamily:"'Barlow Condensed'", fontSize:22, fontWeight:800 }}>
+              {es ? "Bienvenido, " : "Welcome back,"}<br/>{quick.name.split(" ")[0]}
+            </div>
+            <div className="muted" style={{ fontSize:12, marginTop:4 }}>
+              {es ? "Ingresa tu PIN para continuar" : "Enter your PIN to continue"}
+            </div>
+          </div>
+
+          {/* PIN dots */}
+          <div style={{ display:"flex", justifyContent:"center", gap:14, marginBottom:28 }}>
+            {[0,1,2,3].map(i => (
+              <div key={i} style={{ width:18, height:18, borderRadius:"50%", border:"2px solid var(--sky)", background: pin.length > i ? "var(--sky)" : "transparent", transition:".15s" }} />
+            ))}
+          </div>
+
+          {/* Error */}
+          {err && <p style={{ color:"var(--red)", fontSize:13, textAlign:"center", marginBottom:16 }}>{err}</p>}
+
+          {/* Number pad */}
+          {busy
+            ? <div style={{ textAlign:"center", padding:24 }}><span className="spin" style={{ width:32, height:32, display:"inline-block" }} /></div>
+            : <div style={{ display:"grid", gridTemplateColumns:"repeat(3,1fr)", gap:10, marginBottom:20 }}>
+                {KEYS.map((k, i) => (
+                  k === ""
+                    ? <div key={i} />
+                    : <button key={i}
+                        onClick={() => k === "⌫" ? backspace() : addDigit(k)}
+                        disabled={k !== "⌫" && pin.length >= 6}
+                        style={{ padding:"18px 0", fontSize: k === "⌫" ? 22 : 26, fontWeight:700, fontFamily:"'Barlow Condensed'", borderRadius:14,
+                          border:"1px solid var(--border)", background: k === "⌫" ? "rgba(255,255,255,.05)" : "rgba(59,130,246,.1)",
+                          color:"var(--white)", cursor:"pointer", transition:".12s", lineHeight:1 }}>
+                        {k}
+                      </button>
+                ))}
+              </div>
+          }
+
+          {/* Switch account */}
+          <button onClick={onSwitch}
+            style={{ width:"100%", background:"none", border:"none", color:"var(--slate)", fontSize:12, cursor:"pointer", textDecoration:"underline", padding:"4px 0" }}>
+            {es ? "¿No eres tú? Cambiar cuenta" : "Not you? Switch account"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─── LOGIN ────────────────────────────────────────────────────────────
 function Login({ onLogin, t, lang, setLang, theme, toggleTheme }) {
-  const [email, setEmail] = useState(""), [pin, setPin] = useState(""), [err, setErr] = useState(""), [busy, setBusy] = useState(false);
+  const [login, setLogin] = useState(""), [pin, setPin] = useState(""), [err, setErr] = useState(""), [busy, setBusy] = useState(false);
   const go = async () => {
-    if (!email || !pin) return setErr(lang === "en" ? "Enter email and PIN." : "Ingresa email y PIN.");
+    if (!login || !pin) return setErr(lang === "en" ? "Enter email or phone, and PIN." : "Ingresa email o teléfono, y PIN.");
     setBusy(true); setErr("");
     try {
-      const rows = await sbGet("field_profiles", `email=eq.${encodeURIComponent(email.trim().toLowerCase())}&select=*`);
+      const val = login.trim().toLowerCase();
+      // Try email first, then phone number
+      let rows = await sbGet("field_profiles", `email=eq.${encodeURIComponent(val)}&select=*`);
+      if (!rows?.length) {
+        // Try phone — strip everything non-digit, compare last 10 digits so +1 never required
+        const digitsIn = login.trim().replace(/\D/g, "").slice(-10);
+        const allProfiles = await sbGet("field_profiles", "select=*");
+        rows = (allProfiles || []).filter(p => p.phone && p.phone.replace(/\D/g, "").slice(-10) === digitsIn);
+      }
       const u = rows?.[0];
       if (!u || u.pin !== pin) { setErr(lang === "en" ? "Invalid credentials." : "Credenciales inválidas."); setBusy(false); return; }
       if (u.active === false) { setErr(lang === "en" ? "Account deactivated." : "Cuenta desactivada."); setBusy(false); return; }
@@ -749,11 +1109,14 @@ function Login({ onLogin, t, lang, setLang, theme, toggleTheme }) {
         <div className="logo-title">GS MASTERS</div>
         <div className="logo-sub">Field App</div>
         <div style={{ marginTop: 32 }}>
-          <div className="fg"><label className="fl">Email</label>
-            <input className="fi" type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="you@email.com" /></div>
+          <div className="fg"><label className="fl">Email or Phone Number</label>
+            <input className="fi" type="text" value={login} onChange={e => setLogin(e.target.value)} placeholder="email or (205) 555-1234" /></div>
           <div className="fg"><label className="fl">PIN</label>
             <input className="fi" type="password" value={pin} onChange={e => setPin(e.target.value)} placeholder="••••" maxLength={6}
-              onKeyDown={e => e.key === "Enter" && go()} /></div>
+              onKeyDown={e => e.key === "Enter" && go()} />
+            <p style={{ fontSize: 11, color: "var(--slate)", marginTop: 4 }}>
+              {lang === "es" ? "Usa tu correo o número de teléfono" : "Use your email or phone number to sign in"}
+            </p></div>
           {err && <p style={{ color: "var(--red)", fontSize: 13, marginBottom: 12 }}>{err}</p>}
           <button className="btn btn-p btn-full" onClick={go} disabled={busy}>{busy ? <span className="spin" /> : t.login}</button>
         </div>
@@ -771,23 +1134,26 @@ function Login({ onLogin, t, lang, setLang, theme, toggleTheme }) {
 
 // ─── TOP BAR ──────────────────────────────────────────────────────────
 function TopBar({ user, onLogout, t, lang, setLang, online, showMenu, menuOpen, setMenuOpen, theme, toggleTheme }) {
+  const iconSrc = "/icon-admin.png";
   return (
     <div className="topbar">
       <div className="tb-brand">
-        {showMenu && <button className="btn btn-s btn-ic hamburger" onClick={() => setMenuOpen(!menuOpen)} aria-label="Menu">
+        {showMenu && <button className="btn btn-ghost btn-ic hamburger" onClick={() => setMenuOpen(!menuOpen)} aria-label="Menu">
           <Icon n={menuOpen ? "x" : "menu"} s={18} /></button>}
-        <div className="tb-mark"><Icon n="briefcase" s={17} c="#fff" /></div>
+        <div style={{ width:36, height:36, borderRadius:8, background:'#052f69', flexShrink:0, position:'relative', overflow:'hidden' }}>
+          <img src={iconSrc} alt="GSM" style={{ width:44, height:44, position:'absolute', top:-6, left:-4, clipPath:'inset(17% 19% 10% 19% round 5px)' }} />
+        </div>
         <span className="tb-title">GS MASTERS FIELD</span></div>
       <div className="tb-right">
         <span className={`net-dot ${online ? "net-on" : "net-off"}`}>
           <Icon n={online ? "wifi" : "wifiOff"} s={12} /> <span className="net-txt">{online ? t.online : t.offline}</span></span>
-        <button className="btn btn-s btn-sm btn-ic" onClick={toggleTheme} title={theme === "dark" ? "Switch to Light Mode" : "Switch to Dark Mode"}
+        <button className="btn btn-ghost btn-sm btn-ic" onClick={toggleTheme} title={theme === "dark" ? "Switch to Light Mode" : "Switch to Dark Mode"}
           style={{ fontSize: 15 }}>{theme === "dark" ? "☀️" : "🌙"}</button>
         <button className="btn btn-s btn-sm" onClick={() => setLang(lang === "en" ? "es" : "en")}>
           <Icon n="translate" s={14} /> {lang === "en" ? "ES" : "EN"}</button>
         <span className="muted tb-name" style={{ fontSize: 13 }}>{user.name}</span>
         <span className={`badge badge-${user.role}`}>{user.role}</span>
-        <button className="btn btn-s btn-sm btn-ic" onClick={onLogout}><Icon n="logout" s={16} /></button>
+        <button className="btn btn-ghost btn-sm btn-ic" onClick={onLogout}><Icon n="logout" s={16} /></button>
       </div>
     </div>
   );
@@ -797,16 +1163,25 @@ function TopBar({ user, onLogout, t, lang, setLang, online, showMenu, menuOpen, 
 function Admin(props) {
   const { t, tab, setTab, menuOpen, setMenuOpen } = props;
   const [statusFilter, setStatusFilter] = useState("all");
+  const [selectedJobId, setSelectedJobId] = useState(null);
   const nav = [
-    { k: "dash", i: "home", l: "Dashboard" }, { k: "activity", i: "report", l: "Live Activity" },
-    { k: "tasks", i: "tasks", l: t.tasks }, { k: "cal", i: "calendar", l: "Calendar" },
-    { k: "report", i: "report", l: "Reports" }, { k: "receipts", i: "receipt", l: t.receipts },
-    { k: "photos", i: "photo", l: "Photos" }, { k: "jobs", i: "briefcase", l: "Jobs" },
-    { k: "crew", i: "users", l: "Crew" }, { k: "hours", i: "calendar", l: "Hours" },
-    { k: "set", i: "settings", l: "Settings" },
+    { k: "dash",     i: "home",      l: "Dashboard"    },
+    { k: "dispatch", i: "pin",       l: "Dispatch"     },
+    { k: "activity", i: "report",    l: "Live Activity" },
+    { k: "tasks",    i: "tasks",     l: t.tasks        },
+    { k: "cal",      i: "calendar",  l: "Calendar"     },
+    { k: "report",   i: "report",   l: "Reports"      },
+    { k: "receipts", i: "receipt",   l: t.receipts     },
+    { k: "photos",   i: "photo",     l: "Photos"       },
+    { k: "jobs",     i: "briefcase", l: "Jobs"         },
+    { k: "crew",     i: "users",     l: "Crew"         },
+    { k: "hours",    i: "calendar",  l: "Hours"        },
+    { k: "set",      i: "settings",  l: "Settings"     },
+    { k: "field",    i: "pin",       l: "📱 Field Mode" },
   ];
   const pick = k => { setTab(k); setStatusFilter("all"); setMenuOpen(false); };
   const navTo = (destTab, filter) => { setTab(destTab); setStatusFilter(filter); setMenuOpen(false); };
+  const openJobDetail = (jobId) => { setSelectedJobId(jobId); setTab("jobdetail"); setMenuOpen(false); };
   return (
     <div className="layout">
       {menuOpen && <div className="side-scrim" onClick={() => setMenuOpen(false)} />}
@@ -814,23 +1189,26 @@ function Admin(props) {
         {nav.map(n => <div key={n.k} className={`nav ${tab === n.k ? "on" : ""}`} onClick={() => pick(n.k)}>
           <Icon n={n.i} s={17} /> {n.l}</div>)}</div>
       <div className="content">
-        {tab === "dash" && <Dash {...props} navTo={navTo} />}
+        {tab === "dash"     && <Dash {...props} navTo={navTo} setTab={setTab} openJobDetail={openJobDetail} />}
+        {tab === "dispatch" && <AdminDispatch {...props} />}
         {tab === "activity" && <AdminActivity {...props} />}
-        {tab === "tasks" && <AdminTasks {...props} statusFilter={statusFilter} setStatusFilter={setStatusFilter} />}
-        {tab === "cal" && <Calendar {...props} />}
-        {tab === "report" && <Report {...props} />}
+        {tab === "tasks"    && <AdminTasks {...props} statusFilter={statusFilter} setStatusFilter={setStatusFilter} />}
+        {tab === "cal"      && <Calendar {...props} />}
+        {tab === "report"   && <Report {...props} />}
         {tab === "receipts" && <AdminReceipts {...props} />}
-        {tab === "photos" && <AdminPhotos {...props} />}
-        {tab === "jobs" && <Jobs {...props} />}
-        {tab === "crew" && <CrewMgmt {...props} />}
-        {tab === "hours" && <AdminHours {...props} />}
-        {tab === "set" && <Settings {...props} />}
+        {tab === "photos"   && <AdminPhotos {...props} />}
+        {tab === "jobs"     && <Jobs {...props} />}
+        {tab === "crew"     && <CrewMgmt {...props} />}
+        {tab === "hours"    && <AdminHours {...props} />}
+        {tab === "set"      && <Settings {...props} />}
+        {tab === "field"    && <AdminFieldMode {...props} />}
+        {tab === "jobdetail"&& <JobDetail {...props} selectedJobId={selectedJobId} setTab={setTab} />}
       </div>
     </div>
   );
 }
 
-function Dash({ tasks, jobs, users, receipts, setTab, navTo }) {
+function Dash({ tasks, jobs, users, receipts, setTab, navTo, openJobDetail }) {
   const today = new Date().toISOString().split("T")[0];
   const activeJobs = jobs.filter(j => j.status !== "closed");
   const done  = tasks.filter(t => t.status === "done").length;
@@ -863,7 +1241,7 @@ function Dash({ tasks, jobs, users, receipts, setTab, navTo }) {
               const jd = jt.filter(t => t.status === "done").length;
               const pct = Math.round(jd / jt.length * 100);
               const allDone = jd === jt.length;
-              return <div key={job.id} className="job-prog" onClick={() => setTab("tasks")} style={{ marginBottom: 14, cursor: "pointer" }}>
+              return <div key={job.id} className="job-prog" onClick={() => openJobDetail ? openJobDetail(job.id) : setTab("tasks")} style={{ marginBottom: 14, cursor: "pointer" }}>
                 <div className="flexb" style={{ marginBottom: 6 }}>
                   <span style={{ fontWeight: 600 }}>{job.name}</span>
                   <span className="muted">{jd}/{jt.length} · {pct}%{allDone ? " ✓" : ""}</span>
@@ -878,12 +1256,25 @@ function Dash({ tasks, jobs, users, receipts, setTab, navTo }) {
 }
 
 function AdminTasks(props) {
-  const { tasks, setTasks, jobs, users, t, settings, statusFilter = "all", setStatusFilter } = props;
+  const { tasks, setTasks, jobs, users, t, settings, statusFilter = "all", setStatusFilter, photos, setPhotos, user } = props;
   const [jobFilter, setJobFilter] = useState("all");
   const [modal, setModal] = useState(false);
-  const [nt, setNt] = useState({ title: "", titleEs: "", jobId: "", assignedTo: [], dueDate: "" });
+  const [nt, setNt] = useState({ title: "", titleEs: "", jobId: "", assignedTo: [], dueDate: "", priority: "normal", recurring: false });
+  const [editTask, setEditTask] = useState(null); // task being edited
+  const [editForm, setEditForm] = useState({});
   const [busy, setBusy] = useState(false);
   const today = new Date().toISOString().split("T")[0];
+  // Photo attachment on task creation
+  const [taskPhoto, setTaskPhoto] = useState(null);   // { dataUrl, sizeKB }
+  const [taskPhotoNote, setTaskPhotoNote] = useState("");
+  const [taskPhotoType, setTaskPhotoType] = useState("before");
+  const photoRef = useRef();
+  const captureTaskPhoto = async (e) => {
+    const file = e.target.files[0]; if (!file) return;
+    const { dataUrl, sizeKB } = await compressImage(file);
+    setTaskPhoto({ dataUrl, sizeKB });
+    e.target.value = "";
+  };
 
   // Apply status filter first, then job filter
   const statusFiltered = tasks.filter(task => {
@@ -905,22 +1296,41 @@ function AdminTasks(props) {
     let es = nt.titleEs;
     if (!es && settings.gtKey) es = await translateText(nt.title, "es", settings.gtKey);
     const id = "t" + Date.now();
-    const task = { id, jobId: nt.jobId, title: nt.title, titleEs: es || nt.title, assignedTo: nt.assignedTo, dueDate: nt.dueDate, status: "pending", createdAt: today };
+    const task = { id, jobId: nt.jobId, title: nt.title, titleEs: es || nt.title, assignedTo: nt.assignedTo, dueDate: nt.dueDate, status: "pending", createdAt: today, priority: nt.priority, recurring: nt.recurring };
     setTasks(p => [...p, task]);
-    const row = { id, job_id: nt.jobId, title: nt.title, title_es: es || nt.title, assigned_to: nt.assignedTo, due_date: nt.dueDate || null, status: "pending" };
+    const row = { id, job_id: nt.jobId, title: nt.title, title_es: es || nt.title, assigned_to: nt.assignedTo, due_date: nt.dueDate || null, status: "pending", priority: nt.priority, recurring: nt.recurring };
     try { await sbPost("field_tasks", row); } catch { enqueue({ table: "field_tasks", payload: row }); }
+    // Save attached photo if provided
+    if (taskPhoto && nt.jobId) {
+      const pid = "p" + Date.now();
+      const prow = { id: pid, data_url: taskPhoto.dataUrl, photo_type: taskPhotoType, task_id: id, job_id: nt.jobId, crew_id: user?.id || "admin", size_kb: taskPhoto.sizeKB, note: taskPhotoNote || null };
+      if (setPhotos) setPhotos(p => [...p, { id: pid, dataUrl: taskPhoto.dataUrl, type: taskPhotoType, taskId: id, jobId: nt.jobId, crewId: user?.id || "admin", sizeKB: taskPhoto.sizeKB, note: taskPhotoNote, date: new Date().toISOString() }]);
+      try { await sbPost("field_photos", prow); } catch { enqueue({ table: "field_photos", payload: prow }); }
+    }
     // Twilio SMS to each assigned crew member
     const jobName = jobs.find(j => j.id === nt.jobId)?.name || "";
     const appUrl = settings?.appUrl || window.location.origin;
     for (const crewId of nt.assignedTo) {
       const member = users.find(u => u.id === crewId);
       if (member?.phone) {
-        const msg = `New task: "${nt.title}"\nJob: ${jobName}${nt.dueDate ? `\nDue: ${nt.dueDate}` : ""}\nOpen app: ${appUrl}`;
+        const crewLink = `${appUrl}/?tab=tasks`;
+        const msg = `New task assigned to you: "${nt.title}"\nJob: ${jobName}${nt.dueDate ? `\nDue: ${nt.dueDate}` : ""}\nOpen your crew app: ${crewLink}`;
         fetch("/.netlify/functions/send-sms", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ to: member.phone, body: msg }) }).catch(() => {});
       }
     }
-    setNt({ title: "", titleEs: "", jobId: "", assignedTo: [], dueDate: "" }); setModal(false); setBusy(false);
+    setNt({ title: "", titleEs: "", jobId: "", assignedTo: [], dueDate: "", priority: "normal", recurring: false });
+    setTaskPhoto(null); setTaskPhotoNote(""); setTaskPhotoType("before");
+    setModal(false); setBusy(false);
   };
+  const openEdit = (task) => { setEditTask(task); setEditForm({ title: task.title, titleEs: task.titleEs, dueDate: task.dueDate, priority: task.priority || "normal", recurring: task.recurring || false, assignedTo: task.assignedTo || [] }); };
+  const saveEdit = async () => {
+    if (!editTask) return;
+    const patch = { title: editForm.title, title_es: editForm.titleEs, due_date: editForm.dueDate || null, priority: editForm.priority, recurring: editForm.recurring, assigned_to: editForm.assignedTo };
+    setTasks(p => p.map(t => t.id === editTask.id ? { ...t, title: editForm.title, titleEs: editForm.titleEs, dueDate: editForm.dueDate, priority: editForm.priority, recurring: editForm.recurring, assignedTo: editForm.assignedTo } : t));
+    try { await sbFetch(`field_tasks?id=eq.${editTask.id}`, { method: "PATCH", body: JSON.stringify(patch), prefer: "return=minimal" }); } catch {}
+    setEditTask(null);
+  };
+  const toggleEditCrew = (id) => setEditForm(p => ({ ...p, assignedTo: p.assignedTo.includes(id) ? p.assignedTo.filter(x => x !== id) : [...p.assignedTo, id] }));
   const toggle = async (id) => {
     const task = tasks.find(t => t.id === id);
     const next = task.status === "done" ? "pending" : "done";
@@ -954,27 +1364,101 @@ function AdminTasks(props) {
 
       {shown.length === 0 && <div className="empty"><p>No {filterLabel[statusFilter].toLowerCase()} for the selected job.</p></div>}
       {shown.map(job => {
-        const jt = statusFiltered.filter(t => t.jobId === job.id);
+        const jt = statusFiltered
+          .filter(t => t.jobId === job.id)
+          .sort((a, b) => {
+            if (a.recurring !== b.recurring) return a.recurring ? -1 : 1;
+            if (a.priority === "urgent" && b.priority !== "urgent") return -1;
+            if (a.priority !== "urgent" && b.priority === "urgent") return 1;
+            return 0;
+          });
         if (!jt.length) return null;
         return <div key={job.id} className="jobsec">
           <div className="jobhead"><div><div className="jobname">{job.name}</div><MapAddr addr={job.address} /></div>
             <span className="tag-l">{jt.length} task{jt.length !== 1 ? "s" : ""}</span></div>
           <div className="jobbody">{jt.map(task => {
             const s = st(task), crew = (task.assignedTo || []).map(id => users.find(u => u.id === id)).filter(Boolean);
-            return <div key={task.id} className="trow">
+            const rowClass = `trow${task.recurring ? " trow-recurring" : task.priority === "urgent" ? " trow-urgent" : ""}`;
+            return <div key={task.id} className={rowClass}>
               <div className="tchk"><input type="checkbox" checked={task.status === "done"} onChange={() => toggle(task.id)} /></div>
               <div className="tinfo">
-                <div className="ten" style={{ textDecoration: task.status === "done" ? "line-through" : "none", opacity: task.status === "done" ? .6 : 1 }}>{task.title}</div>
+                <div className="ten" style={{ textDecoration: task.status === "done" ? "line-through" : "none", opacity: task.status === "done" ? .6 : 1 }}>
+                  {task.recurring && <span style={{ fontSize: 11, marginRight: 5 }}>🔁</span>}
+                  {task.title}
+                </div>
                 <div className="tes">{task.titleEs}</div>
-                <div className="tmeta"><span className={`tag tag-${s}`}>{t[s]}</span>
+                <div className="tmeta">
+                  {task.recurring && <span className="tag tag-recurring">Recurring</span>}
+                  {task.priority === "urgent" && <span className="tag tag-urgent">⚡ Urgent</span>}
+                  <span className={`tag tag-${s}`}>{t[s]}</span>
                   {task.dueDate && <span className="tag" style={{ background: "rgba(255,255,255,.06)", color: "var(--silver)" }}>Due {task.dueDate}</span>}
-                  {crew.map(a => <span key={a.id} className="tag-l" style={{ marginRight: 3 }}>{a.name}</span>)}</div>
+                  {crew.map(a => <span key={a.id} className="tag-l" style={{ marginRight: 3 }}>{a.name}</span>)}
+                </div>
               </div>
-              <button className="btn btn-s btn-sm btn-ic" style={{ color: "var(--red)", flexShrink: 0 }} title="Delete" onClick={() => deleteTask(task.id)}><Icon n="x" s={14} /></button>
+              <div style={{ display:"flex", gap:4, flexShrink:0 }}>
+                <button className="btn btn-s btn-sm btn-ic" title="Edit" onClick={() => openEdit(task)}><Icon n="pen" s={14} /></button>
+                <button className="btn btn-s btn-sm btn-ic" style={{ color: "var(--red)" }} title="Delete" onClick={() => deleteTask(task.id)}><Icon n="x" s={14} /></button>
+              </div>
             </div>;
           })}</div>
         </div>;
       })}
+
+      {/* ── Edit Task Modal ── */}
+      {editTask && <div className="modal-bg" onClick={e => e.target === e.currentTarget && setEditTask(null)}>
+        <div className="modal"><div className="mt">Edit Task</div>
+          <div className="fg"><label className="fl">Task (English)</label>
+            <input className="fi" value={editForm.title} onChange={e => setEditForm(p => ({ ...p, title: e.target.value }))} /></div>
+          <div className="fg"><label className="fl">Tarea (Español)</label>
+            <input className="fi" value={editForm.titleEs} onChange={e => setEditForm(p => ({ ...p, titleEs: e.target.value }))} /></div>
+          <div className="fg"><label className="fl">Due Date</label>
+            <input className="fi" type="date" value={editForm.dueDate} onChange={e => setEditForm(p => ({ ...p, dueDate: e.target.value }))} /></div>
+          <div className="grid2" style={{ marginBottom: 18 }}>
+            <div>
+              <label className="fl">Priority</label>
+              <div style={{ display:"flex", gap:8 }}>
+                {["normal","urgent"].map(p => (
+                  <button key={p} type="button" onClick={() => setEditForm(n => ({ ...n, priority: p }))}
+                    style={{ flex:1, padding:"9px 0", borderRadius:10, border:`1px solid ${editForm.priority===p?(p==="urgent"?"var(--red)":"var(--border)"):"var(--border)"}`,
+                      background: editForm.priority===p?(p==="urgent"?"rgba(239,68,68,.18)":"rgba(59,130,246,.12)"):"rgba(255,255,255,.04)",
+                      color: editForm.priority===p?(p==="urgent"?"var(--red)":"var(--sky2)"):"var(--silver)",
+                      fontFamily:"'Barlow Condensed'", fontWeight:700, fontSize:13, letterSpacing:1, textTransform:"uppercase", cursor:"pointer" }}>
+                    {p === "urgent" ? "⚡ Urgent" : "Normal"}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div>
+              <label className="fl">Type</label>
+              <button type="button" onClick={() => setEditForm(n => ({ ...n, recurring: !n.recurring }))}
+                style={{ width:"100%", padding:"9px 0", borderRadius:10,
+                  border:`1px solid ${editForm.recurring?"var(--accent)":"var(--border)"}`,
+                  background: editForm.recurring?"rgba(245,158,11,.15)":"rgba(255,255,255,.04)",
+                  color: editForm.recurring?"var(--accent)":"var(--silver)",
+                  fontFamily:"'Barlow Condensed'", fontWeight:700, fontSize:13, letterSpacing:1, textTransform:"uppercase", cursor:"pointer" }}>
+                🔁 {editForm.recurring ? "Recurring" : "One-Time"}
+              </button>
+            </div>
+          </div>
+          <div className="fg"><label className="fl">Assigned To</label>
+            <div style={{ background:"rgba(0,0,0,.15)", borderRadius:10, padding:"6px 4px", border:"1px solid var(--border)" }}>
+              {users.filter(u => u.role === "crew").map(u => (
+                <label key={u.id} style={{ display:"flex", alignItems:"center", gap:11, padding:"8px 12px", cursor:"pointer", borderRadius:8,
+                  background: editForm.assignedTo.includes(u.id) ? "rgba(59,130,246,.12)" : "transparent" }}>
+                  <input type="checkbox" checked={editForm.assignedTo.includes(u.id)} onChange={() => toggleEditCrew(u.id)}
+                    style={{ width:17, height:17, accentColor:"var(--sky)", flexShrink:0 }} />
+                  <span style={{ fontSize:14, fontWeight:500 }}>{u.name}</span>
+                </label>
+              ))}
+            </div>
+          </div>
+          <div className="macts">
+            <button className="btn btn-s" onClick={() => setEditTask(null)}>Cancel</button>
+            <button className="btn btn-p" onClick={saveEdit}>Save Changes</button>
+          </div>
+        </div>
+      </div>}
+
       {modal && <div className="modal-bg" onClick={e => e.target === e.currentTarget && setModal(false)}>
         <div className="modal"><div className="mt">Add Task</div>
           <div className="fg"><label className="fl">Job</label>
@@ -1004,47 +1488,561 @@ function AdminTasks(props) {
           </div>
           <div className="fg"><label className="fl">Due Date</label>
             <input className="fi" type="date" value={nt.dueDate} onChange={e => setNt(p => ({ ...p, dueDate: e.target.value }))} /></div>
-          <div className="macts"><button className="btn btn-s" onClick={() => setModal(false)}>Cancel</button>
+
+          <div className="grid2" style={{ marginBottom: 18 }}>
+            <div>
+              <label className="fl">Priority</label>
+              <div style={{ display: "flex", gap: 8 }}>
+                {["normal","urgent"].map(p => (
+                  <button key={p} type="button" onClick={() => setNt(n => ({ ...n, priority: p }))}
+                    style={{ flex: 1, padding: "9px 0", borderRadius: 10, border: `1px solid ${nt.priority === p ? (p === "urgent" ? "var(--red)" : "var(--border)") : "var(--border)"}`,
+                      background: nt.priority === p ? (p === "urgent" ? "rgba(239,68,68,.18)" : "rgba(59,130,246,.12)") : "rgba(255,255,255,.04)",
+                      color: nt.priority === p ? (p === "urgent" ? "var(--red)" : "var(--sky2)") : "var(--silver)",
+                      fontFamily: "'Barlow Condensed'", fontWeight: 700, fontSize: 13, letterSpacing: 1, textTransform: "uppercase", cursor: "pointer" }}>
+                    {p === "urgent" ? "⚡ Urgent" : "Normal"}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div>
+              <label className="fl">Type</label>
+              <button type="button" onClick={() => setNt(n => ({ ...n, recurring: !n.recurring }))}
+                style={{ width: "100%", padding: "9px 0", borderRadius: 10,
+                  border: `1px solid ${nt.recurring ? "var(--accent)" : "var(--border)"}`,
+                  background: nt.recurring ? "rgba(245,158,11,.15)" : "rgba(255,255,255,.04)",
+                  color: nt.recurring ? "var(--accent)" : "var(--silver)",
+                  fontFamily: "'Barlow Condensed'", fontWeight: 700, fontSize: 13, letterSpacing: 1, textTransform: "uppercase", cursor: "pointer" }}>
+                🔁 {nt.recurring ? "Recurring" : "One-Time"}
+              </button>
+            </div>
+          </div>
+
+          {/* ── Photo at task creation ── */}
+          <div style={{ borderTop: "1px solid var(--border)", paddingTop: 14, marginTop: 4 }}>
+            <label className="fl" style={{ marginBottom: 8 }}>📷 Attach a Photo (optional)</label>
+            <input ref={photoRef} type="file" accept="image/*" style={{ display:"none" }} onChange={captureTaskPhoto} />
+            {!taskPhoto ? (
+              <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:8 }}>
+                <button className="btn btn-s btn-sm" style={{ justifyContent:"center" }}
+                  onClick={() => { photoRef.current?.setAttribute("capture","environment"); photoRef.current?.click(); }}>
+                  <Icon n="camera" s={15}/> Open Camera
+                </button>
+                <button className="btn btn-s btn-sm" style={{ justifyContent:"center" }}
+                  onClick={() => { photoRef.current?.removeAttribute("capture"); photoRef.current?.click(); }}>
+                  <Icon n="photo" s={15}/> From Library
+                </button>
+              </div>
+            ) : (
+              <div>
+                <div style={{ display:"flex", gap:10, marginBottom:10, alignItems:"flex-start" }}>
+                  <img src={taskPhoto.dataUrl} alt="preview" style={{ width:72, height:72, objectFit:"cover", borderRadius:8, border:"2px solid var(--border)", flexShrink:0 }} />
+                  <div style={{ flex:1 }}>
+                    <div style={{ display:"flex", gap:6, marginBottom:8 }}>
+                      {["before","after","concern"].map(k => (
+                        <button key={k} onClick={() => setTaskPhotoType(k)}
+                          style={{ padding:"4px 10px", borderRadius:6, border:`1px solid ${taskPhotoType===k?k==="before"?"var(--orange)":k==="after"?"var(--green)":"var(--red)":"transparent"}`,
+                            background: taskPhotoType===k?`rgba(${k==="before"?"249,115,22":k==="after"?"16,185,129":"239,68,68"},.18)`:"rgba(255,255,255,.06)",
+                            color: taskPhotoType===k?k==="before"?"var(--orange)":k==="after"?"var(--green)":"var(--red)":"var(--silver)",
+                            fontSize:11, fontWeight:700, cursor:"pointer", textTransform:"capitalize" }}>
+                          {k}
+                        </button>
+                      ))}
+                    </div>
+                    <input className="fi" value={taskPhotoNote} onChange={e => setTaskPhotoNote(e.target.value)}
+                      placeholder="Describe what this photo shows..." style={{ padding:"7px 10px", fontSize:12 }} />
+                  </div>
+                </div>
+                <button className="btn btn-s btn-sm" style={{ color:"var(--red)" }} onClick={() => setTaskPhoto(null)}>✕ Remove photo</button>
+              </div>
+            )}
+          </div>
+
+          <div className="macts"><button className="btn btn-s" onClick={() => { setModal(false); setTaskPhoto(null); }}>Cancel</button>
             <button className="btn btn-p" onClick={add} disabled={busy}>{busy ? <span className="spin" /> : "Add Task"}</button></div>
         </div></div>}
     </div>
   );
 }
 
-function Calendar({ tasks, jobs }) {
-  const [d, setD] = useState(new Date());
+function CalendarReport({ rangeStart, rangeEnd, reportJob, setReportJob, onClose, tasks, receipts, jobs, users, today, photos }) {
+  const lo = rangeStart < rangeEnd ? rangeStart : rangeEnd;
+  const hi = rangeStart < rangeEnd ? rangeEnd   : rangeStart;
+  const rTasks    = tasks.filter(t => (reportJob === "all" || t.jobId === reportJob) && t.dueDate && t.dueDate >= lo && t.dueDate <= hi);
+  const rReceipts = receipts.filter(r => (reportJob === "all" || r.jobId === reportJob) && r.createdAt >= lo && r.createdAt <= hi);
+  const rPhotos   = (photos||[]).filter(p => (reportJob === "all" || p.jobId === reportJob) && (p.date||"").slice(0,10) >= lo && (p.date||"").slice(0,10) <= hi);
+  const totalSpend = rReceipts.reduce((s, r) => s + (+r.amount || 0), 0);
+  const jobName = reportJob === "all" ? "All Jobs" : jobs.find(j => j.id === reportJob)?.name || reportJob;
+  const [lightbox, setLightbox] = useState(null);
+  return (
+    <div className="modal-bg" onClick={onClose}>
+      <div className="modal" style={{ maxWidth: 700, width: "100%", maxHeight: "90vh", overflowY: "auto" }} onClick={e => e.stopPropagation()}>
+        <div className="flexb" style={{ marginBottom: 18 }}>
+          <div>
+            <div className="mt" style={{ marginBottom: 4 }}>📊 Job Report</div>
+            <div className="muted" style={{ fontSize: 12 }}>{lo} → {hi} · {jobName}</div>
+          </div>
+          <button className="btn btn-p btn-sm" onClick={() => window.print()}><Icon n="print" s={14} /> Print</button>
+        </div>
+        <div className="fg"><label className="fl">Filter by Job</label>
+          <select className="fi" value={reportJob} onChange={e => setReportJob(e.target.value)}>
+            <option value="all">All Jobs</option>{jobs.map(j => <option key={j.id} value={j.id}>{j.name}</option>)}
+          </select>
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 10, marginBottom: 18 }}>
+          {[["Tasks", rTasks.length, "var(--sky2)"], ["Complete", rTasks.filter(t=>t.status==="done").length, "var(--green)"], [`$${totalSpend.toFixed(2)} spent`, "", "var(--accent)"]].map(([l,n,c]) => (
+            <div key={l} style={{ textAlign:"center",padding:"12px 8px",background:"rgba(0,0,0,.2)",borderRadius:10 }}>
+              <div style={{ fontFamily:"'Barlow Condensed'",fontSize:24,fontWeight:800,color:c }}>{n}</div>
+              <div className="muted" style={{ fontSize:11 }}>{l}</div>
+            </div>
+          ))}
+        </div>
+        {rTasks.length > 0 && (
+          <div style={{ marginBottom: 18 }}>
+            <div style={{ fontFamily:"'Barlow Condensed'",fontSize:15,fontWeight:700,marginBottom:10,color:"var(--sky2)" }}>TASKS</div>
+            <div className="tbl-wrap"><table><thead><tr><th>Job</th><th>Task</th><th>Assigned</th><th>Due</th><th>Status</th></tr></thead>
+              <tbody>{rTasks.map(t => {
+                const job = jobs.find(j=>j.id===t.jobId);
+                const assigned = (t.assignedTo||[]).map(id=>users.find(u=>u.id===id)?.name?.split(" ")[0]).filter(Boolean).join(", ");
+                const s = t.status==="done"?"done":(t.dueDate&&t.dueDate<today?"overdue":"pending");
+                return <tr key={t.id}>
+                  <td data-l="Job"><span className="tag-l" style={{ fontSize:11 }}>{job?.name}</span></td>
+                  <td data-l="Task" style={{ fontWeight:600 }}>{t.title}</td>
+                  <td data-l="Assigned" className="muted">{assigned}</td>
+                  <td data-l="Due" className="muted">{t.dueDate}</td>
+                  <td data-l="Status"><span className={`tag tag-${s}`}>{s}</span></td>
+                </tr>;
+              })}</tbody>
+            </table></div>
+
+          </div>
+        )}
+        {rReceipts.length > 0 && (
+          <div>
+            <div style={{ fontFamily:"'Barlow Condensed'",fontSize:15,fontWeight:700,marginBottom:10,color:"var(--accent)" }}>RECEIPTS</div>
+            <div className="tbl-wrap"><table><thead><tr><th>Date</th><th>Job</th><th>Vendor</th><th>By</th><th>Paid By</th><th style={{ textAlign:"right" }}>Amount</th></tr></thead>
+              <tbody>{rReceipts.map(r => {
+                const j=jobs.find(x=>x.id===r.jobId), cr=users.find(u=>u.id===r.crewId);
+                return <tr key={r.id}>
+                  <td data-l="Date" className="muted">{r.createdAt}</td>
+                  <td data-l="Job"><span className="tag-l" style={{ fontSize:11 }}>{j?.name}</span></td>
+                  <td data-l="Vendor">{r.store}</td>
+                  <td data-l="By" className="muted">{cr?.name}</td>
+                  <td data-l="Paid"><span className={"tag "+(r.paidBy==="crew"?"tag-overdue":"tag-done")}>{r.paidBy==="crew"?"Crew":"Company"}</span></td>
+                  <td data-l="Amount" style={{ textAlign:"right",fontWeight:700,color:"var(--accent)",fontFamily:"'Barlow Condensed'",fontSize:15 }}>${(+r.amount).toFixed(2)}</td>
+                </tr>;
+              })}</tbody>
+            </table></div>
+            <div style={{ textAlign:"right",marginTop:10,fontFamily:"'Barlow Condensed'",fontSize:20,fontWeight:800,color:"var(--accent)" }}>Total: ${totalSpend.toFixed(2)}</div>
+          </div>
+        )}
+        {/* Photos */}
+        {rPhotos.length > 0 && (
+          <div style={{ marginBottom: 18 }}>
+            <div style={{ fontFamily:"'Barlow Condensed'",fontSize:15,fontWeight:700,marginBottom:10,color:"var(--sky2)" }}>
+              PHOTOS ({rPhotos.length})
+            </div>
+            <div style={{ display:"flex", flexWrap:"wrap", gap:8 }}>
+              {rPhotos.map((p, i) => (
+                <div key={i} onClick={() => setLightbox(p)}
+                  style={{ position:"relative", width:72, height:72, borderRadius:8, overflow:"hidden", cursor:"zoom-in", flexShrink:0,
+                    border:`2px solid ${p.type==="before"?"var(--orange)":p.type==="after"?"var(--green)":"var(--red)"}` }}>
+                  {p.dataUrl
+                    ? <img src={p.dataUrl} alt={p.type} style={{ width:"100%", height:"100%", objectFit:"cover" }} />
+                    : <div style={{ width:"100%", height:"100%", display:"flex", alignItems:"center", justifyContent:"center", background:"rgba(0,0,0,.3)" }}><Icon n="camera" s={22} c="var(--slate)" /></div>}
+                  <div style={{ position:"absolute", bottom:0, left:0, right:0, background:"rgba(0,0,0,.65)", fontSize:9, textAlign:"center", color:"#fff", padding:"1px 0", fontWeight:700, textTransform:"uppercase" }}>
+                    {p.type}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {rTasks.length === 0 && rReceipts.length === 0 && rPhotos.length === 0 && (
+          <div className="empty"><p>No data in this range for {jobName}.</p></div>
+        )}
+        <div className="macts"><button className="btn btn-s" onClick={onClose}>Close</button></div>
+
+        {/* Lightbox */}
+        {lightbox && (
+          <div style={{ position:"fixed", inset:0, background:"rgba(0,0,0,.92)", display:"flex", alignItems:"center", justifyContent:"center", zIndex:400, padding:18 }}
+            onClick={() => setLightbox(null)}>
+            <div style={{ maxWidth:"90vw", textAlign:"center" }} onClick={e => e.stopPropagation()}>
+              <img src={lightbox.dataUrl} alt={lightbox.type} style={{ maxWidth:"100%", maxHeight:"75vh", borderRadius:12, objectFit:"contain" }} />
+              {lightbox.note && <div style={{ marginTop:10, color:"var(--white)", fontSize:14, background:"rgba(0,0,0,.5)", padding:"6px 14px", borderRadius:8, display:"inline-block" }}>{lightbox.note}</div>}
+              <div style={{ marginTop:12 }}><button className="btn btn-s" onClick={() => setLightbox(null)}>Close</button></div>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function Calendar({ tasks, setTasks, jobs, users, receipts }) {
+  const [d, setD]         = useState(new Date());
+  const [view, setView]   = useState("job");
   const [filter, setFilter] = useState("all");
-  const y = d.getFullYear(), m = d.getMonth();
-  const first = new Date(y, m, 1).getDay(), days = new Date(y, m + 1, 0).getDate();
+  const [rangeStart, setRangeStart] = useState(null);
+  const [rangeEnd,   setRangeEnd]   = useState(null);
+  const [dragging,   setDragging]   = useState(false);
+  const [reportModal, setReportModal] = useState(false);
+  const [reportJob,  setReportJob]  = useState("all");
+  const [selectedDay, setSelectedDay] = useState(null); // date string — day detail panel
+  const [editTask,   setEditTask]   = useState(null);   // task being edited
+  const [editForm,   setEditForm]   = useState({});
+  const [confirmDel, setConfirmDel] = useState(null);   // taskId to delete
+  const [addForDay,  setAddForDay]  = useState(null);   // date string — add task for day
+  const [newTask,    setNewTask]    = useState({ jobId:"", title:"", assignedTo:[] });
+  const y = d.getFullYear(), mo = d.getMonth();
+  const first = new Date(y, mo, 1).getDay(), days = new Date(y, mo + 1, 0).getDate();
   const today = new Date().toISOString().split("T")[0];
-  const ft = filter === "all" ? tasks : tasks.filter(t => t.jobId === filter);
-  const colors = { j1: "#3b82f6", j2: "#10b981", j3: "#f59e0b", j4: "#ef4444" };
-  const mn = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
-  const dn = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-  const forDay = day => { const ds = `${y}-${String(m + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`; return ft.filter(t => t.dueDate === ds || t.createdAt === ds); };
+  const mn = ["January","February","March","April","May","June","July","August","September","October","November","December"];
+  const dn = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
+
+  const ds = (day) => `${y}-${String(mo+1).padStart(2,"0")}-${String(day).padStart(2,"0")}`;
+
+  const inRange = (dateStr) => {
+    if (!rangeStart || !rangeEnd) return false;
+    const lo = rangeStart < rangeEnd ? rangeStart : rangeEnd;
+    const hi = rangeStart < rangeEnd ? rangeEnd   : rangeStart;
+    return dateStr >= lo && dateStr <= hi;
+  };
+  const isRangeEdge = (dateStr) => dateStr === rangeStart || dateStr === rangeEnd;
+
+  const handleDayDown = (day) => { const ds2 = ds(day); setRangeStart(ds2); setRangeEnd(ds2); setDragging(true); };
+  const handleDayEnter = (day) => { if (dragging) setRangeEnd(ds(day)); };
+  const handleDayUp = () => setDragging(false);
+
+  const clearRange = () => { setRangeStart(null); setRangeEnd(null); };
+
+  const openDay = (dateStr, e) => {
+    // Don't open day panel while doing range drag
+    if (dragging) return;
+    setSelectedDay(dateStr);
+    setAddForDay(null);
+  };
+
+  const todayStr = new Date().toISOString().split("T")[0];
+
+  const toggleTaskStatus = async (task) => {
+    const next = task.status === "done" ? "pending" : "done";
+    setTasks(p => p.map(t => t.id === task.id ? { ...t, status: next } : t));
+    try { await sbPatch("field_tasks", task.id, { status: next, completed_at: next === "done" ? new Date().toISOString() : null }); } catch {}
+  };
+
+  const deleteCalTask = async (id) => {
+    setTasks(p => p.filter(t => t.id !== id));
+    try { await sbDelete("field_tasks", id); } catch {}
+    setConfirmDel(null);
+  };
+
+  const saveEditTask = async () => {
+    if (!editTask) return;
+    setTasks(p => p.map(t => t.id === editTask.id ? { ...t, ...editForm } : t));
+    const patch = {};
+    if (editForm.title)   patch.title    = editForm.title;
+    if (editForm.dueDate !== undefined) patch.due_date = editForm.dueDate || null;
+    try { await sbFetch(`field_tasks?id=eq.${editTask.id}`, { method:"PATCH", body: JSON.stringify(patch), prefer:"return=minimal" }); } catch {}
+    setEditTask(null);
+  };
+
+  const addTaskForDay = async () => {
+    if (!newTask.title || !newTask.jobId) return;
+    const id = "t" + Date.now();
+    const task = { id, jobId: newTask.jobId, title: newTask.title, titleEs: newTask.title, assignedTo: newTask.assignedTo, dueDate: addForDay, status:"pending", createdAt: todayStr };
+    setTasks(p => [...p, task]);
+    const row = { id, job_id: newTask.jobId, title: newTask.title, title_es: newTask.title, assigned_to: newTask.assignedTo, due_date: addForDay, status:"pending" };
+    try { await sbPost("field_tasks", row); } catch { enqueue({ table:"field_tasks", payload: row }); }
+    setNewTask({ jobId:"", title:"", assignedTo:[] });
+    setAddForDay(null);
+  };
+
+  // Status colors (primary visual language)
+  const statusColor = task => {
+    if (task.status === "done")    return "#10b981"; // green
+    if (task.dueDate && task.dueDate < today) return "#ef4444"; // red overdue
+    return "#3b82f6"; // blue pending
+  };
+
+  // Per-worker palette for worker view legend
+  const crew = users.filter(u => u.role === "crew" && !u.archived);
+  const workerColors = ["#3b82f6","#10b981","#f59e0b","#8b5cf6","#ec4899","#06b6d4","#f97316","#84cc16"];
+  const workerColor  = id => workerColors[crew.findIndex(u => u.id === id) % workerColors.length] || "#64748b";
+
+  // Filtered tasks
+  const ft = tasks.filter(task => {
+    if (filter === "all") return true;
+    if (view === "job")    return task.jobId === filter;
+    if (view === "worker") return (Array.isArray(task.assignedTo) ? task.assignedTo.includes(filter) : task.assignedTo === filter);
+    return true;
+  });
+
+  // Events per day: issued (createdAt) + due (dueDate)
+  const eventsForDay = (day) => {
+    const date = ds(day);
+    const evs = [];
+    ft.forEach(task => {
+      if (task.dueDate === date)   evs.push({ task, kind: "due" });
+      else if (task.createdAt === date) evs.push({ task, kind: "issued" });
+    });
+    return evs;
+  };
+
+  const chipColor = (ev) => {
+    if (ev.kind === "issued") return "#64748b"; // grey = issued/assigned
+    return statusColor(ev.task);               // status color on due date
+  };
+
+  const chipLabel = (ev) => {
+    const base = ev.task.title.slice(0, 14);
+    const suffix = view === "job"
+      ? (ev.task.assignedTo?.[0] ? " · " + (users.find(u=>u.id===ev.task.assignedTo[0])?.name?.split(" ")[0]||"") : "")
+      : (" · " + (jobs.find(j=>j.id===ev.task.jobId)?.name?.slice(0,10)||""));
+    return (ev.kind === "issued" ? "📋 " : "") + base + suffix;
+  };
+
   return (
     <div>
-      <div className="flexb" style={{ marginBottom: 20 }}><h2 className="h2">Calendar</h2>
-        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+      {/* ── Controls ── */}
+      <div className="flexb" style={{ marginBottom: 16, flexWrap: "wrap", gap: 10 }}>
+        <h2 className="h2">Calendar</h2>
+        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+          {/* View toggle */}
+          <div style={{ display: "flex", borderRadius: 8, overflow: "hidden", border: "1px solid var(--border)" }}>
+            <button onClick={() => { setView("job");    setFilter("all"); }}
+              style={{ padding: "7px 14px", fontSize: 12, fontWeight: 700, fontFamily: "'Barlow Condensed'", border: "none", cursor: "pointer",
+                background: view==="job" ? "var(--sky-dim)" : "rgba(255,255,255,.06)", color: view==="job" ? "#fff" : "var(--silver)" }}>
+              By Job
+            </button>
+            <button onClick={() => { setView("worker"); setFilter("all"); }}
+              style={{ padding: "7px 14px", fontSize: 12, fontWeight: 700, fontFamily: "'Barlow Condensed'", border: "none", cursor: "pointer",
+                background: view==="worker" ? "var(--sky-dim)" : "rgba(255,255,255,.06)", color: view==="worker" ? "#fff" : "var(--silver)" }}>
+              By Worker
+            </button>
+          </div>
+          {/* Filter dropdown */}
           <select className="fi" style={{ width: "auto", padding: "8px 13px" }} value={filter} onChange={e => setFilter(e.target.value)}>
-            <option value="all">All Jobs</option>{jobs.map(j => <option key={j.id} value={j.id}>{j.name}</option>)}</select>
-          <button className="btn btn-s btn-sm" onClick={() => setD(new Date(y, m - 1, 1))}>‹</button>
-          <span style={{ padding: "8px 14px", fontFamily: "'Barlow Condensed'", fontWeight: 700, fontSize: 17 }}>{mn[m]} {y}</span>
-          <button className="btn btn-s btn-sm" onClick={() => setD(new Date(y, m + 1, 1))}>›</button>
-          <button className="btn btn-s btn-sm" onClick={() => window.print()}><Icon n="print" s={14} /> Print</button></div></div>
-      <div className="card" style={{ padding: 14 }}>
-        <div className="cal-grid">{dn.map(x => <div key={x} className="cal-h">{x}</div>)}
-          {Array(first).fill(0).map((_, i) => <div key={"e" + i} className="cal-d" style={{ opacity: .3 }} />)}
+            <option value="all">{view === "job" ? "All Jobs" : "All Workers"}</option>
+            {view === "job"
+              ? jobs.map(j => <option key={j.id} value={j.id}>{j.name}</option>)
+              : crew.map(u => <option key={u.id} value={u.id}>{u.name}</option>)
+            }
+          </select>
+          {/* Month nav */}
+          <button className="btn btn-s btn-sm" onClick={() => setD(new Date(y, mo-1, 1))}>‹</button>
+          <span style={{ padding: "8px 14px", fontFamily: "'Barlow Condensed'", fontWeight: 700, fontSize: 17, whiteSpace: "nowrap" }}>{mn[mo]} {y}</span>
+          <button className="btn btn-s btn-sm" onClick={() => setD(new Date(y, mo+1, 1))}>›</button>
+          <button className="btn btn-s btn-sm" onClick={() => window.print()}><Icon n="print" s={14} /> Print</button>
+          {rangeStart && rangeEnd && rangeStart !== rangeEnd && (
+            <button className="btn btn-a btn-sm" onClick={() => { setReportJob("all"); setReportModal(true); }}>
+              📊 Report ({rangeStart} → {rangeEnd})
+            </button>
+          )}
+          {rangeStart && <button className="btn btn-s btn-sm" onClick={clearRange}>✕ Clear</button>}
+        </div>
+      </div>
+
+      {/* ── Calendar grid ── */}
+      <div className="card" style={{ padding: 14 }}
+        onMouseLeave={() => { if (dragging) setDragging(false); }}
+        onMouseUp={handleDayUp}>
+        <p style={{ fontSize: 11, color: "var(--slate)", marginBottom: 8 }}>Click + drag days to select a date range, then click <strong>Report</strong>.</p>
+        <div className="cal-grid">
+          {dn.map(x => <div key={x} className="cal-h">{x}</div>)}
+          {Array(first).fill(0).map((_, i) => <div key={"e"+i} className="cal-d" style={{ opacity: .2 }} />)}
           {Array(days).fill(0).map((_, i) => {
-            const day = i + 1, ds = `${y}-${String(m + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`, dt = forDay(day);
-            return <div key={day} className={`cal-d ${ds === today ? "today" : ""}`}>
-              <div style={{ fontWeight: 700, color: "var(--silver)", marginBottom: 3 }}>{day}</div>
-              {dt.slice(0, 3).map(task => <div key={task.id} className="cal-ev" title={task.title} style={{ background: colors[task.jobId] || "var(--sky-dim)" }}>{task.title.slice(0, 16)}</div>)}
-              {dt.length > 3 && <div style={{ fontSize: 10, color: "var(--silver)" }}>+{dt.length - 3}</div>}</div>;
-          })}</div></div>
-      <div className="card"><div className="ct">Legend</div><div style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>
-        {jobs.map(j => <div key={j.id} style={{ display: "flex", alignItems: "center", gap: 7 }}>
-          <div style={{ width: 13, height: 13, borderRadius: 3, background: colors[j.id] || "var(--sky)" }} /><span style={{ fontSize: 13 }}>{j.name}</span></div>)}</div></div>
+            const day = i + 1, evs = eventsForDay(day), date = ds(day);
+            const ranged = inRange(date), edge = isRangeEdge(date);
+            const isSelected = selectedDay === date;
+            return <div key={day}
+              className={`cal-d ${date === today ? "today" : ""}`}
+              style={{ cursor:"pointer", userSelect:"none",
+                background: isSelected ? "rgba(245,158,11,.18)" : edge ? "rgba(59,130,246,.35)" : ranged ? "rgba(59,130,246,.15)" : undefined,
+                borderColor: isSelected ? "var(--accent)" : edge ? "var(--sky)" : ranged ? "rgba(59,130,246,.4)" : undefined }}
+              onMouseDown={() => handleDayDown(day)}
+              onMouseEnter={() => handleDayEnter(day)}
+              onMouseUp={() => { handleDayUp(); openDay(date); }}>
+              <div style={{ fontWeight:700, color: isSelected ? "var(--accent)" : edge ? "var(--sky2)" : "var(--silver)", marginBottom:3 }}>{day}</div>
+              {evs.slice(0, 3).map((ev, ei) => (
+                <div key={ei} className="cal-ev"
+                  title={`${ev.task.title} — ${ev.kind === "issued" ? "Issued" : ev.task.status}`}
+                  style={{ background: chipColor(ev), opacity: ev.kind === "issued" ? .75 : 1, cursor:"pointer" }}
+                  onClick={e => { e.stopPropagation(); setSelectedDay(date); }}>
+                  {chipLabel(ev).slice(0, 18)}
+                </div>
+              ))}
+              {evs.length > 3 && <div style={{ fontSize:9, color:"var(--slate)", marginTop:2 }}>+{evs.length-3} more</div>}
+            </div>;
+          })}
+        </div>
+      </div>
+
+      {/* ── Day Detail Panel ── */}
+      {selectedDay && (() => {
+        const dayTasks = ft.filter(t => t.dueDate === selectedDay || t.createdAt === selectedDay);
+        const dn2 = new Date(selectedDay + "T12:00:00").toLocaleDateString([], { weekday:"long", month:"long", day:"numeric" });
+        return (
+          <div className="card" style={{ marginBottom: 16, borderLeft:"4px solid var(--accent)" }}>
+            <div className="flexb" style={{ marginBottom:12 }}>
+              <div>
+                <div style={{ fontFamily:"'Barlow Condensed'", fontSize:18, fontWeight:800, color:"var(--accent)" }}>{dn2}</div>
+                <div className="muted" style={{ fontSize:12 }}>{dayTasks.length} task{dayTasks.length!==1?"s":""} on this date</div>
+              </div>
+              <div style={{ display:"flex", gap:8 }}>
+                <button className="btn btn-p btn-sm" onClick={() => { setAddForDay(selectedDay); setNewTask({ jobId:"", title:"", assignedTo:[] }); }}>
+                  + Add Task
+                </button>
+                <button className="btn btn-s btn-sm" onClick={() => setSelectedDay(null)}>✕</button>
+              </div>
+            </div>
+
+            {dayTasks.length === 0
+              ? <div className="empty" style={{ padding:"12px 0" }}><p style={{ fontSize:13 }}>No tasks due or created on this day.</p></div>
+              : dayTasks.map(task => {
+                  const job = jobs.find(j => j.id === task.jobId);
+                  const assigned = (task.assignedTo||[]).map(id => users.find(u => u.id === id)?.name?.split(" ")[0]).filter(Boolean).join(", ");
+                  const s = task.status === "done" ? "done" : (task.dueDate && task.dueDate < todayStr ? "overdue" : "pending");
+                  return (
+                    <div key={task.id} style={{ display:"flex", alignItems:"flex-start", gap:10, padding:"10px 0", borderBottom:"1px solid rgba(255,255,255,.05)" }}>
+                      <input type="checkbox" checked={task.status === "done"} onChange={() => toggleTaskStatus(task)}
+                        style={{ width:18, height:18, accentColor:"var(--sky)", marginTop:2, flexShrink:0 }} />
+                      <div style={{ flex:1 }}>
+                        <div style={{ fontWeight:600, fontSize:14, textDecoration:task.status==="done"?"line-through":"none", opacity:task.status==="done"?.6:1 }}>{task.title}</div>
+                        <div style={{ fontSize:11, color:"var(--silver)", marginTop:2 }}>
+                          <span className={`tag tag-${s}`} style={{ marginRight:6 }}>{s}</span>
+                          {job?.name && <span className="tag-l" style={{ fontSize:10, marginRight:6 }}>{job.name}</span>}
+                          {assigned && <span style={{ color:"var(--slate)" }}>{assigned}</span>}
+                        </div>
+                      </div>
+                      <div style={{ display:"flex", gap:6, flexShrink:0 }}>
+                        <button className="btn btn-s btn-sm btn-ic" title="Edit" onClick={() => { setEditTask(task); setEditForm({ title:task.title, dueDate:task.dueDate||"" }); }}>
+                          <Icon n="pen" s={13}/>
+                        </button>
+                        <button className="btn btn-s btn-sm btn-ic" style={{ color:"var(--red)" }} title="Delete" onClick={() => setConfirmDel(task.id)}>
+                          <Icon n="x" s={13}/>
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })
+            }
+          </div>
+        );
+      })()}
+
+      {/* ── Legend ── */}
+      <div className="card">
+        <div className="ct">Legend</div>
+        <div style={{ display: "flex", gap: 16, flexWrap: "wrap", marginBottom: 12 }}>
+          {[["#64748b","📋 Issued / Assigned"],["#3b82f6","Pending (due)"],["#10b981","✓ Complete"],["#ef4444","⚠ Overdue"]].map(([c,l]) => (
+            <div key={l} style={{ display: "flex", alignItems: "center", gap: 7 }}>
+              <div style={{ width: 13, height: 13, borderRadius: 3, background: c }} /><span style={{ fontSize: 13 }}>{l}</span>
+            </div>
+          ))}
+        </div>
+        {view === "worker" && (
+          <div style={{ display: "flex", gap: 12, flexWrap: "wrap", paddingTop: 10, borderTop: "1px solid var(--border)" }}>
+            {crew.map(u => (
+              <div key={u.id} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13 }}>
+                <div style={{ width: 10, height: 10, borderRadius: "50%", background: workerColor(u.id) }} />{u.name}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* ── Edit Task Modal ── */}
+      {editTask && (
+        <div className="modal-bg" onClick={() => setEditTask(null)}>
+          <div className="modal" onClick={e => e.stopPropagation()}>
+            <div className="mt">Edit Task</div>
+            <div className="fg"><label className="fl">Task Title</label>
+              <input className="fi" value={editForm.title} onChange={e => setEditForm(p=>({...p,title:e.target.value}))} /></div>
+            <div className="fg"><label className="fl">Due Date</label>
+              <input className="fi" type="date" value={editForm.dueDate} onChange={e => setEditForm(p=>({...p,dueDate:e.target.value}))} /></div>
+            <div className="macts">
+              <button className="btn btn-s" style={{ marginRight:"auto", color:"var(--red)" }} onClick={() => { setConfirmDel(editTask.id); setEditTask(null); }}>Delete</button>
+              <button className="btn btn-s" onClick={() => setEditTask(null)}>Cancel</button>
+              <button className="btn btn-p" onClick={saveEditTask}>Save</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Delete Confirm ── */}
+      {confirmDel && (
+        <div className="modal-bg" onClick={() => setConfirmDel(null)}>
+          <div className="modal" onClick={e => e.stopPropagation()}>
+            <div className="mt">Delete this task?</div>
+            <p className="muted" style={{ lineHeight:1.6 }}>Permanently removes the task and all its history. Cannot be undone.</p>
+            <div className="macts">
+              <button className="btn btn-s" onClick={() => setConfirmDel(null)}>Cancel</button>
+              <button className="btn" style={{ background:"linear-gradient(135deg,#dc2626,var(--red))",color:"#fff" }} onClick={() => deleteCalTask(confirmDel)}>Delete</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Add Task for Day ── */}
+      {addForDay && (
+        <div className="modal-bg" onClick={() => setAddForDay(null)}>
+          <div className="modal" onClick={e => e.stopPropagation()}>
+            <div className="mt">Add Task — {new Date(addForDay+"T12:00:00").toLocaleDateString([], { month:"long", day:"numeric" })}</div>
+            <div className="fg"><label className="fl">Job</label>
+              <select className="fi" value={newTask.jobId} onChange={e => setNewTask(p=>({...p,jobId:e.target.value}))}>
+                <option value="">Select job...</option>
+                {jobs.filter(j=>j.status!=="closed").map(j=><option key={j.id} value={j.id}>{j.name}</option>)}
+              </select></div>
+            <div className="fg"><label className="fl">Task Description</label>
+              <input className="fi" value={newTask.title} onChange={e => setNewTask(p=>({...p,title:e.target.value}))} placeholder="What needs to be done..." /></div>
+            <div className="fg"><label className="fl">Assign To</label>
+              <div style={{ background:"rgba(0,0,0,.15)", borderRadius:10, padding:"4px", border:"1px solid var(--border)" }}>
+                {users.filter(u=>u.role==="crew"&&!u.archived).map(u => (
+                  <label key={u.id} style={{ display:"flex", alignItems:"center", gap:10, padding:"7px 10px", cursor:"pointer", borderRadius:8,
+                    background:newTask.assignedTo.includes(u.id)?"rgba(59,130,246,.1)":"transparent" }}>
+                    <input type="checkbox" checked={newTask.assignedTo.includes(u.id)}
+                      onChange={() => setNewTask(p=>({...p, assignedTo: p.assignedTo.includes(u.id)?p.assignedTo.filter(x=>x!==u.id):[...p.assignedTo,u.id] }))}
+                      style={{ accentColor:"var(--sky)", width:16, height:16 }} />
+                    <span style={{ fontSize:14 }}>{u.name}</span>
+                  </label>
+                ))}
+              </div></div>
+            <div className="macts">
+              <button className="btn btn-s" onClick={() => setAddForDay(null)}>Cancel</button>
+              <button className="btn btn-p" disabled={!newTask.title||!newTask.jobId} onClick={addTaskForDay}>Add Task</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Report Modal ── */}
+      {reportModal && rangeStart && rangeEnd && (
+        <CalendarReport rangeStart={rangeStart} rangeEnd={rangeEnd} reportJob={reportJob}
+          setReportJob={setReportJob} onClose={() => setReportModal(false)}
+          tasks={tasks} receipts={receipts || []} photos={photos || []} jobs={jobs} users={users} today={today} />
+      )}
+
+      {/* ── Print-only task list ── */}
+      <div style={{ display: "none" }} className="print-task-list">
+        <h3 style={{ marginBottom: 12 }}>{mn[mo]} {y} — {view === "job" ? "By Job" : "By Worker"}{filter !== "all" ? ` — ${view==="job" ? jobs.find(j=>j.id===filter)?.name : users.find(u=>u.id===filter)?.name}` : ""}</h3>
+        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+          <thead><tr style={{ borderBottom: "2px solid #000" }}><th style={{ textAlign:"left",padding:"4px 8px" }}>Task</th><th style={{ textAlign:"left",padding:"4px 8px" }}>Job</th><th style={{ textAlign:"left",padding:"4px 8px" }}>Worker</th><th style={{ textAlign:"left",padding:"4px 8px" }}>Issued</th><th style={{ textAlign:"left",padding:"4px 8px" }}>Due</th><th style={{ textAlign:"left",padding:"4px 8px" }}>Status</th></tr></thead>
+          <tbody>{ft.sort((a,b)=>(a.dueDate||"").localeCompare(b.dueDate||"")).map(task => {
+            const job = jobs.find(j=>j.id===task.jobId);
+            const assigned = (task.assignedTo||[]).map(id=>users.find(u=>u.id===id)?.name).filter(Boolean).join(", ");
+            const s = task.status === "done" ? "✓ Done" : (task.dueDate && task.dueDate < today ? "Overdue" : "Pending");
+            return <tr key={task.id} style={{ borderBottom: "1px solid #ddd" }}>
+              <td style={{ padding:"4px 8px" }}>{task.title}</td>
+              <td style={{ padding:"4px 8px" }}>{job?.name}</td>
+              <td style={{ padding:"4px 8px" }}>{assigned}</td>
+              <td style={{ padding:"4px 8px" }}>{task.createdAt}</td>
+              <td style={{ padding:"4px 8px" }}>{task.dueDate||"—"}</td>
+              <td style={{ padding:"4px 8px", fontWeight: 700 }}>{s}</td>
+            </tr>;
+          })}</tbody>
+        </table>
+      </div>
     </div>
   );
 }
@@ -1083,11 +2081,17 @@ function Report({ tasks, jobs, users, logs, t }) {
   );
 }
 
-function AdminReceipts({ receipts, setReceipts, jobs, tasks, users, user }) {
+function AdminReceipts({ receipts, setReceipts, jobs, tasks, users, user, deleteReceipt, reassignReceipt }) {
   const [modal, setModal] = useState(false);
   const [nr, setNr] = useState({ jobId: "", taskId: "", crewId: "", store: "", amount: "", note: "", paidBy: "company", dataUrl: null });
   const [busy, setBusy] = useState(false);
   const fileRef = useRef();
+  const [lightbox, setLightbox] = useState(null);
+  const [confirmDel, setConfirmDel] = useState(null);
+  const [reassign, setReassign] = useState(null); // receipt object
+  const [reassignJob, setReassignJob] = useState("");
+  const [reassignTask, setReassignTask] = useState("");
+  const [reassignConfirm, setReassignConfirm] = useState(false);
   const today = new Date().toISOString().split("T")[0];
   const jobTasks = tasks.filter(t => t.jobId === nr.jobId);
 
@@ -1159,16 +2163,27 @@ function AdminReceipts({ receipts, setReceipts, jobs, tasks, users, user }) {
             <span style={{ fontFamily: "'Barlow Condensed'", fontWeight: 800, fontSize: 20, color: "var(--accent)" }}>${total.toFixed(2)}</span>
           </div>
           <div className="tbl-wrap"><table><thead><tr>
-            <th>Date</th><th>By</th><th>Job</th><th>Vendor</th><th>Memo</th>
-            <th>Paid By</th><th>Reimburse</th><th>Photo</th><th style={{ textAlign: "right" }}>Amount</th>
+            <th>Photo</th><th>Date</th><th>By</th><th>Job</th><th>Vendor</th><th>Memo</th>
+            <th>Paid By</th><th>Reimburse</th><th style={{ textAlign: "right" }}>Amount</th><th></th>
           </tr></thead>
           <tbody>{receipts.map(r => {
             const j=jobs.find(x=>x.id===r.jobId), cr=users.find(u=>u.id===r.crewId);
             const needsReimb=r.paidBy==="crew"&&r.reimbursementStatus!=="paid";
             return <tr key={r.id}>
+              <td data-l="Photo">
+                {r.dataUrl
+                  ? <img src={r.dataUrl} alt="rcpt" onClick={() => setLightbox(r.dataUrl)}
+                      style={{ width:48,height:48,objectFit:"cover",borderRadius:6,cursor:"zoom-in",border:"2px solid var(--border)" }} />
+                  : <span className="muted">—</span>}
+              </td>
               <td data-l="Date" className="muted">{r.createdAt}</td>
               <td data-l="By">{cr?.name||"Admin"}</td>
-              <td data-l="Job"><span className="tag-l" style={{ fontSize: 11 }}>{j?.name}</span></td>
+              <td data-l="Job">
+                <button onClick={() => { setReassign(r); setReassignJob(r.jobId||""); setReassignTask(r.taskId||""); setReassignConfirm(false); }}
+                  style={{ background:"none",border:"none",cursor:"pointer",color:"var(--sky2)",fontSize:12,textDecoration:"underline",padding:0 }}>
+                  {j?.name || "—"}
+                </button>
+              </td>
               <td data-l="Vendor">{r.store}</td>
               <td data-l="Memo" className="muted">{r.note}</td>
               <td data-l="Paid By"><span className={"tag " + (r.paidBy==="crew"?"tag-overdue":"tag-done")}>{r.paidBy==="crew"?"Crew":"Company"}</span></td>
@@ -1177,12 +2192,78 @@ function AdminReceipts({ receipts, setReceipts, jobs, tasks, users, user }) {
                   ?<button className="btn btn-sm" style={{ background:"rgba(249,115,22,.15)",color:"var(--orange)",padding:"4px 10px",fontSize:11,border:"1px solid rgba(249,115,22,.4)" }} onClick={()=>markReimbursed(r.id)}>Mark Paid</button>
                   :<span className="tag tag-done">Reimbursed</span>
                 :<span className="muted">—</span>}</td>
-              <td data-l="Photo">{r.dataUrl?<img src={r.dataUrl} alt="rcpt" style={{ width:40,height:40,objectFit:"cover",borderRadius:6 }} />:<span className="muted">—</span>}</td>
               <td data-l="Amount" style={{ textAlign:"right",fontWeight:700,color:needsReimb?"var(--orange)":"var(--accent)" }}>${(+r.amount).toFixed(2)}</td>
+              <td><button onClick={() => setConfirmDel(r.id)} style={{ background:"none",border:"none",cursor:"pointer",color:"var(--red)",fontSize:16,padding:4 }}>✕</button></td>
             </tr>;
           })}</tbody></table></div>
         </div>
       }
+
+      {/* Lightbox */}
+      {lightbox && (
+        <div className="modal-bg" onClick={() => setLightbox(null)}>
+          <div style={{ position: "relative", maxWidth: "90vw" }} onClick={e => e.stopPropagation()}>
+            <img src={lightbox} alt="receipt" style={{ maxWidth: "100%", maxHeight: "80vh", borderRadius: 12 }} />
+            <div style={{ display: "flex", gap: 10, justifyContent: "center", marginTop: 14 }}>
+              <button className="btn btn-s" onClick={() => setLightbox(null)}>Close</button>
+              <button className="btn btn-p" onClick={() => { const w = window.open("","_blank"); w.document.write(`<html><body style="margin:0"><img src="${lightbox}" style="max-width:100%;display:block"/></body></html>`); w.print(); }}><Icon n="print" s={14} /> Print Receipt</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Delete confirm */}
+      {confirmDel && (
+        <div className="modal-bg" onClick={() => setConfirmDel(null)}>
+          <div className="modal" onClick={e => e.stopPropagation()}>
+            <div className="mt">Delete this receipt?</div>
+            <p className="muted" style={{ lineHeight: 1.6 }}>Permanently removes the receipt and cannot be undone.</p>
+            <div className="macts">
+              <button className="btn btn-s" onClick={() => setConfirmDel(null)}>Cancel</button>
+              <button className="btn" style={{ background: "linear-gradient(135deg,#dc2626,var(--red))", color: "#fff" }} onClick={() => { deleteReceipt(confirmDel); setConfirmDel(null); }}>Delete</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Reassign receipt */}
+      {reassign && (() => {
+        const jobTasks2 = tasks.filter(t => t.jobId === reassignJob);
+        return (
+          <div className="modal-bg" onClick={() => { setReassign(null); setReassignConfirm(false); }}>
+            <div className="modal" onClick={e => e.stopPropagation()}>
+              <div className="mt">Reassign Receipt</div>
+              <p className="muted" style={{ marginBottom: 14 }}>Currently: <strong>{jobs.find(j=>j.id===reassign.jobId)?.name || "—"}</strong></p>
+              {!reassignConfirm ? (
+                <>
+                  <div className="fg"><label className="fl">New Job</label>
+                    <select className="fi" value={reassignJob} onChange={e => { setReassignJob(e.target.value); setReassignTask(""); }}>
+                      <option value="">Select Job</option>{jobs.filter(j=>j.status!=="closed").map(j=><option key={j.id} value={j.id}>{j.name}</option>)}
+                    </select></div>
+                  <div className="fg"><label className="fl">Task (optional)</label>
+                    <select className="fi" value={reassignTask} onChange={e => setReassignTask(e.target.value)} disabled={!reassignJob}>
+                      <option value="">No specific task</option>{jobTasks2.map(t=><option key={t.id} value={t.id}>{t.title}</option>)}
+                    </select></div>
+                  <div className="macts">
+                    <button className="btn btn-s" onClick={() => { setReassign(null); }}>Cancel</button>
+                    <button className="btn btn-p" disabled={!reassignJob} onClick={() => setReassignConfirm(true)}>Apply Change</button>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <p style={{ color: "var(--orange)", marginBottom: 14, fontWeight: 600 }}>
+                    ⚠ Move receipt to "{jobs.find(j=>j.id===reassignJob)?.name}"? This cannot be undone.
+                  </p>
+                  <div className="macts">
+                    <button className="btn btn-s" onClick={() => setReassignConfirm(false)}>No — Go Back</button>
+                    <button className="btn btn-g" onClick={() => { reassignReceipt(reassign.id, { jobId: reassignJob, taskId: reassignTask || null }); setReassign(null); setReassignConfirm(false); }}>Yes — Move It</button>
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
+        );
+      })()}
 
       {modal && <div className="modal-bg" onClick={e=>e.target===e.currentTarget&&setModal(false)}>
         <div className="modal"><div className="mt">Add Receipt</div>
@@ -1237,14 +2318,22 @@ function AdminReceipts({ receipts, setReceipts, jobs, tasks, users, user }) {
 }
 
 
-function AdminPhotos({ photos, setPhotos, tasks, jobs, users, user }) {
+function AdminPhotos({ photos, setPhotos, tasks, jobs, users, user, deletePhoto, reassignPhoto }) {
   const [jobFilter, setJobFilter] = useState("all");
   const [uploadJob, setUploadJob] = useState("");
   const [uploadTask, setUploadTask] = useState("");
   const [uploadType, setUploadType] = useState("progress");
   const [busy, setBusy] = useState(false);
-  const [saved, setSaved] = useState(0); // count saved this session for this job
+  const [saved, setSaved] = useState(0);
   const fileRef = useRef();
+  const [lightbox, setLightbox] = useState(null);
+  const [confirmDel, setConfirmDel] = useState(null);
+  const [reassign, setReassign] = useState(null);
+  const [reassignJob, setReassignJob] = useState("");
+  const [reassignTask, setReassignTask] = useState("");
+  const [reassignConfirm, setReassignConfirm] = useState(false);
+  const [pendingAdminPhoto, setPendingAdminPhoto] = useState(null); // { dataUrl, sizeKB }
+  const [adminPhotoNote, setAdminPhotoNote] = useState("");
 
   const jobTasks = tasks.filter(t => t.jobId === uploadJob);
   const sessionPhotos = photos.filter(p => p.jobId === uploadJob);
@@ -1254,14 +2343,25 @@ function AdminPhotos({ photos, setPhotos, tasks, jobs, users, user }) {
     if (!file || !uploadJob) return;
     setBusy(true);
     const { dataUrl, sizeKB } = await compressImage(file);
-    const id = "p" + Date.now();
-    const photo = { id, dataUrl, type: uploadType, taskId: uploadTask || null, jobId: uploadJob, crewId: user.id, sizeKB, date: new Date().toISOString() };
-    setPhotos(p => [...p, photo]);
-    const row = { id, data_url: dataUrl, photo_type: uploadType, task_id: uploadTask || null, job_id: uploadJob, crew_id: user.id, size_kb: sizeKB };
-    try { await sbPost("field_photos", row); } catch { enqueue({ table: "field_photos", payload: row }); }
     e.target.value = "";
-    setSaved(s => s + 1);
     setBusy(false);
+    setPendingAdminPhoto({ dataUrl, sizeKB });
+    setAdminPhotoNote("");
+  };
+
+  const saveAdminPhoto = async (note) => {
+    if (!pendingAdminPhoto || !uploadJob) return;
+    setBusy(true);
+    const id = "p" + Date.now();
+    const { dataUrl, sizeKB } = pendingAdminPhoto;
+    const photo = { id, dataUrl, type: uploadType, taskId: uploadTask || null, jobId: uploadJob, crewId: user.id, sizeKB, note: note || "", date: new Date().toISOString() };
+    setPhotos(p => [...p, photo]);
+    const row = { id, data_url: dataUrl, photo_type: uploadType, task_id: uploadTask || null, job_id: uploadJob, crew_id: user.id, size_kb: sizeKB, note: note || null };
+    try { await sbPost("field_photos", row); } catch { enqueue({ table: "field_photos", payload: row }); }
+    setPendingAdminPhoto(null);
+    setAdminPhotoNote("");
+    setBusy(false);
+    setSaved(s => s + 1);
   };
 
   const nextJob = () => {
@@ -1349,11 +2449,18 @@ function AdminPhotos({ photos, setPhotos, tasks, jobs, users, user }) {
                   {jp.map((p, i) => {
                     const who = users.find(u => u.id === p.crewId);
                     return (
-                      <div key={i} className="pthumb" title={(who?.name || "Admin") + " · " + (p.date || "").slice(0, 10)}>
-                        {p.dataUrl ? <img src={p.dataUrl} alt={p.type} /> : <Icon n="camera" s={28} c="var(--slate)" />}
-                        <div className="plabel" style={{ color: p.type === "before" ? "var(--orange)" : p.type === "after" ? "var(--green)" : "var(--sky2)" }}>
-                          {p.type}
+                      <div key={i} style={{ display:"flex", flexDirection:"column", width:110 }}>
+                        <div className="pthumb" title={(who?.name || "Admin") + " · " + (p.date || "").slice(0, 10)} style={{ position:"relative", width:110, height:110, flexShrink:0 }}>
+                          {p.dataUrl
+                            ? <img src={p.dataUrl} alt={p.type} onClick={() => setLightbox(p)} style={{ cursor: "zoom-in" }} />
+                            : <Icon n="camera" s={28} c="var(--slate)" />}
+                          <div className="plabel" style={{ color: p.type === "before" ? "var(--orange)" : p.type === "after" ? "var(--green)" : "var(--sky2)" }}>{p.type}</div>
+                          <button onClick={() => setConfirmDel(p.id)}
+                            style={{ position:"absolute",top:3,right:3,background:"rgba(239,68,68,.85)",border:"none",borderRadius:4,color:"#fff",cursor:"pointer",fontSize:10,padding:"2px 4px",lineHeight:1 }}>✕</button>
+                          <button onClick={() => { setReassign(p); setReassignJob(p.jobId||""); setReassignTask(p.taskId||""); setReassignConfirm(false); }}
+                            style={{ position:"absolute",top:3,left:3,background:"rgba(59,130,246,.85)",border:"none",borderRadius:4,color:"#fff",cursor:"pointer",fontSize:10,padding:"2px 4px",lineHeight:1 }}>✎</button>
                         </div>
+                        {p.note && <div style={{ fontSize:10, color:"var(--silver)", marginTop:4, lineHeight:1.3, wordBreak:"break-word", maxHeight:36, overflow:"hidden" }}>{p.note}</div>}
                       </div>
                     );
                   })}
@@ -1362,6 +2469,102 @@ function AdminPhotos({ photos, setPhotos, tasks, jobs, users, user }) {
             );
           })
       }
+
+      {/* Admin photo description modal */}
+      {pendingAdminPhoto && (
+        <div className="modal-bg">
+          <div className="modal" onClick={e => e.stopPropagation()}>
+            <div className="mt">📷 Describe this photo</div>
+            <div style={{ display:"flex", gap:12, marginBottom:16, alignItems:"flex-start" }}>
+              <img src={pendingAdminPhoto.dataUrl} alt="preview"
+                style={{ width:90, height:90, objectFit:"cover", borderRadius:10, flexShrink:0, border:"2px solid var(--border)" }} />
+              <div style={{ flex:1 }}>
+                <p className="muted" style={{ fontSize:12, marginBottom:8 }}>Add a description so this photo is searchable and understood in reports.</p>
+                <textarea className="fi" rows={4} autoFocus
+                  value={adminPhotoNote} onChange={e => setAdminPhotoNote(e.target.value)}
+                  placeholder="e.g. North wall framing complete, moisture issue under deck, tile layout before grouting..." />
+              </div>
+            </div>
+            <div className="macts">
+              <button className="btn btn-s" onClick={() => saveAdminPhoto("")}>Save without description</button>
+              <button className="btn btn-p" disabled={busy} onClick={() => saveAdminPhoto(adminPhotoNote)}>
+                {busy ? <span className="spin"/> : <><Icon n="check" s={14}/> Save Photo</>}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Photo lightbox */}
+      {lightbox && (
+        <div className="modal-bg" onClick={() => setLightbox(null)}>
+          <div style={{ maxWidth: "90vw" }} onClick={e => e.stopPropagation()}>
+            <img src={lightbox.dataUrl} alt={lightbox.type} style={{ maxWidth: "100%", maxHeight: "75vh", borderRadius: 12, objectFit: "contain" }} />
+            {lightbox.note && (
+              <div style={{ marginTop:10, padding:"8px 14px", background:"rgba(0,0,0,.5)", borderRadius:8, color:"var(--white)", fontSize:14, textAlign:"center" }}>
+                {lightbox.note}
+              </div>
+            )}
+            <div style={{ display: "flex", gap: 10, justifyContent: "center", marginTop: 14 }}>
+              <button className="btn btn-s" onClick={() => setLightbox(null)}>Close</button>
+              <button className="btn btn-p" onClick={() => { const w = window.open("","_blank"); w.document.write(`<html><body style="margin:0"><img src="${lightbox.dataUrl}" style="max-width:100%;display:block"/></body></html>`); w.print(); }}><Icon n="print" s={14} /> Print</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Delete confirm */}
+      {confirmDel && (
+        <div className="modal-bg" onClick={() => setConfirmDel(null)}>
+          <div className="modal" onClick={e => e.stopPropagation()}>
+            <div className="mt">Delete this photo?</div>
+            <p className="muted">This permanently removes the photo and cannot be undone.</p>
+            <div className="macts">
+              <button className="btn btn-s" onClick={() => setConfirmDel(null)}>Cancel</button>
+              <button className="btn" style={{ background: "linear-gradient(135deg,#dc2626,var(--red))", color: "#fff" }} onClick={() => { deletePhoto(confirmDel); setConfirmDel(null); }}>Delete</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Reassign photo */}
+      {reassign && (() => {
+        const jobTasks2 = tasks.filter(t => t.jobId === reassignJob);
+        return (
+          <div className="modal-bg" onClick={() => { setReassign(null); setReassignConfirm(false); }}>
+            <div className="modal" onClick={e => e.stopPropagation()}>
+              <div className="mt">Reassign Photo</div>
+              <p className="muted" style={{ marginBottom: 14 }}>Currently: <strong>{jobs.find(j=>j.id===reassign.jobId)?.name || "—"}</strong> · {reassign.type}</p>
+              {!reassignConfirm ? (
+                <>
+                  <div className="fg"><label className="fl">New Job</label>
+                    <select className="fi" value={reassignJob} onChange={e => { setReassignJob(e.target.value); setReassignTask(""); }}>
+                      <option value="">Select Job</option>{jobs.filter(j=>j.status!=="closed").map(j=><option key={j.id} value={j.id}>{j.name}</option>)}
+                    </select></div>
+                  <div className="fg"><label className="fl">Task (optional)</label>
+                    <select className="fi" value={reassignTask} onChange={e => setReassignTask(e.target.value)} disabled={!reassignJob}>
+                      <option value="">No specific task</option>{jobTasks2.map(t=><option key={t.id} value={t.id}>{t.title}</option>)}
+                    </select></div>
+                  <div className="macts">
+                    <button className="btn btn-s" onClick={() => setReassign(null)}>Cancel</button>
+                    <button className="btn btn-p" disabled={!reassignJob} onClick={() => setReassignConfirm(true)}>Apply Change</button>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <p style={{ color: "var(--orange)", marginBottom: 14, fontWeight: 600 }}>
+                    ⚠ Move photo to "{jobs.find(j=>j.id===reassignJob)?.name}"? This cannot be undone.
+                  </p>
+                  <div className="macts">
+                    <button className="btn btn-s" onClick={() => setReassignConfirm(false)}>No — Go Back</button>
+                    <button className="btn btn-g" onClick={() => { reassignPhoto(reassign.id, { jobId: reassignJob, taskId: reassignTask || null }); setReassign(null); setReassignConfirm(false); }}>Yes — Move It</button>
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 }
@@ -1537,16 +2740,25 @@ function CrewMgmt({ users, tasks, setActive, addUser, updateUser, removeUser, ar
   const isActive = m => m.active !== false;
   const appUrl = settings?.appUrl || (typeof window !== "undefined" ? window.location.origin : "https://your-app.netlify.app");
 
-  const openAdd = () => { setForm({ name: "", email: "", phone: "", pin: String(Math.floor(1000 + Math.random() * 9000)) }); setModal("add"); };
-  const openEdit = m => { setForm({ name: m.name, email: m.email, phone: m.phone || "", pin: m.pin }); setModal(m); };
+  const openAdd = () => { setForm({ name: "", email: "", phone: "", pin: String(Math.floor(1000 + Math.random() * 9000)), role: "crew" }); setModal("add"); };
+  const openEdit = m => { setForm({ name: m.name, email: m.email, phone: m.phone || "", pin: m.pin, role: m.role || "crew" }); setModal(m); };
   const save = () => {
-    if (!form.name || !form.email || !form.pin) return;
+    if (!form.name || !form.pin) return;
     if (modal === "add") { addUser(form); setInvite({ ...form }); }
     else updateUser(modal.id, form);
     setModal(null);
   };
-  const inviteText = (m) =>
-    `Hi ${m.name.split(" ")[0]}! Here's the G.S. Masters crew app.\n\n1. Open: ${appUrl}\n2. Tap "Add to Home Screen"\n3. Log in:\n   Email: ${m.email}\n   PIN: ${m.pin}\n\nText me if you have trouble. — Gregory`;
+  const inviteText = (m) => {
+    const isAdmin = m.role === "admin";
+    // ?login=1 clears any cached session so the device always shows the login screen
+    const link = `${appUrl}/?login=1`;
+    const dashboardNote = isAdmin
+      ? "Once logged in you'll see the full admin dashboard."
+      : "Once logged in you'll see your personal crew task dashboard — not the admin pages.";
+    const displayPhone = m.phone ? m.phone.replace(/\D/g, "").slice(-10).replace(/(\d{3})(\d{3})(\d{4})/, "($1) $2-$3") : "(your phone number)";
+    const loginId = m.email && !m.email.includes("@gsm.local") ? `Email: ${m.email}` : `Phone: ${displayPhone}`;
+    return `Hi ${m.name.split(" ")[0]}! Here's the G.S. Masters Field App.\n\n1. Open this link: ${link}\n2. Tap "Add to Home Screen" to save it\n3. Log in with:\n   ${loginId}\n   PIN: ${m.pin}\n\n${dashboardNote}\n\nText me if you have trouble. — Gregory`;
+  };
 
   return (
     <div>
@@ -1602,16 +2814,38 @@ function CrewMgmt({ users, tasks, setActive, addUser, updateUser, removeUser, ar
       )}
 
       {modal && <div className="modal-bg" onClick={e => e.target === e.currentTarget && setModal(null)}>
-        <div className="modal"><div className="mt">{modal === "add" ? "Add Crew Member" : "Edit Crew Member"}</div>
+        <div className="modal"><div className="mt">{modal === "add" ? "Add Team Member" : "Edit Team Member"}</div>
           <div className="fg"><label className="fl">Full Name</label><input className="fi" value={form.name} onChange={e => setForm(p => ({ ...p, name: e.target.value }))} placeholder="Juan Martinez" /></div>
-          <div className="fg"><label className="fl">Email (their login)</label><input className="fi" type="email" value={form.email} onChange={e => setForm(p => ({ ...p, email: e.target.value }))} placeholder="juan@gsm.com" /></div>
+          <div className="fg"><label className="fl">Email (optional — for login &amp; invite)</label><input className="fi" type="email" value={form.email} onChange={e => setForm(p => ({ ...p, email: e.target.value }))} placeholder="juan@gsm.com (optional)" /></div>
           <div className="grid2">
             <div className="fg"><label className="fl">Phone</label><input className="fi" value={form.phone} onChange={e => setForm(p => ({ ...p, phone: e.target.value }))} placeholder="+1205..." /></div>
-            <div className="fg"><label className="fl">PIN</label><input className="fi" value={form.pin} onChange={e => setForm(p => ({ ...p, pin: e.target.value.replace(/\D/g, "").slice(0, 6) }))} placeholder="4-digit" /></div></div>
+            <div className="fg"><label className="fl">PIN</label><input className="fi" value={form.pin} onChange={e => setForm(p => ({ ...p, pin: e.target.value.replace(/\D/g, "").slice(0, 6) }))} placeholder="4-digit" /></div>
+          </div>
+          <div className="fg">
+            <label className="fl">Role</label>
+            <div style={{ display: "flex", gap: 8 }}>
+              <button className={"btn btn-sm flex-1 " + (form.role === "crew" ? "btn-p" : "btn-s")}
+                style={{ flex: 1, justifyContent: "center" }}
+                onClick={() => setForm(p => ({ ...p, role: "crew" }))}>
+                👷 Crew Worker
+              </button>
+              <button className={"btn btn-sm " + (form.role === "admin" ? "btn-a" : "btn-s")}
+                style={{ flex: 1, justifyContent: "center" }}
+                onClick={() => setForm(p => ({ ...p, role: "admin" }))}>
+                🔑 Admin
+              </button>
+            </div>
+            <p className="muted" style={{ fontSize: 11, marginTop: 5 }}>
+              {form.role === "crew" ? "Crew sees their task dashboard (mobile-first)" : "Admin sees full management dashboard"}
+            </p>
+          </div>
           <div className="macts">
             {modal !== "add" && <button className="btn btn-s" style={{ marginRight: "auto", color: "var(--red)" }} onClick={() => { setConfirm(modal); setModal(null); }}>Remove</button>}
             <button className="btn btn-s" onClick={() => setModal(null)}>Cancel</button>
-            <button className="btn btn-p" onClick={save}>{modal === "add" ? "Add & Get Invite" : "Save"}</button></div></div></div>}
+            <button className="btn btn-p" onClick={save}>{modal === "add" ? "Add & Get Invite" : "Save"}</button>
+          </div>
+        </div>
+      </div>}
 
       {invite && <div className="modal-bg" onClick={e => e.target === e.currentTarget && setInvite(null)}>
         <div className="modal"><div className="mt">Invite for {invite.name}</div>
@@ -1816,28 +3050,325 @@ function AdminHours({ jobs, users }) {
   );
 }
 
+// ─── ADMIN FIELD MODE ─────────────────────────────────────────────────
+function AdminFieldMode({ jobs, tasks, setTasks, photos, setPhotos, receipts, setReceipts, logs, setLogs, users, settings, user }) {
+  const today = new Date().toISOString().split("T")[0];
+  const activeJobs = jobs.filter(j => j.status !== "closed");
+  const [selJob, setSelJob] = useState("");
+  const [mode, setMode] = useState("photo"); // 'photo' | 'receipt' | 'task' | 'log'
+
+  // Photo state
+  const [pendingPhoto, setPendingPhoto] = useState(null);
+  const [photoNote, setPhotoNote] = useState("");
+  const [photoType, setPhotoType] = useState("before");
+  const [photoSaved, setPhotoSaved] = useState(0);
+  const photoRef = useRef();
+
+  // Receipt state
+  const [rcForm, setRcForm] = useState({ store:"", amount:"", note:"", paidBy:"crew" });
+  const [rcPhoto, setRcPhoto] = useState(null);
+  const [rcBusy, setRcBusy] = useState(false);
+  const rcPhotoRef = useRef();
+
+  // Task state
+  const [taskTitle, setTaskTitle] = useState("");
+  const [taskAssign, setTaskAssign] = useState([]);
+  const [taskDue, setTaskDue] = useState("");
+  const [taskPhoto, setTaskPhoto] = useState(null);
+  const [taskPhotoNote, setTaskPhotoNote] = useState("");
+  const [taskBusy, setTaskBusy] = useState(false);
+  const taskPhotoRef = useRef();
+
+  // Log state
+  const [logText, setLogText] = useState("");
+  const [logBusy, setLogBusy] = useState(false);
+
+  const capturePhoto = async (e) => {
+    const file = e.target.files[0]; if (!file) return;
+    const { dataUrl, sizeKB } = await compressImage(file);
+    setPendingPhoto({ dataUrl, sizeKB }); setPhotoNote(""); e.target.value = "";
+  };
+  const savePhoto = async (done) => {
+    if (!pendingPhoto || !selJob) return;
+    const id = "p" + Date.now();
+    const photo = { id, dataUrl: pendingPhoto.dataUrl, type: photoType, taskId: null, jobId: selJob, crewId: user.id, sizeKB: pendingPhoto.sizeKB, note: photoNote, date: new Date().toISOString() };
+    setPhotos(p => [...p, photo]);
+    const row = { id, data_url: pendingPhoto.dataUrl, photo_type: photoType, task_id: null, job_id: selJob, crew_id: user.id, size_kb: pendingPhoto.sizeKB, note: photoNote || null };
+    try { await sbPost("field_photos", row); } catch { enqueue({ table: "field_photos", payload: row }); }
+    setPhotoSaved(n => n + 1); setPendingPhoto(null); setPhotoNote("");
+    if (done) setPhotoSaved(0);
+  };
+
+  const captureRcPhoto = async (e) => {
+    const file = e.target.files[0]; if (!file) return;
+    const { dataUrl } = await compressImage(file, 1000, 0.6);
+    setRcPhoto(dataUrl); e.target.value = "";
+  };
+  const saveReceipt = async () => {
+    if (!selJob || !rcForm.store || !rcForm.amount) return;
+    setRcBusy(true);
+    const id = "r" + Date.now();
+    const receipt = { id, dataUrl: rcPhoto, taskId: null, jobId: selJob, crewId: user.id, store: rcForm.store, amount: rcForm.amount, note: rcForm.note, paidBy: rcForm.paidBy, reimbursementStatus: rcForm.paidBy === "crew" ? "pending" : "na", createdAt: today };
+    setReceipts(p => [...p, receipt]);
+    const row = { id, data_url: rcPhoto, task_id: null, job_id: selJob, crew_id: user.id, store: rcForm.store, amount: parseFloat(rcForm.amount)||0, note: rcForm.note, paid_by: rcForm.paidBy, reimbursement_status: rcForm.paidBy==="crew"?"pending":"na" };
+    try { await sbPost("field_receipts", row); } catch { enqueue({ table: "field_receipts", payload: row }); }
+    setRcForm({ store:"", amount:"", note:"", paidBy:"crew" }); setRcPhoto(null); setRcBusy(false);
+    alert("Receipt saved!");
+  };
+
+  const captureTaskPhoto = async (e) => {
+    const file = e.target.files[0]; if (!file) return;
+    const { dataUrl, sizeKB } = await compressImage(file);
+    setTaskPhoto({ dataUrl, sizeKB }); e.target.value = "";
+  };
+  const saveTask = async () => {
+    if (!selJob || !taskTitle.trim()) return;
+    setTaskBusy(true);
+    const id = "t" + Date.now();
+    const task = { id, jobId: selJob, title: taskTitle, titleEs: taskTitle, assignedTo: taskAssign, dueDate: taskDue, status: "pending", createdAt: today };
+    setTasks(p => [...p, task]);
+    const row = { id, job_id: selJob, title: taskTitle, title_es: taskTitle, assigned_to: taskAssign, due_date: taskDue || null, status: "pending" };
+    try { await sbPost("field_tasks", row); } catch { enqueue({ table: "field_tasks", payload: row }); }
+    if (taskPhoto) {
+      const pid = "p" + Date.now();
+      const prow = { id: pid, data_url: taskPhoto.dataUrl, photo_type: "before", task_id: id, job_id: selJob, crew_id: user.id, size_kb: taskPhoto.sizeKB, note: taskPhotoNote || null };
+      setPhotos(p => [...p, { id: pid, dataUrl: taskPhoto.dataUrl, type:"before", taskId: id, jobId: selJob, crewId: user.id, note: taskPhotoNote, date: new Date().toISOString() }]);
+      try { await sbPost("field_photos", prow); } catch { enqueue({ table: "field_photos", payload: prow }); }
+    }
+    setTaskTitle(""); setTaskAssign([]); setTaskDue(""); setTaskPhoto(null); setTaskPhotoNote(""); setTaskBusy(false);
+    alert("Task created!");
+  };
+
+  const saveLog = async () => {
+    if (!selJob || !logText.trim()) return;
+    setLogBusy(true);
+    const id = "l" + Date.now();
+    const row = { id, text_en: logText, text_es: logText, task_id: null, job_id: selJob, crew_id: user.id, log_date: today };
+    setLogs(p => [...p, { id, en: logText, es: logText, taskId: null, jobId: selJob, crewId: user.id, date: today }]);
+    try { await sbPost("field_logs", row); } catch { enqueue({ table: "field_logs", payload: row }); }
+    setLogText(""); setLogBusy(false); alert("Note saved!");
+  };
+
+  const crew = users.filter(u => u.role === "crew" && !u.archived);
+  const MODES = [
+    { k:"photo",   label:"📷 Photo",   desc:"Take or upload a photo" },
+    { k:"receipt", label:"🧾 Receipt", desc:"Log a purchase" },
+    { k:"task",    label:"✅ Task",    desc:"Create a task" },
+    { k:"log",     label:"📝 Note",    desc:"Write a site note" },
+  ];
+
+  return (
+    <div style={{ maxWidth: 600 }}>
+      <div className="flexb" style={{ marginBottom: 20 }}>
+        <div>
+          <h2 className="h2">📱 Field Mode</h2>
+          <p className="muted" style={{ fontSize: 12 }}>Mobile-friendly. Log anything from a job site.</p>
+        </div>
+      </div>
+
+      {/* Job selector — always visible */}
+      <div className="card" style={{ marginBottom: 16, padding:"14px 16px" }}>
+        <label className="fl" style={{ marginBottom:6 }}>Which job are you at?</label>
+        <select className="fi" value={selJob} onChange={e => setSelJob(e.target.value)}>
+          <option value="">Select a job...</option>
+          {activeJobs.map(j => <option key={j.id} value={j.id}>{j.name} — {j.address}</option>)}
+        </select>
+      </div>
+
+      {/* Mode picker */}
+      <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:8, marginBottom:16 }}>
+        {MODES.map(m => (
+          <button key={m.k} onClick={() => setMode(m.k)}
+            style={{ padding:"14px 12px", borderRadius:12, border:`2px solid ${mode===m.k?"var(--sky)":"var(--border)"}`,
+              background: mode===m.k?"rgba(59,130,246,.12)":"rgba(0,0,0,.15)", cursor:"pointer", textAlign:"center",
+              color: mode===m.k?"var(--sky2)":"var(--silver)", transition:".15s" }}>
+            <div style={{ fontSize:20, marginBottom:4 }}>{m.label.split(" ")[0]}</div>
+            <div style={{ fontFamily:"'Barlow Condensed'", fontWeight:700, fontSize:14 }}>{m.label.split(" ").slice(1).join(" ")}</div>
+            <div style={{ fontSize:11, color:"var(--slate)", marginTop:2 }}>{m.desc}</div>
+          </button>
+        ))}
+      </div>
+
+      {!selJob && <div style={{ padding:"16px", background:"rgba(245,158,11,.08)", borderRadius:10, border:"1px solid rgba(245,158,11,.3)", fontSize:13, color:"var(--accent)", textAlign:"center" }}>Select a job above to continue</div>}
+
+      {selJob && (
+        <div className="card">
+
+          {/* PHOTO MODE */}
+          {mode === "photo" && (
+            <div>
+              <div style={{ fontFamily:"'Barlow Condensed'", fontSize:16, fontWeight:700, marginBottom:12 }}>📷 Take a Photo</div>
+              {photoSaved > 0 && <div style={{ marginBottom:10, padding:"6px 12px", background:"rgba(16,185,129,.12)", borderRadius:8, fontSize:12, color:"var(--green)", fontWeight:600 }}>✓ {photoSaved} photo(s) saved — take another or switch modes</div>}
+              <input ref={photoRef} type="file" accept="image/*" style={{ display:"none" }} onChange={capturePhoto} />
+
+              {!pendingPhoto ? (
+                <>
+                  <div style={{ display:"flex", gap:6, marginBottom:12 }}>
+                    {["before","after","concern"].map(k => (
+                      <button key={k} onClick={() => setPhotoType(k)}
+                        style={{ flex:1, padding:"8px", borderRadius:8, border:`1px solid ${photoType===k?k==="before"?"var(--orange)":k==="after"?"var(--green)":"var(--red)":"transparent"}`,
+                          background: photoType===k?`rgba(${k==="before"?"249,115,22":k==="after"?"16,185,129":"239,68,68"},.18)`:"rgba(255,255,255,.06)",
+                          color: photoType===k?k==="before"?"var(--orange)":k==="after"?"var(--green)":"var(--red)":"var(--silver)",
+                          fontSize:12, fontWeight:700, cursor:"pointer", textTransform:"capitalize" }}>
+                        {k}
+                      </button>
+                    ))}
+                  </div>
+                  <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10 }}>
+                    <button className="btn btn-p" style={{ justifyContent:"center", padding:"16px", fontSize:15 }}
+                      onClick={() => { photoRef.current?.setAttribute("capture","environment"); photoRef.current?.click(); }}>
+                      <Icon n="camera" s={20}/><span style={{ display:"block", fontSize:11, marginTop:4 }}>Open Camera</span>
+                    </button>
+                    <button className="btn btn-s" style={{ justifyContent:"center", padding:"16px", fontSize:15 }}
+                      onClick={() => { photoRef.current?.removeAttribute("capture"); photoRef.current?.click(); }}>
+                      <Icon n="photo" s={20}/><span style={{ display:"block", fontSize:11, marginTop:4 }}>From Library</span>
+                    </button>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div style={{ display:"flex", gap:12, marginBottom:12, alignItems:"flex-start" }}>
+                    <img src={pendingPhoto.dataUrl} alt="preview" style={{ width:90, height:90, objectFit:"cover", borderRadius:10, flexShrink:0, border:"2px solid var(--orange)" }} />
+                    <div style={{ flex:1 }}>
+                      <label className="fl" style={{ marginBottom:4 }}>What does this photo show?</label>
+                      <textarea className="fi" rows={3} value={photoNote} onChange={e => setPhotoNote(e.target.value)} autoFocus
+                        placeholder="e.g. Progress on north wall, crack in foundation..." style={{ resize:"none" }} />
+                    </div>
+                  </div>
+                  <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:8 }}>
+                    <button className="btn btn-p" style={{ justifyContent:"center" }} onClick={() => savePhoto(false)}>💾 Save + Take Another</button>
+                    <button className="btn btn-g" style={{ justifyContent:"center" }} onClick={() => savePhoto(true)}>✓ Save & Done</button>
+                  </div>
+                  <button onClick={() => setPendingPhoto(null)} style={{ marginTop:8, background:"none", border:"none", color:"var(--slate)", cursor:"pointer", fontSize:12, textDecoration:"underline" }}>✕ Discard</button>
+                </>
+              )}
+            </div>
+          )}
+
+          {/* RECEIPT MODE */}
+          {mode === "receipt" && (
+            <div>
+              <div style={{ fontFamily:"'Barlow Condensed'", fontSize:16, fontWeight:700, marginBottom:12 }}>🧾 Log a Receipt</div>
+              <input ref={rcPhotoRef} type="file" accept="image/*" style={{ display:"none" }} onChange={captureRcPhoto} />
+              <div className="grid2" style={{ marginBottom:10 }}>
+                <div><label className="fl">Vendor / Store</label>
+                  <input className="fi" value={rcForm.store} onChange={e => setRcForm(p=>({...p,store:e.target.value}))} placeholder="Home Depot" /></div>
+                <div><label className="fl">Amount ($)</label>
+                  <input className="fi" type="number" value={rcForm.amount} onChange={e => setRcForm(p=>({...p,amount:e.target.value}))} placeholder="0.00" /></div>
+              </div>
+              <div className="fg"><label className="fl">What was purchased</label>
+                <input className="fi" value={rcForm.note} onChange={e => setRcForm(p=>({...p,note:e.target.value}))} placeholder="Lumber, screws, paint..." /></div>
+              <div style={{ display:"flex", gap:8, marginBottom:12 }}>
+                <button className={`btn btn-sm ${rcForm.paidBy==="crew"?"btn-a":"btn-s"}`} onClick={()=>setRcForm(p=>({...p,paidBy:"crew"}))}>I Paid — Need Reimbursement</button>
+                <button className={`btn btn-sm ${rcForm.paidBy==="company"?"btn-p":"btn-s"}`} onClick={()=>setRcForm(p=>({...p,paidBy:"company"}))}>Company Card</button>
+              </div>
+              <div style={{ display:"flex", gap:8, marginBottom:12, alignItems:"center" }}>
+                {rcPhoto && <img src={rcPhoto} alt="rcpt" style={{ width:48, height:48, objectFit:"cover", borderRadius:6, border:"2px solid var(--green)" }} />}
+                <button className="btn btn-s btn-sm" onClick={()=>{rcPhotoRef.current?.setAttribute("capture","environment");rcPhotoRef.current?.click();}}>
+                  <Icon n="camera" s={14}/> {rcPhoto ? "Retake Receipt Photo" : "Snap Receipt Photo"}
+                </button>
+              </div>
+              <button className="btn btn-p btn-full" disabled={rcBusy||!rcForm.store||!rcForm.amount} onClick={saveReceipt} style={{ justifyContent:"center" }}>
+                {rcBusy?<span className="spin"/>:"Save Receipt"}
+              </button>
+            </div>
+          )}
+
+          {/* TASK MODE */}
+          {mode === "task" && (
+            <div>
+              <div style={{ fontFamily:"'Barlow Condensed'", fontSize:16, fontWeight:700, marginBottom:12 }}>✅ Create a Task</div>
+              <input ref={taskPhotoRef} type="file" accept="image/*" style={{ display:"none" }} onChange={captureTaskPhoto} />
+              <div className="fg"><label className="fl">Task Description</label>
+                <input className="fi" value={taskTitle} onChange={e => setTaskTitle(e.target.value)} placeholder="What needs to be done..." /></div>
+              <div className="fg">
+                <label className="fl">Assign To</label>
+                <div style={{ background:"rgba(0,0,0,.15)", borderRadius:10, padding:"6px 4px", border:"1px solid var(--border)" }}>
+                  {crew.map(u => (
+                    <label key={u.id} style={{ display:"flex", alignItems:"center", gap:10, padding:"7px 10px", cursor:"pointer", borderRadius:8,
+                      background: taskAssign.includes(u.id)?"rgba(59,130,246,.1)":"transparent" }}>
+                      <input type="checkbox" checked={taskAssign.includes(u.id)}
+                        onChange={() => setTaskAssign(p => p.includes(u.id)?p.filter(x=>x!==u.id):[...p,u.id])}
+                        style={{ accentColor:"var(--sky)", width:16, height:16 }} />
+                      <span style={{ fontSize:14 }}>{u.name}</span>
+                    </label>
+                  ))}
+                </div>
+              </div>
+              <div className="fg"><label className="fl">Due Date (optional)</label>
+                <input className="fi" type="date" value={taskDue} onChange={e => setTaskDue(e.target.value)} /></div>
+
+              {/* Optional photo */}
+              <div style={{ borderTop:"1px solid var(--border)", paddingTop:12, marginBottom:14 }}>
+                <label className="fl" style={{ marginBottom:8 }}>📷 Attach a Photo (optional)</label>
+                {!taskPhoto
+                  ? <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:8 }}>
+                      <button className="btn btn-s btn-sm" style={{ justifyContent:"center" }} onClick={()=>{taskPhotoRef.current?.setAttribute("capture","environment");taskPhotoRef.current?.click();}}>
+                        <Icon n="camera" s={14}/> Camera
+                      </button>
+                      <button className="btn btn-s btn-sm" style={{ justifyContent:"center" }} onClick={()=>{taskPhotoRef.current?.removeAttribute("capture");taskPhotoRef.current?.click();}}>
+                        <Icon n="photo" s={14}/> Library
+                      </button>
+                    </div>
+                  : <div style={{ display:"flex", gap:10, alignItems:"flex-start" }}>
+                      <img src={taskPhoto.dataUrl} alt="preview" style={{ width:64, height:64, objectFit:"cover", borderRadius:8, border:"2px solid var(--orange)", flexShrink:0 }} />
+                      <div style={{ flex:1 }}>
+                        <input className="fi" value={taskPhotoNote} onChange={e => setTaskPhotoNote(e.target.value)} placeholder="Describe the photo..." style={{ marginBottom:6 }} />
+                        <button onClick={() => setTaskPhoto(null)} style={{ background:"none", border:"none", color:"var(--red)", cursor:"pointer", fontSize:12 }}>✕ Remove</button>
+                      </div>
+                    </div>
+                }
+              </div>
+              <button className="btn btn-p btn-full" disabled={taskBusy||!taskTitle.trim()} onClick={saveTask} style={{ justifyContent:"center" }}>
+                {taskBusy?<span className="spin"/>:"Create Task"}
+              </button>
+            </div>
+          )}
+
+          {/* LOG / NOTE MODE */}
+          {mode === "log" && (
+            <div>
+              <div style={{ fontFamily:"'Barlow Condensed'", fontSize:16, fontWeight:700, marginBottom:12 }}>📝 Site Note</div>
+              <div className="fg"><label className="fl">What's happening at the job?</label>
+                <textarea className="fi" rows={5} value={logText} onChange={e => setLogText(e.target.value)}
+                  placeholder="Describe what you're seeing, progress made, issues, decisions made on site..." /></div>
+              <button className="btn btn-p btn-full" disabled={logBusy||!logText.trim()} onClick={saveLog} style={{ justifyContent:"center" }}>
+                {logBusy?<span className="spin"/>:"Save Note"}
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── ADMIN LIVE ACTIVITY ──────────────────────────────────────────────
 function AdminActivity({ jobs, tasks, users, logs: initLogs, photos: initPhotos, receipts: initReceipts, setTasks, setLogs, setPhotos, setReceipts }) {
-  const [logs,     setLocalLogs]     = useState(initLogs);
-  const [photos,   setLocalPhotos]   = useState(initPhotos);
-  const [receipts, setLocalReceipts] = useState(initReceipts);
-  const [localTasks, setLocalTasks]  = useState(tasks);
-  const [refreshing, setRefreshing]  = useState(false);
-  const [lastAt, setLastAt]          = useState(new Date());
+  const [localLogs,     setLocalLogs]     = useState(initLogs);
+  const [localPhotos,   setLocalPhotos]   = useState(initPhotos);
+  const [localReceipts, setLocalReceipts] = useState(initReceipts);
+  const [localTasks, setLocalTasks]    = useState(tasks);
+  const [checkins,   setCheckins]      = useState([]);
+  const [refreshing, setRefreshing]    = useState(false);
+  const [lastAt,     setLastAt]        = useState(new Date());
 
   const refresh = useCallback(async () => {
     setRefreshing(true);
     try {
-      const [dbTasks, dbLogs, dbPhotos, dbReceipts] = await Promise.all([
+      const today = new Date().toISOString().split("T")[0];
+      const [dbTasks, dbLogs, dbPhotos, dbReceipts, dbCheckins] = await Promise.all([
         sbGet("field_tasks",    "order=created_at"),
         sbGet("field_logs",     "order=created_at.desc"),
         sbGet("field_photos",   "order=created_at.desc"),
         sbGet("field_receipts", "order=created_at.desc"),
+        sbGet("field_checkins", `work_date=gte.${today}&order=check_in.desc`),
       ]);
-      if (dbTasks)    { setLocalTasks(dbTasks.map(fromTask));       setTasks(dbTasks.map(fromTask)); }
-      if (dbLogs)     { setLocalLogs(dbLogs.map(fromLog));           setLogs(dbLogs.map(fromLog)); }
-      if (dbPhotos)   { setLocalPhotos(dbPhotos.map(fromPhoto));     setPhotos(dbPhotos.map(fromPhoto)); }
+      if (dbTasks)    { setLocalTasks(dbTasks.map(fromTask));         setTasks(dbTasks.map(fromTask)); }
+      if (dbLogs)     { setLocalLogs(dbLogs.map(fromLog));            setLogs(dbLogs.map(fromLog)); }
+      if (dbPhotos)   { setLocalPhotos(dbPhotos.map(fromPhoto));      setPhotos(dbPhotos.map(fromPhoto)); }
       if (dbReceipts) { setLocalReceipts(dbReceipts.map(fromReceipt)); setReceipts(dbReceipts.map(fromReceipt)); }
+      if (dbCheckins) setCheckins(dbCheckins.map(fromCheckin));
       setLastAt(new Date());
     } catch {}
     setRefreshing(false);
@@ -1845,30 +3376,33 @@ function AdminActivity({ jobs, tasks, users, logs: initLogs, photos: initPhotos,
 
   useEffect(() => {
     refresh();
-    const iv = setInterval(refresh, 30000);
+    const iv = setInterval(refresh, 900000); // 15 min — Live Activity; hit ↻ Refresh for instant update
     return () => clearInterval(iv);
   }, [refresh]);
 
-  const activeJobs = jobs.filter(j => j.status !== "closed");
-  const typeColor = k => ({ before:"var(--orange)", after:"var(--green)", concern:"var(--red)", progress:"var(--sky2)" })[k] || "var(--sky2)";
-  const typeLabel = k => ({ before:"Before", after:"After", concern:"Concern", progress:"Concern" })[k] || k;
+  const activeJobs  = jobs.filter(j => j.status !== "closed");
+  const typeColor   = k => ({ before:"var(--orange)", after:"var(--green)", concern:"var(--red)", progress:"var(--sky2)" })[k] || "var(--sky2)";
+  const typeLabel   = k => ({ before:"Before", after:"After", concern:"Concern", progress:"Progress" })[k] || k;
+  const crewName    = id => users.find(u => u.id === id)?.name || "Crew";
+  const jobName     = id => jobs.find(j => j.id === id)?.name  || id;
+  const fmt         = ts => ts ? new Date(ts).toLocaleTimeString([], { hour:"2-digit", minute:"2-digit" }) : "—";
+  const elapsed     = ts => { const m = Math.round((Date.now() - new Date(ts)) / 60000); return m < 60 ? `${m}m` : `${(m/60).toFixed(1)}h`; };
+
+  // Who is on site RIGHT NOW (open check-ins = no checkout)
+  const onSiteNow = checkins.filter(c => !c.checkOut);
 
   const jobActivity = (job) => {
     const items = [];
-    localLogs.filter(l => l.jobId === job.id).forEach(l => {
-      items.push({ ts: l.date, type: "log", data: l });
-    });
-    photos.filter(p => p.jobId === job.id).forEach(p => {
-      items.push({ ts: (p.date || "").slice(0,10), type: "photo", data: p });
-    });
-    receipts.filter(r => r.jobId === job.id).forEach(r => {
-      items.push({ ts: r.createdAt, type: "receipt", data: r });
-    });
+    localLogs.filter(l => l.jobId === job.id).forEach(l =>
+      items.push({ ts: l.date, type: "log", data: l }));
+    localPhotos.filter(p => p.jobId === job.id).forEach(p =>
+      items.push({ ts: (p.date || "").slice(0,10), type: "photo", data: p }));
+    localReceipts.filter(r => r.jobId === job.id).forEach(r =>
+      items.push({ ts: r.createdAt, type: "receipt", data: r }));
+    checkins.filter(c => c.jobId === job.id).forEach(c =>
+      items.push({ ts: (c.checkIn || "").slice(0,10), type: "checkin", data: c }));
     return items.sort((a, b) => b.ts.localeCompare(a.ts));
   };
-
-  const crewName = id => users.find(u => u.id === id)?.name || "Crew";
-  const taskPct  = job => { const jt = localTasks.filter(t => t.jobId === job.id); return jt.length ? `${jt.filter(t=>t.status==="done").length}/${jt.length}` : "0 tasks"; };
 
   return (
     <div>
@@ -1880,9 +3414,36 @@ function AdminActivity({ jobs, tasks, users, logs: initLogs, photos: initPhotos,
             {refreshing ? <span className="spin" /> : "↻ Refresh"}
           </button>
           <span style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 11, color: "var(--green)", fontWeight: 600 }}>
-            <span style={{ width: 7, height: 7, borderRadius: "50%", background: "var(--green)", animation: "pulse 2s infinite", display: "inline-block" }} /> Live (30s)
+            <span style={{ width: 7, height: 7, borderRadius: "50%", background: "var(--green)", animation: "pulse 2s infinite", display: "inline-block" }} /> Auto-refresh 15min
           </span>
         </div>
+      </div>
+
+      {/* ── WHO'S ON SITE NOW ── */}
+      <div className="card" style={{ marginBottom: 22, borderLeft: "4px solid var(--green)" }}>
+        <div style={{ fontFamily:"'Barlow Condensed'", fontSize:16, fontWeight:800, color:"var(--green)", letterSpacing:1, marginBottom:12 }}>
+          🟢 WHO'S ON SITE RIGHT NOW
+        </div>
+        {onSiteNow.length === 0
+          ? <div className="muted" style={{ fontSize:13 }}>No crew currently checked in.</div>
+          : <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
+              {onSiteNow.map(c => (
+                <div key={c.id} style={{ display:"flex", alignItems:"center", gap:12, padding:"10px 14px", background:"rgba(16,185,129,.08)", borderRadius:10, border:"1px solid rgba(16,185,129,.25)" }}>
+                  <div style={{ width:40, height:40, borderRadius:"50%", background:"linear-gradient(135deg,#059669,var(--green))", display:"flex", alignItems:"center", justifyContent:"center", fontFamily:"'Barlow Condensed'", fontWeight:800, fontSize:18, flexShrink:0 }}>
+                    {crewName(c.crewId)[0]}
+                  </div>
+                  <div style={{ flex:1 }}>
+                    <div style={{ fontWeight:700, fontSize:15 }}>{crewName(c.crewId)}</div>
+                    <div style={{ fontSize:12, color:"var(--silver)" }}>{jobName(c.jobId)}</div>
+                  </div>
+                  <div style={{ textAlign:"right", flexShrink:0 }}>
+                    <div style={{ fontSize:13, fontWeight:700, color:"var(--green)" }}>● On Site</div>
+                    <div style={{ fontSize:11, color:"var(--slate)" }}>Checked in {fmt(c.checkIn)} · {elapsed(c.checkIn)} ago</div>
+                  </div>
+                </div>
+              ))}
+            </div>
+        }
       </div>
 
       {activeJobs.map(job => {
@@ -1965,12 +3526,413 @@ function AdminActivity({ jobs, tasks, users, logs: initLogs, photos: initPhotos,
                     </div>
                   );
                 }
+                if (item.type === "checkin") {
+                  const c = item.data;
+                  const isOpen = !c.checkOut;
+                  return (
+                    <div key={i} style={{ display: "flex", gap: 10, padding: "8px 0", borderBottom: "1px solid rgba(255,255,255,.04)", alignItems: "center" }}>
+                      <span style={{ fontSize: 16, flexShrink: 0 }}>{isOpen ? "🟢" : "🔵"}</span>
+                      <div style={{ flex: 1 }}>
+                        <div style={{ fontSize: 13, fontWeight: 600, color: isOpen ? "var(--green)" : "var(--sky2)" }}>
+                          {isOpen ? "Checked In — On Site Now" : "Checked Out"}
+                        </div>
+                        <div style={{ fontSize: 11, color: "var(--slate)", marginTop: 2 }}>
+                          {crewName(c.crewId)} · In: {fmt(c.checkIn)}{c.checkOut ? ` · Out: ${fmt(c.checkOut)} · ${c.hours?.toFixed(1) || "?"}h` : ` · ${elapsed(c.checkIn)} on site`}
+                        </div>
+                      </div>
+                      {isOpen && <span style={{ fontSize: 11, padding:"2px 8px", borderRadius:20, background:"rgba(16,185,129,.15)", color:"var(--green)", fontWeight:700 }}>● LIVE</span>}
+                    </div>
+                  );
+                }
                 return null;
               })
             }
           </div>
         );
       })}
+    </div>
+  );
+}
+
+// ─── DISPATCH CREW ROW (sub-component avoids hooks-in-map) ────────────
+// Parse a custom stop — stored as JSON {label,address} or legacy plain string
+function parseStop(s) {
+  try { const p = JSON.parse(s); return { label: p.label || s, address: p.address || "" }; }
+  catch { return { label: s, address: "" }; }
+}
+
+function DispatchCrewRow({ member, date, activeJobs, dispatch: d, toggleJob, addStop, removeStop, clearAll }) {
+  const [stopLabel, setStopLabel] = useState("");
+  const [stopAddress, setStopAddress] = useState("");
+  return (
+    <div className="card" style={{ marginBottom: 18, borderLeft: d.jobIds.length > 0 ? "4px solid var(--accent)" : "4px solid var(--steel3)" }}>
+      <div className="flexb" style={{ marginBottom: 14 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+          <div style={{ width: 42, height: 42, borderRadius: "50%", background: "linear-gradient(135deg,var(--sky-dim),var(--sky))", display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "'Barlow Condensed'", fontWeight: 800, fontSize: 17 }}>{member.name[0]}</div>
+          <div>
+            <div style={{ fontWeight: 700, fontSize: 16 }}>{member.name}</div>
+            {d.jobIds.length > 0
+              ? <div style={{ fontSize: 11, color: "var(--accent)", fontWeight: 700 }}>📍 {d.jobIds.length} location{d.jobIds.length !== 1 ? "s" : ""} assigned</div>
+              : <div style={{ fontSize: 11, color: "var(--slate)" }}>No dispatch for this day</div>}
+          </div>
+        </div>
+        {d.jobIds.length > 0 && (
+          <button className="btn btn-s btn-sm" style={{ color: "var(--red)" }} onClick={() => clearAll(member.id)}>✕ Clear</button>
+        )}
+      </div>
+
+      <div style={{ marginBottom: 12 }}>
+        <div className="fl" style={{ marginBottom: 8 }}>Job Sites (select up to 3)</div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+          {activeJobs.map(job => {
+            const on = d.jobIds.includes(job.id);
+            return (
+              <label key={job.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 12px", borderRadius: 10, cursor: "pointer",
+                border: `1px solid ${on ? "rgba(245,158,11,.5)" : "var(--border)"}`,
+                background: on ? "rgba(245,158,11,.08)" : "rgba(0,0,0,.12)", transition: ".15s" }}>
+                <input type="checkbox" checked={on} onChange={() => toggleJob(member.id, job.id)}
+                  style={{ accentColor: "var(--accent)", width: 16, height: 16 }} disabled={!on && d.jobIds.length >= 3} />
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontWeight: 600, fontSize: 14 }}>{job.name}</div>
+                  {job.address && <div style={{ fontSize: 11, color: "var(--silver)" }}>{job.address}</div>}
+                </div>
+                {on && <span style={{ fontSize: 12, color: "var(--accent)", fontWeight: 700 }}>✓</span>}
+              </label>
+            );
+          })}
+        </div>
+        {d.jobIds.length >= 3 && <p style={{ fontSize: 11, color: "var(--orange)", marginTop: 6 }}>Max 3 locations selected</p>}
+      </div>
+
+      <div>
+        <div className="fl" style={{ marginBottom: 8 }}>Custom Stops — with navigation address</div>
+        {d.customStops.map((s, i) => {
+          const stop = parseStop(s);
+          return (
+            <div key={i} style={{ display: "flex", alignItems: "flex-start", gap: 8, marginBottom: 8, padding: "8px 12px", background: "rgba(59,130,246,.08)", borderRadius: 10, border: "1px solid rgba(59,130,246,.2)" }}>
+              <div style={{ flex: 1 }}>
+                <div style={{ fontSize: 13, fontWeight: 600 }}>🛑 {stop.label}</div>
+                {stop.address
+                  ? <div style={{ fontSize: 11, color: "var(--sky2)", marginTop: 3 }}>📍 {stop.address}</div>
+                  : <div style={{ fontSize: 11, color: "var(--orange)", marginTop: 3 }}>⚠ No address — worker cannot navigate</div>}
+              </div>
+              <button onClick={() => removeStop(member.id, i)} style={{ background: "none", border: "none", cursor: "pointer", color: "var(--red)", fontSize: 16, lineHeight: 1, flexShrink: 0 }}>✕</button>
+            </div>
+          );
+        })}
+        <div style={{ background: "rgba(0,0,0,.15)", borderRadius: 10, padding: "12px", border: "1px solid var(--border)" }}>
+          <div className="fg" style={{ marginBottom: 8 }}>
+            <label className="fl" style={{ marginBottom: 4 }}>What / Why</label>
+            <input className="fi" value={stopLabel} onChange={e => setStopLabel(e.target.value)}
+              placeholder="e.g. Pick up lumber at Lowe's, Client walkthrough"
+              style={{ padding: "8px 12px" }} />
+          </div>
+          <div className="fg" style={{ marginBottom: 10 }}>
+            <label className="fl" style={{ marginBottom: 4 }}>Full Address <span style={{ color: "var(--orange)", fontWeight: 400 }}>— required for GPS navigation</span></label>
+            <input className="fi" value={stopAddress} onChange={e => setStopAddress(e.target.value)}
+              placeholder="e.g. 2350 John Hawkins Pkwy, Hoover, AL 35244"
+              style={{ padding: "8px 12px" }} />
+          </div>
+          <button className="btn btn-s btn-sm"
+            disabled={!stopLabel.trim()}
+            onClick={() => {
+              addStop(member.id, date, JSON.stringify({ label: stopLabel.trim(), address: stopAddress.trim() }));
+              setStopLabel(""); setStopAddress("");
+            }}>
+            + Add Stop
+          </button>
+          {stopLabel && !stopAddress && <p style={{ fontSize: 11, color: "var(--orange)", marginTop: 6 }}>Add an address so the worker can get GPS directions.</p>}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── ADMIN DISPATCH ───────────────────────────────────────────────────
+function AdminDispatch({ users, jobs, dispatches, upsertDispatch, deleteDispatch }) {
+  const today = new Date().toISOString().split("T")[0];
+  const [date, setDate] = useState(today);
+  const crew = users.filter(u => u.role === "crew" && !u.archived);
+
+  const getDispatch = (crewId) => dispatches.find(d => d.crewId === crewId && d.date === date) || { jobIds: [], customStops: [] };
+
+  const toggleJob = (crewId, jobId) => {
+    const cur = getDispatch(crewId);
+    const has = cur.jobIds.includes(jobId);
+    const next = has ? cur.jobIds.filter(x => x !== jobId) : cur.jobIds.length < 3 ? [...cur.jobIds, jobId] : cur.jobIds;
+    upsertDispatch({ crewId, date, jobIds: next, customStops: cur.customStops });
+  };
+
+  const addStop = (crewId, dispatchDate, stopValue) => {
+    if (!stopValue) return;
+    const cur = getDispatch(crewId);
+    upsertDispatch({ crewId, date: dispatchDate, jobIds: cur.jobIds, customStops: [...cur.customStops, stopValue] });
+  };
+
+  const removeStop = (crewId, idx) => {
+    const cur = getDispatch(crewId);
+    upsertDispatch({ crewId, date, jobIds: cur.jobIds, customStops: cur.customStops.filter((_, i) => i !== idx) });
+  };
+
+  const clearAll = (crewId) => {
+    const d = dispatches.find(x => x.crewId === crewId && x.date === date);
+    if (d) deleteDispatch(d.id);
+  };
+
+  const activeJobs = jobs.filter(j => j.status !== "closed");
+
+  return (
+    <div>
+      <div className="flexb" style={{ marginBottom: 20 }}>
+        <h2 className="h2">📍 Daily Dispatch</h2>
+        <input className="fi" type="date" value={date} onChange={e => setDate(e.target.value)} style={{ width: "auto", padding: "8px 13px" }} />
+      </div>
+      <p className="muted" style={{ marginBottom: 20, fontSize: 13 }}>
+        Tell each worker where to go today. Select up to 3 job sites per person. Workers see this at the top of their app — read-only.
+      </p>
+
+      {crew.length === 0 && <div className="empty"><p>No crew members added yet.</p></div>}
+
+      {crew.map(member => (
+        <DispatchCrewRow key={member.id} member={member} date={date} activeJobs={activeJobs}
+          dispatch={getDispatch(member.id)} toggleJob={toggleJob} addStop={addStop} removeStop={removeStop} clearAll={clearAll} />
+      ))}
+    </div>
+  );
+}
+
+// ─── JOB DETAIL DASHBOARD ─────────────────────────────────────────────
+function JobDetail({ selectedJobId, jobs, tasks, photos, receipts, logs, users, setTab, deletePhoto, deleteReceipt, deleteLog }) {
+  const job = jobs.find(j => j.id === selectedJobId);
+  const today = new Date().toISOString().split("T")[0];
+  const threeMonthsAgo = new Date(Date.now() - 90 * 86400000).toISOString().split("T")[0];
+  const [from, setFrom] = useState(threeMonthsAgo);
+  const [to, setTo]     = useState(today);
+  const [section, setSection] = useState("tasks");
+  const [lightbox, setLightbox] = useState(null);
+  const [confirmDel, setConfirmDel] = useState(null); // { type, id }
+
+  if (!job) return <div className="empty"><p>Job not found.</p><button className="btn btn-s btn-sm" style={{ marginTop: 12 }} onClick={() => setTab("dash")}>← Back</button></div>;
+
+  const inRange = (dateStr) => dateStr >= from && dateStr <= to;
+
+  const jTasks    = tasks.filter(t => t.jobId === job.id);
+  const jPhotos   = photos.filter(p => p.jobId === job.id && inRange((p.date || "").slice(0,10)));
+  const jReceipts = receipts.filter(r => r.jobId === job.id && inRange(r.createdAt || ""));
+  const jLogs     = logs.filter(l => l.jobId === job.id && inRange(l.date || ""));
+
+  const done    = jTasks.filter(t => t.status === "done").length;
+  const pending = jTasks.filter(t => t.status === "pending").length;
+  const total   = jTasks.length;
+  const pct     = total ? Math.round(done / total * 100) : 0;
+  const crewName = id => users.find(u => u.id === id)?.name || "Unknown";
+  const today2 = new Date().toISOString().split("T")[0];
+  const st = task => task.status === "done" ? "done" : (task.dueDate && task.dueDate < today2 ? "overdue" : "pending");
+  const totalSpend = jReceipts.reduce((s, r) => s + (+r.amount || 0), 0);
+
+  const handleDelete = () => {
+    if (!confirmDel) return;
+    if (confirmDel.type === "photo")   deletePhoto(confirmDel.id);
+    if (confirmDel.type === "receipt") deleteReceipt(confirmDel.id);
+    if (confirmDel.type === "log")     deleteLog(confirmDel.id);
+    setConfirmDel(null);
+  };
+
+  const tabs = [
+    { k: "tasks",    l: `Tasks (${total})` },
+    { k: "photos",   l: `Photos (${jPhotos.length})` },
+    { k: "receipts", l: `Receipts (${jReceipts.length})` },
+    { k: "logs",     l: `Logs (${jLogs.length})` },
+  ];
+
+  return (
+    <div>
+      {/* Header */}
+      <div style={{ marginBottom: 20 }}>
+        <button className="btn btn-s btn-sm" style={{ marginBottom: 12 }} onClick={() => setTab("dash")}>← Dashboard</button>
+        <h2 className="h2">{job.name}</h2>
+        {job.address && (
+          <a href={`https://maps.google.com/?q=${encodeURIComponent(job.address)}`} target="_blank" rel="noreferrer"
+            style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 12, color: "var(--sky2)", textDecoration: "none", marginTop: 4 }}>
+            <Icon n="pin" s={12} /> {job.address}
+          </a>
+        )}
+      </div>
+
+      {/* Stats row */}
+      <div className="stats" style={{ marginBottom: 20 }}>
+        {[["Total Tasks", total, "var(--sky2)"], ["Complete", done, "var(--green)"], ["Pending", pending, "var(--accent)"],
+          ["Photos", jPhotos.length, "var(--sky2)"], ["Receipts", jReceipts.length, "var(--silver)"],
+          [`Spend $${totalSpend.toFixed(0)}`, jReceipts.length, "var(--orange)"]].map(([l, n, c]) => (
+          <div key={l} className="stat">
+            <div className="stat-n" style={{ color: c, fontSize: 26 }}>{l.startsWith("Spend") ? "" : n}</div>
+            <div className="stat-l">{l}</div>
+          </div>
+        ))}
+      </div>
+
+      {/* Progress bar */}
+      <div className="card" style={{ marginBottom: 18, padding: "14px 18px" }}>
+        <div className="flexb" style={{ marginBottom: 8 }}>
+          <span style={{ fontWeight: 700 }}>Overall Progress</span>
+          <span className="muted">{done}/{total} · {pct}%</span>
+        </div>
+        <div className="bar"><div className="bar-f" style={{ width: pct + "%", background: pct === 100 ? "linear-gradient(90deg,#059669,var(--green))" : "linear-gradient(90deg,var(--sky-dim),var(--sky))" }} /></div>
+      </div>
+
+      {/* Date range filter */}
+      <div className="card" style={{ marginBottom: 18, padding: "12px 16px" }}>
+        <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
+          <span style={{ fontSize: 12, fontWeight: 700, color: "var(--silver)", letterSpacing: 1, textTransform: "uppercase" }}>Date Range</span>
+          <input className="fi" type="date" value={from} onChange={e => setFrom(e.target.value)} style={{ width: "auto", padding: "6px 10px", fontSize: 13 }} />
+          <span className="muted">to</span>
+          <input className="fi" type="date" value={to} onChange={e => setTo(e.target.value)} style={{ width: "auto", padding: "6px 10px", fontSize: 13 }} />
+          <button className="btn btn-s btn-sm" onClick={() => window.print()}><Icon n="print" s={14} /> Print</button>
+        </div>
+      </div>
+
+      {/* Section tabs */}
+      <div style={{ display: "flex", gap: 6, marginBottom: 18, flexWrap: "wrap" }}>
+        {tabs.map(tb => (
+          <button key={tb.k} onClick={() => setSection(tb.k)}
+            className={"btn btn-sm " + (section === tb.k ? "btn-p" : "btn-s")}>
+            {tb.l}
+          </button>
+        ))}
+      </div>
+
+      {/* Tasks section */}
+      {section === "tasks" && (
+        <div>
+          {jTasks.length === 0
+            ? <div className="empty"><p>No tasks for this job.</p></div>
+            : ["pending","done"].map(status => {
+                const group = jTasks.filter(t => t.status === status);
+                if (!group.length) return null;
+                return (
+                  <div key={status} style={{ marginBottom: 20 }}>
+                    <div style={{ fontFamily: "'Barlow Condensed'", fontSize: 14, fontWeight: 700, color: status === "done" ? "var(--green)" : "var(--accent)", letterSpacing: 1, textTransform: "uppercase", marginBottom: 8 }}>
+                      {status === "done" ? "✓ Complete" : "⏳ Pending"}
+                    </div>
+                    <div className="jobbody">
+                      {group.map(task => {
+                        const s = st(task);
+                        const crew = (task.assignedTo || []).map(id => users.find(u => u.id === id)).filter(Boolean);
+                        return (
+                          <div key={task.id} className="trow">
+                            <div className="tinfo">
+                              <div className="ten" style={{ textDecoration: task.status === "done" ? "line-through" : "none", opacity: task.status === "done" ? .6 : 1 }}>{task.title}</div>
+                              {task.titleEs && task.titleEs !== task.title && <div className="tes">{task.titleEs}</div>}
+                              <div className="tmeta">
+                                <span className={`tag tag-${s}`}>{s}</span>
+                                {task.dueDate && <span className="tag" style={{ background: "rgba(255,255,255,.06)", color: "var(--silver)" }}>Due {task.dueDate}</span>}
+                                {crew.map(a => <span key={a.id} className="tag-l">{a.name}</span>)}
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                );
+              })
+          }
+        </div>
+      )}
+
+      {/* Photos section */}
+      {section === "photos" && (
+        <div>
+          {jPhotos.length === 0
+            ? <div className="empty"><p>No photos in this date range.</p></div>
+            : <div className="pgrid">
+                {jPhotos.map((p, i) => (
+                  <div key={i} className="pthumb" style={{ position: "relative" }}>
+                    {p.dataUrl
+                      ? <img src={p.dataUrl} alt={p.type} onClick={() => setLightbox(p.dataUrl)} style={{ cursor: "zoom-in" }} />
+                      : <Icon n="camera" s={28} c="var(--slate)" />}
+                    <div className="plabel" style={{ color: p.type === "before" ? "var(--orange)" : p.type === "after" ? "var(--green)" : "var(--sky2)" }}>{p.type}</div>
+                    <button onClick={() => setConfirmDel({ type: "photo", id: p.id })}
+                      style={{ position: "absolute", top: 4, right: 4, background: "rgba(239,68,68,.8)", border: "none", borderRadius: 4, color: "#fff", cursor: "pointer", fontSize: 11, padding: "2px 5px", lineHeight: 1 }}>✕</button>
+                  </div>
+                ))}
+              </div>
+          }
+        </div>
+      )}
+
+      {/* Receipts section */}
+      {section === "receipts" && (
+        <div>
+          {jReceipts.length === 0
+            ? <div className="empty"><p>No receipts in this date range.</p></div>
+            : <div className="card"><div className="flexb" style={{ marginBottom: 12 }}>
+                <span className="muted">{jReceipts.length} receipts</span>
+                <span style={{ fontFamily: "'Barlow Condensed'", fontSize: 20, fontWeight: 800, color: "var(--accent)" }}>${totalSpend.toFixed(2)}</span>
+              </div>
+              <div className="tbl-wrap"><table><thead><tr><th>Date</th><th>By</th><th>Vendor</th><th>Memo</th><th>Paid By</th><th>Photo</th><th style={{ textAlign: "right" }}>Amount</th><th></th></tr></thead>
+                <tbody>{jReceipts.map(r => (
+                  <tr key={r.id}>
+                    <td data-l="Date" className="muted">{r.createdAt}</td>
+                    <td data-l="By">{crewName(r.crewId)}</td>
+                    <td data-l="Vendor">{r.store}</td>
+                    <td data-l="Memo" className="muted">{r.note}</td>
+                    <td data-l="Paid"><span className={"tag " + (r.paidBy === "crew" ? "tag-overdue" : "tag-done")}>{r.paidBy === "crew" ? "Crew" : "Company"}</span></td>
+                    <td data-l="Photo">{r.dataUrl ? <img src={r.dataUrl} alt="rcpt" onClick={() => setLightbox(r.dataUrl)} style={{ width: 40, height: 40, objectFit: "cover", borderRadius: 6, cursor: "zoom-in", border: "1px solid var(--border)" }} /> : <span className="muted">—</span>}</td>
+                    <td data-l="Amount" style={{ textAlign: "right", fontWeight: 700, color: "var(--accent)", fontFamily: "'Barlow Condensed'", fontSize: 15 }}>${(+r.amount).toFixed(2)}</td>
+                    <td><button onClick={() => setConfirmDel({ type: "receipt", id: r.id })} style={{ background: "none", border: "none", cursor: "pointer", color: "var(--red)", fontSize: 16 }}>✕</button></td>
+                  </tr>
+                ))}</tbody>
+              </table></div>
+            </div>
+          }
+        </div>
+      )}
+
+      {/* Logs section */}
+      {section === "logs" && (
+        <div>
+          {jLogs.length === 0
+            ? <div className="empty"><p>No logs in this date range.</p></div>
+            : jLogs.map(l => (
+                <div key={l.id} className="log" style={{ position: "relative" }}>
+                  <div className="log-en">{l.en}</div>
+                  {l.es && l.es !== l.en && <div className="log-es">{l.es}</div>}
+                  <div className="log-m">{crewName(l.crewId)} · {l.date}</div>
+                  <button onClick={() => setConfirmDel({ type: "log", id: l.id })}
+                    style={{ position: "absolute", top: 6, right: 6, background: "none", border: "none", cursor: "pointer", color: "var(--red)", fontSize: 14 }}>✕</button>
+                </div>
+              ))
+          }
+        </div>
+      )}
+
+      {/* Lightbox */}
+      {lightbox && (
+        <div className="modal-bg" onClick={() => setLightbox(null)} style={{ alignItems: "center", justifyContent: "center" }}>
+          <div style={{ position: "relative", maxWidth: "90vw" }} onClick={e => e.stopPropagation()}>
+            <img src={lightbox} alt="full" style={{ maxWidth: "100%", maxHeight: "80vh", borderRadius: 12, objectFit: "contain" }} />
+            <div style={{ display: "flex", gap: 10, justifyContent: "center", marginTop: 14 }}>
+              <button className="btn btn-s" onClick={() => setLightbox(null)}>Close</button>
+              <button className="btn btn-p" onClick={() => { const w = window.open("","_blank"); w.document.write(`<img src="${lightbox}" style="max-width:100%"/>`); w.print(); }}><Icon n="print" s={14} /> Print</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Delete confirm */}
+      {confirmDel && (
+        <div className="modal-bg" onClick={() => setConfirmDel(null)}>
+          <div className="modal" onClick={e => e.stopPropagation()}>
+            <div className="mt">Delete this {confirmDel.type}?</div>
+            <p className="muted" style={{ lineHeight: 1.6 }}>This permanently removes it and cannot be undone.</p>
+            <div className="macts">
+              <button className="btn btn-s" onClick={() => setConfirmDel(null)}>Cancel</button>
+              <button className="btn" style={{ background: "linear-gradient(135deg,#dc2626,var(--red))", color: "#fff" }} onClick={handleDelete}>Delete</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -1996,7 +3958,7 @@ function Crew(props) {
 }
 
 function CrewTasks(props) {
-  const { user, tasks, setTasks, jobs, lang, t, settings, photos, setPhotos, receipts, setReceipts, logs, setLogs } = props;
+  const { user, tasks, setTasks, jobs, lang, t, settings, photos, setPhotos, receipts, setReceipts, logs, setLogs, dispatches } = props;
   const closedJobIds = new Set(jobs.filter(j => j.status === "closed").map(j => j.id));
   const my = tasks.filter(t => (Array.isArray(t.assignedTo) ? t.assignedTo.includes(user.id) : t.assignedTo === user.id) && !closedJobIds.has(t.jobId));
   const today = new Date().toISOString().split("T")[0];
@@ -2008,13 +3970,26 @@ function CrewTasks(props) {
   const [activePanel, setActivePanel] = useState(null); // { jobId, type: 'photo'|'receipt'|'issue' }
   const [photoType, setPhotoType] = useState("before");
   const [photoBusy, setPhotoBusy] = useState(false);
-  const [photoSuccess, setPhotoSuccess] = useState(null); // jobId of last saved
+  const [photoSuccess, setPhotoSuccess] = useState(null);
+  const [pendingJobPhoto, setPendingJobPhoto] = useState(null); // { dataUrl, sizeKB, jobId, type }
+  const [jobPhotoNote, setJobPhotoNote] = useState("");
   const [rcForm, setRcForm] = useState({ store: "", amount: "", note: "", paidBy: "crew", dataUrl: null });
   const [rcBusy, setRcBusy] = useState(false);
   const [issueText, setIssueText] = useState(""); const [issueDataUrl, setIssueDataUrl] = useState(null); const [issueBusy, setIssueBusy] = useState(false);
   const issuePhotoRef = useRef();
   const photoRef = useRef();
   const rcPhotoRef = useRef();
+  // ── Task-specific photo/receipt panels ──────────────────────────────
+  const [taskPanel, setTaskPanel] = useState(null); // { taskId, jobId, type:'photo'|'receipt', photoType:'before' }
+  const [taskRcForm, setTaskRcForm] = useState({ store: "", amount: "", note: "", paidBy: "crew", dataUrl: null });
+  const [taskRcBusy, setTaskRcBusy] = useState(false);
+  const [taskPhotoBusy, setTaskPhotoBusy] = useState(false);
+  const [pendingPhoto, setPendingPhoto] = useState(null);
+  const [photoNote, setPhotoNote] = useState("");
+  const [savedCount, setSavedCount] = useState(0);
+  const [crewLightbox, setCrewLightbox] = useState(null); // { dataUrl, note, type }
+  const taskPhotoRef  = useRef();
+  const taskRcPhotoRef = useRef();
 
   const PHOTO_TYPES = [
     { k: "before",  l: t.before,  c: "var(--orange)" },
@@ -2035,16 +4010,26 @@ function CrewTasks(props) {
     const file = e.target.files[0]; if (!file || !activePanel) return;
     setPhotoBusy(true);
     const { dataUrl, sizeKB } = await compressImage(file);
-    const id = "p" + Date.now();
-    const jobId = activePanel.jobId;
-    const dbType = photoType === "concern" ? "progress" : photoType;
-    const photo = { id, dataUrl, type: photoType, taskId: null, jobId, crewId: user.id, sizeKB, date: new Date().toISOString() };
-    setPhotos(p => [...p, photo]);
-    const row = { id, data_url: dataUrl, photo_type: dbType, task_id: null, job_id: jobId, crew_id: user.id, size_kb: sizeKB };
-    try { await sbPost("field_photos", row); } catch { enqueue({ table: "field_photos", payload: row }); }
     e.target.value = "";
     setPhotoBusy(false);
-    setActivePanel(null);
+    setPendingJobPhoto({ dataUrl, sizeKB, jobId: activePanel.jobId, type: photoType });
+    setJobPhotoNote("");
+    setActivePanel(null); // close the type-picker panel, description modal takes over
+  };
+
+  const saveJobPhoto = async (note) => {
+    if (!pendingJobPhoto) return;
+    setPhotoBusy(true);
+    const id = "p" + Date.now();
+    const { dataUrl, sizeKB, jobId, type } = pendingJobPhoto;
+    const dbType = type === "concern" ? "progress" : type;
+    const photo = { id, dataUrl, type, taskId: null, jobId, crewId: user.id, sizeKB, note: note || "", date: new Date().toISOString() };
+    setPhotos(p => [...p, photo]);
+    const row = { id, data_url: dataUrl, photo_type: dbType, task_id: null, job_id: jobId, crew_id: user.id, size_kb: sizeKB, note: note || null };
+    try { await sbPost("field_photos", row); } catch { enqueue({ table: "field_photos", payload: row }); }
+    setPendingJobPhoto(null);
+    setJobPhotoNote("");
+    setPhotoBusy(false);
     setPhotoSuccess(jobId);
     setTimeout(() => setPhotoSuccess(null), 3000);
   };
@@ -2145,6 +4130,67 @@ function CrewTasks(props) {
     try { await sbPost("field_material_requests", row); } catch { enqueue({ table: "field_material_requests", payload: row }); }
     setMat(""); setMatModal(null);
   };
+
+  // Language-aware task title helpers
+  const tt  = task => lang === "es" ? (task.titleEs || task.title) : task.title;
+  const tts = task => lang === "es" ? task.title : (task.titleEs || "");
+
+  const captureTaskPhoto = async (e) => {
+    const file = e.target.files[0]; if (!file || !taskPanel) return;
+    setTaskPhotoBusy(true);
+    const { dataUrl, sizeKB } = await compressImage(file);
+    e.target.value = "";
+    setTaskPhotoBusy(false);
+    setPendingPhoto({ dataUrl, sizeKB });
+    setPhotoNote("");
+  };
+
+  const saveTaskPhoto = async (andDone = false) => {
+    if (!pendingPhoto || !taskPanel) return;
+    setTaskPhotoBusy(true);
+    const id = "p" + Date.now();
+    const ptype = taskPanel.photoType || "before";
+    const photo = { id, dataUrl: pendingPhoto.dataUrl, type: ptype, taskId: taskPanel.taskId, jobId: taskPanel.jobId, crewId: user.id, sizeKB: pendingPhoto.sizeKB, note: photoNote, date: new Date().toISOString() };
+    setPhotos(p => [...p, photo]);
+    const row = { id, data_url: pendingPhoto.dataUrl, photo_type: ptype, task_id: taskPanel.taskId, job_id: taskPanel.jobId, crew_id: user.id, size_kb: pendingPhoto.sizeKB, note: photoNote || null };
+    try { await sbPost("field_photos", row); } catch { enqueue({ table: "field_photos", payload: row }); }
+    setSavedCount(n => n + 1);
+    setPendingPhoto(null);
+    setPhotoNote("");
+    setTaskPhotoBusy(false);
+    if (andDone) {
+      setTaskPanel(null);
+      setSavedCount(0);
+      setPhotoSuccess(taskPanel.jobId);
+      setTimeout(() => setPhotoSuccess(null), 3000);
+    }
+  };
+
+  const captureTaskRcPhoto = async (e) => {
+    const file = e.target.files[0]; if (!file) return;
+    const { dataUrl } = await compressImage(file, 1000, 0.6);
+    setTaskRcForm(p => ({ ...p, dataUrl }));
+    e.target.value = "";
+  };
+
+  const submitTaskReceipt = async () => {
+    if (!taskRcForm.store || !taskRcForm.amount || !taskPanel) return;
+    setTaskRcBusy(true);
+    const id = "r" + Date.now();
+    const receipt = { id, dataUrl: taskRcForm.dataUrl, taskId: taskPanel.taskId, jobId: taskPanel.jobId, crewId: user.id, store: taskRcForm.store, amount: taskRcForm.amount, note: taskRcForm.note, paidBy: taskRcForm.paidBy, reimbursementStatus: taskRcForm.paidBy === "crew" ? "pending" : "na", createdAt: today };
+    setReceipts(p => [...p, receipt]);
+    const row = { id, data_url: taskRcForm.dataUrl, task_id: taskPanel.taskId, job_id: taskPanel.jobId, crew_id: user.id, store: taskRcForm.store, amount: parseFloat(taskRcForm.amount) || 0, note: taskRcForm.note, paid_by: taskRcForm.paidBy, reimbursement_status: taskRcForm.paidBy === "crew" ? "pending" : "na" };
+    try { await sbPost("field_receipts", row); } catch { enqueue({ table: "field_receipts", payload: row }); }
+    if (taskRcForm.paidBy === "crew") {
+      const job = jobs.find(j => j.id === taskPanel.jobId);
+      const msg = `[Field App] ${user.name} submitted a receipt: ${taskRcForm.store} $${parseFloat(taskRcForm.amount).toFixed(2)} — ${job?.name}`;
+      fetch("/.netlify/functions/send-sms", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ to: "+12053699710", body: msg }) }).catch(() => {});
+    }
+    setTaskRcForm({ store: "", amount: "", note: "", paidBy: "crew", dataUrl: null });
+    setTaskRcBusy(false);
+    setTaskPanel(null);
+  };
+
   const st = task => task.status === "done" ? "done" : (task.dueDate && task.dueDate < today ? "overdue" : "pending");
 
   const [openCheckins, setOpenCheckins] = useState({}); // { jobId: checkinRecord }
@@ -2180,10 +4226,68 @@ function CrewTasks(props) {
 
   return (
     <div>
-      {/* shared hidden file inputs — activePanel tracks which job they belong to */}
-      <input ref={photoRef} type="file" accept="image/*" style={{ display: "none" }} onChange={captureJobPhoto} />
-      <input ref={rcPhotoRef} type="file" accept="image/*" style={{ display: "none" }} onChange={captureRcPhoto} />
-      <input ref={issuePhotoRef} type="file" accept="image/*" capture="environment" style={{ display: "none" }} onChange={captureIssuePhoto} />
+      {/* shared hidden file inputs */}
+      <input ref={photoRef}       type="file" accept="image/*" style={{ display: "none" }} onChange={captureJobPhoto} />
+      <input ref={rcPhotoRef}     type="file" accept="image/*" style={{ display: "none" }} onChange={captureRcPhoto} />
+      <input ref={issuePhotoRef}  type="file" accept="image/*" capture="environment" style={{ display: "none" }} onChange={captureIssuePhoto} />
+      {/* task-specific file inputs */}
+      <input ref={taskPhotoRef}   type="file" accept="image/*" style={{ display: "none" }} onChange={captureTaskPhoto} />
+      <input ref={taskRcPhotoRef} type="file" accept="image/*" style={{ display: "none" }} onChange={captureTaskRcPhoto} />
+
+      {/* ── WHERE TO GO TODAY (admin-dispatched) ── */}
+      {(() => {
+        const todayDispatch = dispatches?.find(d => d.crewId === user.id && d.date === today);
+        const dispatchJobs = todayDispatch ? todayDispatch.jobIds.map(id => jobs.find(j => j.id === id)).filter(Boolean) : [];
+        const customStops = todayDispatch?.customStops || [];
+        if (!todayDispatch || (dispatchJobs.length === 0 && customStops.length === 0)) return null;
+        return (
+          <div style={{ marginBottom: 20, background: "linear-gradient(135deg,rgba(245,158,11,.1),rgba(59,130,246,.08))", border: "1px solid rgba(245,158,11,.3)", borderRadius: 14, padding: 16 }}>
+            <div style={{ fontFamily: "'Barlow Condensed'", fontSize: 16, fontWeight: 800, letterSpacing: 1, color: "var(--accent)", marginBottom: 12 }}>
+              📍 {t.whereToGoToday}
+            </div>
+            {dispatchJobs.map((job, i) => (
+              <div key={job.id} style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8, padding: "8px 12px", background: "rgba(0,0,0,.2)", borderRadius: 10, border: "1px solid rgba(245,158,11,.2)" }}>
+                <span style={{ fontFamily: "'Barlow Condensed'", fontWeight: 800, color: "var(--accent)", fontSize: 18, width: 22, textAlign: "center" }}>{i + 1}</span>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontWeight: 700, fontSize: 15 }}>{job.name}</div>
+                  {job.address && (
+                    <a href={`https://maps.google.com/?q=${encodeURIComponent(job.address)}`} target="_blank" rel="noreferrer"
+                      style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 11, color: "var(--sky2)", textDecoration: "none", marginTop: 2 }}>
+                      <Icon n="pin" s={11} /> {job.address} — Navigate
+                    </a>
+                  )}
+                </div>
+              </div>
+            ))}
+            {customStops.map((s, i) => {
+              const stop = parseStop(s);
+              const gMapUrl = stop.address ? `https://maps.google.com/?q=${encodeURIComponent(stop.address)}` : null;
+              const aMapUrl = stop.address ? `maps://maps.apple.com/?q=${encodeURIComponent(stop.address)}` : null;
+              return (
+                <div key={i} style={{ marginBottom: 8, padding: "10px 12px", background: "rgba(59,130,246,.08)", borderRadius: 10, border: "1px solid rgba(59,130,246,.2)" }}>
+                  <div style={{ fontWeight: 600, fontSize: 14, marginBottom: 4 }}>🛑 {stop.label}</div>
+                  {stop.address && (
+                    <div style={{ fontSize: 12, color: "var(--silver)", marginBottom: 6 }}>📍 {stop.address}</div>
+                  )}
+                  {gMapUrl && (
+                    <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                      <a href={gMapUrl} target="_blank" rel="noreferrer"
+                        style={{ display: "inline-flex", alignItems: "center", gap: 5, padding: "5px 12px", borderRadius: 8, background: "rgba(59,130,246,.2)", color: "var(--sky2)", fontSize: 12, fontWeight: 700, textDecoration: "none", border: "1px solid rgba(59,130,246,.35)" }}>
+                        <Icon n="pin" s={13} /> {t.googleMaps}
+                      </a>
+                      <a href={aMapUrl} target="_blank" rel="noreferrer"
+                        style={{ display: "inline-flex", alignItems: "center", gap: 5, padding: "5px 12px", borderRadius: 8, background: "rgba(59,130,246,.12)", color: "var(--sky2)", fontSize: 12, fontWeight: 700, textDecoration: "none", border: "1px solid rgba(59,130,246,.2)" }}>
+                        <Icon n="pin" s={13} /> {t.appleMaps}
+                      </a>
+                    </div>
+                  )}
+                  {!stop.address && <div style={{ fontSize: 11, color: "var(--orange)" }}>{t.noAddressFile}</div>}
+                </div>
+              );
+            })}
+          </div>
+        );
+      })()}
 
       <div style={{ marginBottom: 18 }}>
         <h2 className="h2">{lang === "es" ? `Hola, ${user.name.split(" ")[0]}` : `Hey, ${user.name.split(" ")[0]}`}</h2>
@@ -2193,7 +4297,13 @@ function CrewTasks(props) {
       {my.length === 0
         ? <div className="empty"><Icon n="check" s={48} c="var(--green)" /><p style={{ marginTop: 12 }}>{t.noTasks}</p></div>
         : groups.map(jid => {
-          const job = jobs.find(j => j.id === jid), jt = my.filter(t => t.jobId === jid);
+          const job = jobs.find(j => j.id === jid);
+          const jt = my.filter(t => t.jobId === jid).sort((a, b) => {
+            if (a.recurring !== b.recurring) return a.recurring ? -1 : 1;
+            if (a.priority === "urgent" && b.priority !== "urgent") return -1;
+            if (a.priority !== "urgent" && b.priority === "urgent") return 1;
+            return 0;
+          });
           const ci = checkedJob?.id === jid;
           const panel = activePanel?.jobId === jid ? activePanel.type : null;
 
@@ -2207,13 +4317,13 @@ function CrewTasks(props) {
                   <a href={`https://maps.google.com/?q=${encodeURIComponent(job.address)}`} target="_blank" rel="noreferrer"
                     style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 12, color: "var(--sky2)", textDecoration: "none", marginTop: 2, padding: "2px 6px", background: "rgba(59,130,246,.12)", borderRadius: 6, border: "1px solid rgba(59,130,246,.25)" }}
                     onClick={e => e.stopPropagation()}>
-                    <Icon n="pin" s={12} c="var(--sky2)" /> {job.address} — Navigate
+                    <Icon n="pin" s={12} c="var(--sky2)" /> {job.address} — {t.navigate}
                   </a>
                 )}
               </div>
               {openCheckins[jid]
                 ? <button className="btn btn-sm btn-a" onClick={() => checkOut(job)}>
-                    <Icon n="power" s={13} /> {lang === "es" ? "Salir del trabajo" : "Check Out"}
+                    <Icon n="power" s={13} /> {t.checkOut}
                   </button>
                 : <button className={`btn btn-sm ${ci ? "btn-g" : "btn-s"}`} onClick={() => checkIn(job)}>
                     <Icon n="pin" s={13} /> {ci ? t.checkedIn : t.checkIn}
@@ -2249,7 +4359,7 @@ function CrewTasks(props) {
                     background: panel === "issue" ? "rgba(239,68,68,.18)" : "rgba(255,255,255,.07)",
                     color: panel === "issue" ? "var(--red)" : "var(--silver)",
                     outline: panel === "issue" ? "1px solid var(--red)" : "none" }}>
-                  ⚠ {lang === "es" ? "Problema" : "Flag Issue"}
+                  ⚠ {t.flagIssue}
                 </button>
               </div>
             </div>
@@ -2339,25 +4449,25 @@ function CrewTasks(props) {
             {panel === "issue" && (
               <div style={{ padding: "14px 16px", background: "rgba(8,15,22,.85)", borderBottom: "1px solid rgba(239,68,68,.2)" }}>
                 <div style={{ fontFamily: "'Barlow Condensed'", fontSize: 14, fontWeight: 700, color: "var(--red)", marginBottom: 10 }}>
-                  ⚠ {lang === "es" ? "Reportar problema / pregunta" : "Report Issue / Question"} — {lang === "es" ? "se alerta al admin" : "alerts admin immediately"}
+                  ⚠ {t.reportIssue} — {t.alertsAdmin}
                 </div>
                 <div style={{ marginBottom: 10 }}>
                   <textarea className="fi" rows={3} value={issueText} onChange={e => setIssueText(e.target.value)}
-                    placeholder={lang === "es" ? "Describe el problema o pregunta..." : "Describe the issue or question..."} />
+                    placeholder={t.describeIssue} />
                 </div>
                 <div style={{ display: "flex", gap: 8, marginBottom: 12, alignItems: "center" }}>
                   {issueDataUrl
                     ? <img src={issueDataUrl} alt="issue" style={{ width: 48, height: 48, objectFit: "cover", borderRadius: 6, border: "2px solid var(--red)" }} />
                     : null}
                   <button className="btn btn-s btn-sm" onClick={() => issuePhotoRef.current?.click()}>
-                    <Icon n="camera" s={13} /> {issueDataUrl ? (lang === "es" ? "Cambiar foto" : "Retake") : (lang === "es" ? "Adjuntar foto" : "Attach Photo")}
+                    <Icon n="camera" s={13} /> {issueDataUrl ? t.retake : t.attachPhoto}
                   </button>
                 </div>
                 <div style={{ display: "flex", gap: 8 }}>
                   <button className="btn btn-full" style={{ flex: 1, background: "linear-gradient(135deg,#dc2626,var(--red))", color: "#fff", justifyContent: "center" }}
                     disabled={(!issueText.trim() && !issueDataUrl) || issueBusy}
                     onClick={() => submitIssue(jid)}>
-                    {issueBusy ? <span className="spin" /> : <><Icon n="check" s={15} /> {lang === "es" ? "Enviar al Admin" : "Send to Admin"}</>}
+                    {issueBusy ? <span className="spin" /> : <><Icon n="check" s={15} /> {t.sendToAdmin}</>}
                   </button>
                   <button onClick={() => setActivePanel(null)}
                     style={{ background: "none", border: "none", color: "var(--slate)", cursor: "pointer", fontSize: 18, padding: "0 8px" }}>✕</button>
@@ -2373,28 +4483,256 @@ function CrewTasks(props) {
             )}
 
             {/* ── Task rows ── */}
-            <div className="jobbody">{jt.map(task => { const s = st(task);
-              return <div key={task.id} className="trow">
-                <div className="tchk"><input type="checkbox" checked={task.status === "done"} onChange={() => toggle(task.id)} /></div>
-                <div className="tinfo">
-                  <div className="ten" style={{ textDecoration: task.status === "done" ? "line-through" : "none", opacity: task.status === "done" ? .6 : 1 }}>{task.title}</div>
-                  <div className="tes">{task.titleEs}</div>
-                  <div className="tmeta"><span className={`tag tag-${s}`}>{t[s]}</span>
-                    {task.dueDate && <span className="tag" style={{ background: "rgba(255,255,255,.06)", color: "var(--silver)" }}>{task.dueDate}</span>}</div>
+            <div className="jobbody">{jt.map(task => {
+              const s = st(task);
+              const tp = taskPanel?.taskId === task.id ? taskPanel.type : null;
+              const TPTYPES = [
+                { k: "before", l: t.before, c: "var(--orange)" },
+                { k: "after",  l: t.after,  c: "var(--green)"  },
+                { k: "concern",l: t.concern,c: "var(--red)"    },
+              ];
+              const rowCls = `trow${task.recurring ? " trow-recurring" : task.priority === "urgent" ? " trow-urgent" : ""}`;
+              return (
+                <div key={task.id}>
+                  {/* ── Row ── */}
+                  <div className={rowCls}>
+                    <div className="tchk"><input type="checkbox" checked={task.status === "done"} onChange={() => toggle(task.id)} /></div>
+                    <div className="tinfo">
+                      <div className="ten" style={{ textDecoration: task.status === "done" ? "line-through" : "none", opacity: task.status === "done" ? .6 : 1 }}>
+                        {task.recurring && <span style={{ fontSize: 11, marginRight: 4 }}>🔁</span>}
+                        {tt(task)}
+                      </div>
+                      {tts(task) && <div className="tes">{tts(task)}</div>}
+                      <div className="tmeta">
+                        {task.recurring && <span className="tag tag-recurring">{lang === "es" ? "Recurrente" : "Recurring"}</span>}
+                        {task.priority === "urgent" && <span className="tag tag-urgent">⚡ {lang === "es" ? "Urgente" : "Urgent"}</span>}
+                        <span className={`tag tag-${s}`}>{t[s]}</span>
+                        {task.dueDate && <span className="tag" style={{ background: "rgba(255,255,255,.06)", color: "var(--silver)" }}>{task.dueDate}</span>}
+                      </div>
+                    </div>
+                    <div className="tact" style={{ gap: 5 }}>
+                      <button title={t.photoFor + " " + tt(task)}
+                        onClick={() => { const closing = taskPanel?.taskId === task.id && taskPanel?.type === "photo"; setTaskPanel(closing ? null : { taskId: task.id, jobId: task.jobId, type: "photo", photoType: "before" }); if (closing) { setPendingPhoto(null); setSavedCount(0); } }}
+                        style={{ padding:"7px 9px", borderRadius:9, border:"none", cursor:"pointer", fontSize:15,
+                          background: tp === "photo" ? "rgba(249,115,22,.2)" : "rgba(255,255,255,.07)",
+                          color: tp === "photo" ? "var(--orange)" : "var(--slate)" }}>📷</button>
+                      <button title={t.receiptFor + " " + tt(task)}
+                        onClick={() => { setTaskPanel(p => p?.taskId === task.id && p.type === "receipt" ? null : { taskId: task.id, jobId: task.jobId, type: "receipt" }); setTaskRcForm({ store:"",amount:"",note:"",paidBy:"crew",dataUrl:null }); }}
+                        style={{ padding:"7px 9px", borderRadius:9, border:"none", cursor:"pointer", fontSize:15,
+                          background: tp === "receipt" ? "rgba(245,158,11,.2)" : "rgba(255,255,255,.07)",
+                          color: tp === "receipt" ? "var(--accent)" : "var(--slate)" }}>🧾</button>
+                      <button className="btn btn-s btn-sm btn-ic" title={t.materials} onClick={() => setMatModal(task.id)}><Icon n="tools" s={14} /></button>
+                    </div>
+                  </div>
+
+                  {/* ── Task photo panel ── */}
+                  {tp === "photo" && (
+                    <div style={{ padding:"14px 16px", background:"rgba(8,15,22,.92)", borderBottom:"1px solid rgba(255,255,255,.06)" }}>
+                      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:10 }}>
+                        <div style={{ fontSize:12, color:"var(--orange)", fontWeight:700 }}>
+                          📷 {t.photoFor} <span style={{ color:"var(--white)" }}>{tt(task)}</span>
+                        </div>
+                        <button onClick={() => { setTaskPanel(null); setPendingPhoto(null); setSavedCount(0); }}
+                          style={{ background:"none", border:"none", color:"var(--slate)", cursor:"pointer", fontSize:18 }}>✕</button>
+                      </div>
+
+                      {/* Saved count badge */}
+                      {savedCount > 0 && (
+                        <div style={{ marginBottom:8, padding:"4px 10px", background:"rgba(16,185,129,.15)", borderRadius:8, fontSize:12, color:"var(--green)", fontWeight:600 }}>
+                          ✓ {savedCount} {lang==="es"?"foto(s) guardada(s)":"photo(s) saved"} — {lang==="es"?"agrega más o cierra":"add more or close"}
+                        </div>
+                      )}
+
+                      {/* STEP 1: no pending photo — show type picker + camera/library buttons */}
+                      {!pendingPhoto && (
+                        <>
+                          <div style={{ display:"flex", gap:6, marginBottom:12 }}>
+                            {TPTYPES.map(pt => (
+                              <button key={pt.k} onClick={() => setTaskPanel(p => ({ ...p, photoType: pt.k }))}
+                                style={{ flex:1, padding:"7px 8px", borderRadius:8, border:`1px solid ${taskPanel?.photoType===pt.k?pt.c:"rgba(255,255,255,.1)"}`,
+                                  background: taskPanel?.photoType===pt.k?`rgba(${pt.k==="before"?"249,115,22":pt.k==="after"?"16,185,129":"239,68,68"},.18)`:"rgba(255,255,255,.05)",
+                                  color: taskPanel?.photoType===pt.k?pt.c:"var(--silver)", fontSize:12, fontWeight:700, cursor:"pointer", textAlign:"center" }}>
+                                {pt.l}
+                              </button>
+                            ))}
+                          </div>
+                          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10 }}>
+                            <button className="btn btn-p" style={{ justifyContent:"center", padding:"14px 10px", fontSize:15 }}
+                              disabled={taskPhotoBusy}
+                              onClick={() => { taskPhotoRef.current?.setAttribute("capture","environment"); taskPhotoRef.current?.click(); }}>
+                              {taskPhotoBusy ? <span className="spin"/> : <><Icon n="camera" s={18}/><br/><span style={{ fontSize:11, marginTop:4, display:"block" }}>{t.takePhoto}<br/>{lang==="es"?"(Abrir Cámara)":"(Open Camera)"}</span></>}
+                            </button>
+                            <button className="btn btn-s" style={{ justifyContent:"center", padding:"14px 10px", fontSize:15 }}
+                              disabled={taskPhotoBusy}
+                              onClick={() => { taskPhotoRef.current?.removeAttribute("capture"); taskPhotoRef.current?.click(); }}>
+                              <Icon n="photo" s={18}/><br/><span style={{ fontSize:11, marginTop:4, display:"block" }}>{t.library}<br/>{lang==="es"?"(Elegir Archivo)":"(Choose File)"}</span>
+                            </button>
+                          </div>
+                        </>
+                      )}
+
+                      {/* STEP 2: photo captured — show preview + description input */}
+                      {pendingPhoto && (
+                        <>
+                          <div style={{ display:"flex", gap:12, marginBottom:12, alignItems:"flex-start" }}>
+                            <img src={pendingPhoto.dataUrl} alt="preview"
+                              style={{ width:90, height:90, objectFit:"cover", borderRadius:10, border:"2px solid var(--orange)", flexShrink:0 }} />
+                            <div style={{ flex:1 }}>
+                              <label className="fl" style={{ marginBottom:4 }}>{lang==="es"?"¿Qué muestra esta foto?":"What does this photo show?"}</label>
+                              <textarea className="fi" rows={3}
+                                value={photoNote} onChange={e => setPhotoNote(e.target.value)}
+                                placeholder={lang==="es"?"ej. Grieta en la pared norte, progreso del techo...":"e.g. Crack on north wall, roof progress..."}
+                                style={{ padding:"8px 12px", resize:"none" }}
+                                autoFocus />
+                            </div>
+                          </div>
+                          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:8 }}>
+                            <button className="btn btn-p" disabled={taskPhotoBusy} onClick={() => saveTaskPhoto(false)}
+                              style={{ justifyContent:"center", fontSize:13 }}>
+                              {taskPhotoBusy ? <span className="spin"/> : <>{lang==="es"?"💾 Guardar + Otra Foto":"💾 Save + Take Another"}</>}
+                            </button>
+                            <button className="btn btn-g" disabled={taskPhotoBusy} onClick={() => saveTaskPhoto(true)}
+                              style={{ justifyContent:"center", fontSize:13 }}>
+                              {taskPhotoBusy ? <span className="spin"/> : <>{lang==="es"?"✓ Guardar y Listo":"✓ Save & Done"}</>}
+                            </button>
+                          </div>
+                          <button onClick={() => { setPendingPhoto(null); setPhotoNote(""); }}
+                            style={{ marginTop:8, background:"none", border:"none", color:"var(--slate)", cursor:"pointer", fontSize:12, textDecoration:"underline" }}>
+                            {lang==="es"?"✕ Descartar foto":"✕ Discard this photo"}
+                          </button>
+                        </>
+                      )}
+                    </div>
+                  )}
+
+                  {/* ── Task photo thumbnails ── */}
+                  {(() => {
+                    const taskPhotos = photos.filter(p => p.taskId === task.id);
+                    if (!taskPhotos.length) return null;
+                    return (
+                      <div style={{ display:"flex", gap:10, flexWrap:"wrap", padding:"10px 14px", background:"rgba(0,0,0,.18)", borderBottom:"1px solid rgba(255,255,255,.04)" }}>
+                        {taskPhotos.map((p, i) => (
+                          <div key={i} style={{ display:"flex", flexDirection:"column", width:64, flexShrink:0 }}>
+                            <div onClick={() => setCrewLightbox(p)}
+                              style={{ position:"relative", width:64, height:64, borderRadius:8, overflow:"hidden", cursor:"zoom-in",
+                                border:`2px solid ${p.type==="before"?"var(--orange)":p.type==="after"?"var(--green)":"var(--red)"}` }}>
+                              {p.dataUrl
+                                ? <img src={p.dataUrl} alt={p.type} style={{ width:"100%", height:"100%", objectFit:"cover" }} />
+                                : <div style={{ width:"100%", height:"100%", display:"flex", alignItems:"center", justifyContent:"center" }}><Icon n="camera" s={20} c="var(--slate)" /></div>}
+                              <div style={{ position:"absolute", bottom:0, left:0, right:0, background:"rgba(0,0,0,.65)", fontSize:8, textAlign:"center", color:"#fff", padding:"1px 0", fontWeight:700, textTransform:"uppercase" }}>
+                                {p.type}
+                              </div>
+                            </div>
+                            {p.note && <div style={{ fontSize:9, color:"var(--silver)", marginTop:3, lineHeight:1.3, wordBreak:"break-word", maxHeight:28, overflow:"hidden" }}>{p.note}</div>}
+                          </div>
+                        ))}
+                      </div>
+                    );
+                  })()}
+
+                  {/* ── Task receipt panel ── */}
+                  {tp === "receipt" && (
+                    <div style={{ padding:"12px 16px", background:"rgba(8,15,22,.9)", borderBottom:"1px solid rgba(255,255,255,.06)" }}>
+                      <div style={{ fontSize:12, color:"var(--accent)", fontWeight:700, marginBottom:8 }}>
+                        🧾 {t.receiptFor} {tt(task)}
+                      </div>
+                      <div className="grid2" style={{ marginBottom:8 }}>
+                        <div><label className="fl">{t.store}</label>
+                          <input className="fi" value={taskRcForm.store} onChange={e=>setTaskRcForm(p=>({...p,store:e.target.value}))} placeholder="Home Depot" style={{ padding:"8px 12px" }} /></div>
+                        <div><label className="fl">{t.amount} ($)</label>
+                          <input className="fi" type="number" value={taskRcForm.amount} onChange={e=>setTaskRcForm(p=>({...p,amount:e.target.value}))} placeholder="0.00" style={{ padding:"8px 12px" }} /></div>
+                      </div>
+                      <div style={{ marginBottom:8 }}><label className="fl">{t.notes}</label>
+                        <input className="fi" value={taskRcForm.note} onChange={e=>setTaskRcForm(p=>({...p,note:e.target.value}))} placeholder={t.whatBought} style={{ padding:"8px 12px" }} /></div>
+                      <div style={{ display:"flex", gap:8, marginBottom:10, flexWrap:"wrap", alignItems:"center" }}>
+                        <button className={`btn btn-sm ${taskRcForm.paidBy==="crew"?"btn-a":"btn-s"}`} onClick={()=>setTaskRcForm(p=>({...p,paidBy:"crew"}))}>{t.iPaid}</button>
+                        <button className={`btn btn-sm ${taskRcForm.paidBy==="company"?"btn-p":"btn-s"}`} onClick={()=>setTaskRcForm(p=>({...p,paidBy:"company"}))}>{t.companyPaid}</button>
+                        <div style={{ marginLeft:"auto", display:"flex", alignItems:"center", gap:8 }}>
+                          {taskRcForm.dataUrl && <img src={taskRcForm.dataUrl} alt="rcpt" style={{ width:36,height:36,objectFit:"cover",borderRadius:6,border:"2px solid var(--green)" }}/>}
+                          <button className="btn btn-s btn-sm" onClick={()=>{taskRcPhotoRef.current?.setAttribute("capture","environment");taskRcPhotoRef.current?.click();}}>
+                            <Icon n="camera" s={13}/> {taskRcForm.dataUrl?t.retake:t.photo}
+                          </button>
+                        </div>
+                      </div>
+                      {taskRcForm.paidBy==="crew" && <p style={{ fontSize:11,color:"var(--orange)",marginBottom:8 }}>⚠ {t.flaggedReimb}</p>}
+                      <div style={{ display:"flex", gap:8 }}>
+                        <button className="btn btn-p" style={{ flex:1 }}
+                          disabled={!taskRcForm.store||!taskRcForm.amount||taskRcBusy}
+                          onClick={submitTaskReceipt}>
+                          {taskRcBusy?<span className="spin"/>:<><Icon n="check" s={15}/> {t.submitReceipt}</>}
+                        </button>
+                        <button onClick={()=>setTaskPanel(null)}
+                          style={{ background:"none",border:"none",color:"var(--slate)",cursor:"pointer",fontSize:18,padding:"0 8px" }}>✕</button>
+                      </div>
+                    </div>
+                  )}
                 </div>
-                <div className="tact">
-                  <button className="btn btn-s btn-sm btn-ic" title="Materials" onClick={() => setMatModal(task.id)}><Icon n="tools" s={14} /></button>
-                </div>
-              </div>; })}
-            </div>
+              );
+            })}</div>
 
           </div>;
         })}
 
+      {/* ── Job photo description modal ── */}
+      {pendingJobPhoto && (
+        <div className="modal-bg">
+          <div className="modal" onClick={e => e.stopPropagation()}>
+            <div className="mt">📷 {lang === "es" ? "¿Qué muestra esta foto?" : "Describe this photo"}</div>
+            <div style={{ display:"flex", gap:12, marginBottom:16, alignItems:"flex-start" }}>
+              <img src={pendingJobPhoto.dataUrl} alt="preview"
+                style={{ width:90, height:90, objectFit:"cover", borderRadius:10, flexShrink:0,
+                  border:`2px solid ${pendingJobPhoto.type==="before"?"var(--orange)":pendingJobPhoto.type==="after"?"var(--green)":"var(--red)"}` }} />
+              <div style={{ flex:1 }}>
+                <div style={{ fontSize:12, color:"var(--silver)", marginBottom:8 }}>
+                  {lang==="es"?"Agrega una descripción para que todos entiendan esta foto.":"Add a description so everyone understands what this photo shows."}
+                </div>
+                <textarea className="fi" rows={4} autoFocus
+                  value={jobPhotoNote} onChange={e => setJobPhotoNote(e.target.value)}
+                  placeholder={lang==="es"
+                    ? "ej. Grieta en la pared norte, nivel de progreso, material dañado..."
+                    : "e.g. Crack on north wall, progress level, damaged material..."} />
+              </div>
+            </div>
+            <div className="macts">
+              <button className="btn btn-s" onClick={() => saveJobPhoto("")}>
+                {lang==="es"?"Guardar sin descripción":"Save without description"}
+              </button>
+              <button className="btn btn-p" disabled={photoBusy} onClick={() => saveJobPhoto(jobPhotoNote)}>
+                {photoBusy ? <span className="spin"/> : <><Icon n="check" s={14}/> {lang==="es"?"Guardar foto":"Save Photo"}</>}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Photo lightbox ── */}
+      {crewLightbox && (
+        <div className="modal-bg" onClick={() => setCrewLightbox(null)}>
+          <div style={{ maxWidth:"95vw", textAlign:"center" }} onClick={e => e.stopPropagation()}>
+            <img src={crewLightbox.dataUrl} alt={crewLightbox.type}
+              style={{ maxWidth:"100%", maxHeight:"72vh", borderRadius:12, objectFit:"contain",
+                border:`3px solid ${crewLightbox.type==="before"?"var(--orange)":crewLightbox.type==="after"?"var(--green)":"var(--red)"}` }} />
+            {crewLightbox.note && (
+              <div style={{ marginTop:10, padding:"8px 16px", background:"rgba(0,0,0,.6)", borderRadius:8, color:"var(--white)", fontSize:14, maxWidth:400, margin:"10px auto 0" }}>
+                {crewLightbox.note}
+              </div>
+            )}
+            <div style={{ marginTop:12, display:"flex", gap:10, justifyContent:"center" }}>
+              <span style={{ padding:"3px 12px", borderRadius:20, fontSize:11, fontWeight:700, textTransform:"uppercase",
+                background: crewLightbox.type==="before"?"rgba(249,115,22,.25)":crewLightbox.type==="after"?"rgba(16,185,129,.25)":"rgba(239,68,68,.25)",
+                color: crewLightbox.type==="before"?"var(--orange)":crewLightbox.type==="after"?"var(--green)":"var(--red)" }}>
+                {crewLightbox.type}
+              </span>
+              <button className="btn btn-s btn-sm" onClick={() => setCrewLightbox(null)}>{t.cancel}</button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {matModal && <div className="modal-bg" onClick={e => e.target === e.currentTarget && setMatModal(null)}>
         <div className="modal"><div className="mt">{t.materials}</div>
           <div className="fg"><label className="fl">{t.whatNeed}</label>
-            <textarea className="fi" value={mat} onChange={e => setMat(e.target.value)} placeholder={lang === "es" ? "ej. madera 2x4..." : "e.g. 2x4 lumber..."} /></div>
+            <textarea className="fi" value={mat} onChange={e => setMat(e.target.value)} placeholder={lang === "es" ? "ej. madera 2x4, tornillos..." : "e.g. 2x4 lumber, screws..."} /></div>
           <div className="macts"><button className="btn btn-s" onClick={() => setMatModal(null)}>{t.cancel}</button>
             <button className="btn btn-a" onClick={() => submitMat(matModal)}><Icon n="tools" s={14} /> {t.submit}</button></div></div></div>}
     </div>
