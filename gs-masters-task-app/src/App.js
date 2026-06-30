@@ -109,7 +109,7 @@ async function deleteFromStorage(path) {
 }
 
 // ─── SNAKE ↔ CAMEL TRANSFORMS ──────────────────────────────────────────
-const fromProfile = r => ({ id: r.id, name: r.name, role: r.role, email: r.email, phone: r.phone || "", pin: r.pin, active: r.active !== false, archived: r.archived === true });
+const fromProfile = r => ({ id: r.id, name: r.name, role: r.role, email: r.email, phone: r.phone || "", pin: r.pin, active: r.active !== false, archived: r.archived === true, is1099: r.is_1099 === true });
 const fromJob     = r => ({ id: r.id, name: r.name, address: r.address || "", lat: r.lat, lng: r.lng, budget: r.budget, status: r.status, closedAt: r.closed_at, gsmJobId: r.gsm_job_id, gsmSync: r.gsm_sync || false });
 const fromTask    = r => ({ id: r.id, jobId: r.job_id, title: r.title, titleEs: r.title_es || "", assignedTo: Array.isArray(r.assigned_to) ? r.assigned_to : (r.assigned_to ? [r.assigned_to] : []), status: r.status, dueDate: r.due_date || "", createdAt: (r.created_at || "").slice(0, 10), completedAt: r.completed_at || null, priority: r.priority === 1 ? "urgent" : "normal", recurring: r.recurring || false, photoRequired: r.photo_required === true });
 const toPriority  = p => p === "urgent" ? 1 : 3;
@@ -1037,6 +1037,10 @@ export default function App() {
     setUsers(u => u.map(x => x.id === id ? { ...x, active: true, archived: false } : x));
     try { await sbPatch("field_profiles", id, { active: true, archived: false }); } catch {}
   };
+  const setIs1099 = async (id, val) => {
+    setUsers(u => u.map(x => x.id === id ? { ...x, is1099: val } : x));
+    try { await sbPatch("field_profiles", id, { is_1099: val }); } catch {}
+  };
 
   const deletePhoto = async (id) => {
     const photo = photos.find(p => p.id === id);
@@ -1209,7 +1213,7 @@ export default function App() {
 
   const shared = { user, lang, t, jobs, setJobs, tasks, setTasks, receipts, setReceipts,
                    logs, setLogs, photos, setPhotos, mats, setMats, settings, saveSettings, users,
-                   online, setActive, addUser, updateUser, removeUser, archiveCrew, unarchiveCrew,
+                   online, setActive, setIs1099, addUser, updateUser, removeUser, archiveCrew, unarchiveCrew,
                    dispatches, setDispatches, upsertDispatch, deleteDispatch,
                    deletePhoto, deleteReceipt, deleteLog, reassignPhoto, reassignReceipt };
 
@@ -3994,7 +3998,7 @@ function Jobs({ jobs, setJobs, tasks }) {
   );
 }
 
-function CrewMgmt({ users, tasks, setActive, addUser, updateUser, removeUser, archiveCrew, unarchiveCrew, settings }) {
+function CrewMgmt({ users, tasks, setActive, setIs1099, addUser, updateUser, removeUser, archiveCrew, unarchiveCrew, settings }) {
   const [modal, setModal] = useState(null); // 'add' | user object (edit)
   const [invite, setInvite] = useState(null);
   const [confirm, setConfirm] = useState(null);
@@ -4044,13 +4048,18 @@ function CrewMgmt({ users, tasks, setActive, addUser, updateUser, removeUser, ar
               <div style={{ display: "flex", gap: 6 }}>
                 <button className="btn btn-s btn-sm btn-ic" title="Invite" onClick={() => setInvite(m)}><Icon n="translate" s={13} /></button>
                 <button className="btn btn-s btn-sm btn-ic" title="Edit" onClick={() => openEdit(m)}><Icon n="pen" s={13} /></button></div></div>
-            <div style={{ display: "flex", gap: 6 }}>
+            <div style={{ display: "flex", gap: 6, marginBottom: 6 }}>
               <button className={`btn btn-sm ${active ? "btn-s" : "btn-g"}`} style={{ flex: 1 }} onClick={() => setActive(m.id, !active)}>
                 <Icon n={active ? "lock" : "power"} s={13} /> {active ? "Deactivate" : "Reactivate"}
               </button>
               <button className="btn btn-sm btn-s" title="Archive — removes from active crew, keeps all records" onClick={() => archiveCrew(m.id)}
                 style={{ padding: "8px 10px", color: "var(--slate)" }}>📦</button>
             </div>
+            <button className={`btn btn-sm btn-full`}
+              style={{ fontSize: 11, color: m.is1099 ? "var(--accent)" : "var(--slate)", borderColor: m.is1099 ? "rgba(245,158,11,.5)" : "var(--border)", background: m.is1099 ? "rgba(245,158,11,.08)" : "transparent" }}
+              onClick={() => setIs1099(m.id, !m.is1099)}>
+              {m.is1099 ? "✓ 1099 Crew — shows in GSM Crew Pay" : "○ Not 1099 — hidden from GSM Crew Pay"}
+            </button>
           </div>; })}</div>
 
       {/* ── Archived crew ── */}
