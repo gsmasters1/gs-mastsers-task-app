@@ -9,13 +9,72 @@ import { useState, useEffect, useRef, useCallback } from "react";
 // ─── SUPABASE CONFIG ───────────────────────────────────────────────────
 const SB_URL = "https://mkibgjnzbgfqjkhowafr.supabase.co";
 const SB_KEY = "sb_publishable_zh5Soyi6iNGd8CLxPfD9Lg_dVdAwDe7";
+const SB_JWT = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im1raWJnam56YmdmcWpraG93YWZyIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzM1NDM3NDMsImV4cCI6MjA4OTExOTc0M30.dFNsD-3JkDCChaVlWlJY5Ff_HtkWvNU6m9nbkNWNkow";
+
+// ─── AUTH TOKEN (set after Supabase Auth login) ────────────────────────
+let _authToken = null;
+let _refreshToken = null;
+let _tokenRefreshTimer = null;
+
+function setSession(accessToken, refreshToken) {
+  _authToken = accessToken;
+  _refreshToken = refreshToken;
+  if (accessToken) {
+    sessionStorage.setItem("gsm_tok", accessToken);
+    sessionStorage.setItem("gsm_rtok", refreshToken || "");
+  } else {
+    sessionStorage.removeItem("gsm_tok");
+    sessionStorage.removeItem("gsm_rtok");
+  }
+}
+
+function restoreSession() {
+  _authToken   = sessionStorage.getItem("gsm_tok")  || null;
+  _refreshToken = sessionStorage.getItem("gsm_rtok") || null;
+}
+
+function scheduleTokenRefresh(expiresInSec) {
+  if (_tokenRefreshTimer) clearTimeout(_tokenRefreshTimer);
+  const delay = Math.max((expiresInSec - 120) * 1000, 30000);
+  _tokenRefreshTimer = setTimeout(refreshSession, delay);
+}
+
+async function sbAuthSignIn(profileId, pin) {
+  const res = await fetch(`${SB_URL}/auth/v1/token?grant_type=password`, {
+    method: "POST",
+    headers: { apikey: SB_JWT, "Content-Type": "application/json" },
+    body: JSON.stringify({ email: `${profileId}@gsm.internal`, password: pin }),
+  });
+  if (!res.ok) throw new Error("auth_failed");
+  const data = await res.json();
+  setSession(data.access_token, data.refresh_token);
+  scheduleTokenRefresh(data.expires_in || 3600);
+  return data;
+}
+
+async function refreshSession() {
+  if (!_refreshToken) return false;
+  try {
+    const res = await fetch(`${SB_URL}/auth/v1/token?grant_type=refresh_token`, {
+      method: "POST",
+      headers: { apikey: SB_JWT, "Content-Type": "application/json" },
+      body: JSON.stringify({ refresh_token: _refreshToken }),
+    });
+    if (!res.ok) return false;
+    const data = await res.json();
+    setSession(data.access_token, data.refresh_token);
+    scheduleTokenRefresh(data.expires_in || 3600);
+    return true;
+  } catch { return false; }
+}
 
 async function sbFetch(path, opts = {}) {
+  const token = _authToken || SB_JWT;
   const res = await fetch(`${SB_URL}/rest/v1/${path}`, {
     ...opts,
     headers: {
-      apikey: SB_KEY,
-      Authorization: `Bearer ${SB_KEY}`,
+      apikey: SB_JWT,
+      Authorization: `Bearer ${token}`,
       "Content-Type": "application/json",
       Prefer: opts.prefer || "return=representation",
       ...opts.headers,
@@ -29,16 +88,106 @@ const sbPost   = (t, d)        => sbFetch(t, { method: "POST", body: JSON.string
 const sbPatch  = (t, id, d)    => sbFetch(`${t}?id=eq.${id}`, { method: "PATCH", body: JSON.stringify(d), prefer: "return=minimal" });
 const sbDelete = (t, id)       => sbFetch(`${t}?id=eq.${id}`, { method: "DELETE", prefer: "return=minimal" });
 
+async function uploadToStorage(dataUrl, path) {
+  const res = await fetch(dataUrl);
+  const blob = await res.blob();
+  const r = await fetch(`${SB_URL}/storage/v1/object/portal-uploads/${path}`, {
+    method: "POST",
+    headers: { "Authorization": `Bearer ${SB_KEY}`, "Content-Type": blob.type || "image/jpeg", "x-upsert": "true" },
+    body: blob,
+  });
+  if (!r.ok) throw new Error("Storage upload failed");
+  return path;
+}
+async function deleteFromStorage(path) {
+  if (!path) return;
+  await fetch(`${SB_URL}/storage/v1/object/portal-uploads`, {
+    method: "DELETE",
+    headers: { "Authorization": `Bearer ${SB_KEY}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ prefixes: [path] }),
+  });
+}
+
 // ─── SNAKE ↔ CAMEL TRANSFORMS ──────────────────────────────────────────
 const fromProfile = r => ({ id: r.id, name: r.name, role: r.role, email: r.email, phone: r.phone || "", pin: r.pin, active: r.active !== false, archived: r.archived === true });
 const fromJob     = r => ({ id: r.id, name: r.name, address: r.address || "", lat: r.lat, lng: r.lng, budget: r.budget, status: r.status, closedAt: r.closed_at, gsmJobId: r.gsm_job_id, gsmSync: r.gsm_sync || false });
-const fromTask    = r => ({ id: r.id, jobId: r.job_id, title: r.title, titleEs: r.title_es || "", assignedTo: Array.isArray(r.assigned_to) ? r.assigned_to : (r.assigned_to ? [r.assigned_to] : []), status: r.status, dueDate: r.due_date || "", createdAt: (r.created_at || "").slice(0, 10), priority: r.priority || "normal", recurring: r.recurring || false });
-const fromLog     = r => ({ id: r.id, taskId: r.task_id, jobId: r.job_id, crewId: r.crew_id, en: r.text_en, es: r.text_es, weather: r.weather, date: r.log_date });
-const fromPhoto   = r => ({ id: r.id, taskId: r.task_id, jobId: r.job_id, crewId: r.crew_id, dataUrl: r.data_url, type: r.photo_type, sizeKB: r.size_kb, note: r.note || "", date: r.created_at });
-const fromReceipt = r => ({ id: r.id, taskId: r.task_id, jobId: r.job_id, crewId: r.crew_id, dataUrl: r.data_url, store: r.store, amount: r.amount, note: r.note, paidBy: r.paid_by || "crew", reimbursementStatus: r.reimbursement_status || "pending", billStatus: r.bill_status, createdAt: (r.created_at || "").slice(0, 10) });
+const fromTask    = r => ({ id: r.id, jobId: r.job_id, title: r.title, titleEs: r.title_es || "", assignedTo: Array.isArray(r.assigned_to) ? r.assigned_to : (r.assigned_to ? [r.assigned_to] : []), status: r.status, dueDate: r.due_date || "", createdAt: (r.created_at || "").slice(0, 10), completedAt: r.completed_at || null, priority: r.priority === 1 ? "urgent" : "normal", recurring: r.recurring || false, photoRequired: r.photo_required === true });
+const toPriority  = p => p === "urgent" ? 1 : 3;
+const fromLog     = r => ({ id: r.id, taskId: r.task_id, jobId: r.job_id, crewId: r.crew_id, en: r.text_en, es: r.text_es, weather: r.weather, date: r.log_date, adminReply: r.admin_reply || null, resolved: r.resolved || false });
+const fromPhoto   = r => ({ id: r.id, taskId: r.task_id, jobId: r.job_id, crewId: r.crew_id, dataUrl: r.storage_path ? `${SB_URL}/storage/v1/object/public/portal-uploads/${r.storage_path}` : (r.data_url || null), storagePath: r.storage_path || null, type: r.photo_type, sizeKB: r.size_kb, note: r.note || "", date: r.created_at });
+const fromReceipt = r => ({ id: r.id, taskId: r.task_id, jobId: r.job_id, crewId: r.crew_id, dataUrl: r.storage_path ? `${SB_URL}/storage/v1/object/public/portal-uploads/${r.storage_path}` : (r.data_url || null), storagePath: r.storage_path || null, store: r.store, amount: r.amount, note: r.note, paidBy: r.paid_by || "crew", reimbursementStatus: r.reimbursement_status || "pending", billStatus: r.bill_status || "pending_review", createdAt: (r.created_at || "").slice(0, 10), integrationSentAt: r.integration_sent_at || null });
 const fromMat     = r => ({ id: r.id, taskId: r.task_id, jobId: r.job_id, crewId: r.crew_id, en: r.text_en, es: r.text_es, fulfilled: r.fulfilled });
-const fromCheckin  = r => ({ id: r.id, crewId: r.crew_id, jobId: r.job_id, checkIn: r.check_in, checkOut: r.check_out, hours: r.hours, date: r.work_date, latIn: r.lat_in, lngIn: r.lng_in });
+const fromCheckin  = r => ({ id: r.id, crewId: r.crew_id, jobId: r.job_id, checkIn: r.check_in, checkOut: r.check_out, hours: r.hours, date: r.work_date, latIn: r.lat_in, lngIn: r.lng_in, method: r.method || "qr", autoClosed: r.auto_closed === true });
 const fromDispatch = r => ({ id: r.id, crewId: r.crew_id, date: r.date, jobIds: r.job_ids || [], customStops: r.custom_stops || [], createdBy: r.created_by });
+
+// ─── LOCAL DATE HELPERS (device timezone, not UTC) ──────────────────────
+// Using UTC causes tasks to "reset" at 7 PM CDT because UTC midnight ≠ local midnight
+const localDate = () => {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+};
+const localDateOf = iso => {
+  if (!iso) return null;
+  const d = new Date(iso);
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+};
+
+// ─── GSM BUILDER INTEGRATION ────────────────────────────────────────────
+async function pushReceiptToGSM(receipt, jobs, crewName) {
+  const job = (jobs || []).find(j => j.id === receipt.jobId);
+  if (!job?.gsmSync || !job?.gsmJobId) return false;
+  try {
+    const res = await fetch("/.netlify/functions/gsm-sync", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ type: "receipt", gsmJobId: job.gsmJobId, data: { ...receipt, crewName: crewName || "Field Crew" } }),
+    });
+    if (!res.ok) return false;
+    await sbFetch(`field_receipts?id=eq.${receipt.id}`, { method: "PATCH", body: JSON.stringify({ bill_status: "posted", integration_sent_at: new Date().toISOString() }), prefer: "return=minimal" });
+    return true;
+  } catch { return false; }
+}
+
+// ─── PUSH NOTIFICATIONS ─────────────────────────────────────────────────
+const VAPID_PUBLIC_KEY = "BNuhXdjrECrBVABmhVdEe-qy4OMKQnkIZek8scMjJQ-xHg6zTX7-VEIQ2BadiWDh_kCvO1gs9MSboG77Xfl-b9o";
+
+function urlBase64ToUint8Array(base64String) {
+  const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
+  const base64 = (base64String + padding).replace(/-/g, "+").replace(/_/g, "/");
+  const raw = window.atob(base64);
+  return new Uint8Array([...raw].map(c => c.charCodeAt(0)));
+}
+
+async function registerPush(crewId) {
+  try {
+    if (!("Notification" in window) || !("serviceWorker" in navigator)) return;
+    const perm = await Notification.requestPermission();
+    if (perm !== "granted") return;
+    const reg = await navigator.serviceWorker.ready;
+    let sub = await reg.pushManager.getSubscription();
+    if (!sub) {
+      sub = await reg.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: urlBase64ToUint8Array(VAPID_PUBLIC_KEY),
+      });
+    }
+    const id = "ps_" + crewId + "_" + btoa(sub.endpoint).slice(-12).replace(/[^a-z0-9]/gi, "");
+    await sbFetch("push_subscriptions", {
+      method: "POST",
+      body: JSON.stringify({ id, crew_id: crewId, subscription: sub.toJSON() }),
+      headers: { Prefer: "resolution=merge-duplicates" },
+    });
+  } catch {}
+}
+
+async function sendPush(crewIds, title, bodyText, url) {
+  if (!crewIds?.length) return;
+  fetch("/.netlify/functions/send-push", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ crewIds, title, bodyText, url: url || "/" }),
+  }).catch(() => {});
+}
 
 // ─── OFFLINE QUEUE ──────────────────────────────────────────────────────
 const QUEUE_KEY = "gsm_offline_queue";
@@ -62,25 +211,65 @@ async function flushQueue() {
 
 // ─── PHOTO COMPRESSION ──────────────────────────────────────────────────
 function compressImage(file, maxW = 1280, quality = 0.7) {
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     const img = new Image();
-    const reader = new FileReader();
-    reader.onload = (e) => {
-      img.onload = () => {
+    let objUrl;
+    try { objUrl = URL.createObjectURL(file); } catch { /* fall through to FileReader */ }
+
+    const readRaw = () => {
+      if (file.size > 500 * 1024) { reject(new Error("Image too large to process")); return; }
+      const fr2 = new FileReader();
+      fr2.onerror = () => reject(new Error("FileReader fallback failed"));
+      fr2.onload = ev => resolve({ blob: file, dataUrl: ev.target.result, sizeKB: Math.round(file.size / 1024) });
+      fr2.readAsDataURL(file);
+    };
+
+    const onImgLoad = () => {
+      try {
         const scale = Math.min(1, maxW / img.width);
         const canvas = document.createElement("canvas");
-        canvas.width = img.width * scale;
-        canvas.height = img.height * scale;
-        canvas.getContext("2d").drawImage(img, 0, 0, canvas.width, canvas.height);
-        canvas.toBlob((blob) => {
-          resolve({ blob, dataUrl: canvas.toDataURL("image/jpeg", quality),
-                    sizeKB: Math.round(blob.size / 1024) });
-        }, "image/jpeg", quality);
-      };
-      img.src = e.target.result;
+        canvas.width  = Math.round(img.width  * scale) || 1;
+        canvas.height = Math.round(img.height * scale) || 1;
+        const ctx = canvas.getContext("2d");
+        if (!ctx) { if (objUrl) { URL.revokeObjectURL(objUrl); objUrl = null; } readRaw(); return; }
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+        if (objUrl) { URL.revokeObjectURL(objUrl); objUrl = null; }
+        const dataUrl = canvas.toDataURL("image/jpeg", quality);
+        if (!dataUrl || dataUrl === "data:,") { readRaw(); return; }
+        resolve({ blob: file, dataUrl, sizeKB: Math.round(dataUrl.length * 0.75 / 1024) });
+      } catch {
+        if (objUrl) { URL.revokeObjectURL(objUrl); objUrl = null; }
+        readRaw();
+      }
     };
-    reader.readAsDataURL(file);
+
+    img.onerror = () => {
+      if (objUrl) { URL.revokeObjectURL(objUrl); objUrl = null; }
+      reject(new Error("Image load failed"));
+    };
+    img.onload = onImgLoad;
+
+    if (objUrl) {
+      img.src = objUrl;
+    } else {
+      const fr = new FileReader();
+      fr.onerror = () => reject(new Error("FileReader failed"));
+      fr.onload = (e) => { img.src = e.target.result; };
+      fr.readAsDataURL(file);
+    }
   });
+}
+
+// iOS PWA file-from-gallery helper — dynamic element bypasses iOS capture cache bug
+function openGallery(onChange) {
+  const inp = document.createElement("input");
+  inp.type = "file";
+  inp.accept = "image/jpeg,image/png,image/gif,image/webp,image/heic,image/heif";
+  inp.style.cssText = "position:fixed;top:-200vh;left:-200vw;opacity:0";
+  document.body.appendChild(inp);
+  inp.addEventListener("change", (e) => { onChange(e); inp.remove(); });
+  inp.addEventListener("cancel", () => inp.remove());
+  inp.click();
 }
 
 // ─── TAP-TO-NAVIGATE ADDRESS ─────────────────────────────────────────────
@@ -280,6 +469,7 @@ const Icon = ({ n, s = 20, c = "currentColor" }) => {
     menu:"M3 12h18 M3 6h18 M3 18h18", x:"M18 6L6 18 M6 6l12 12",
     lock:"M19 11H5a2 2 0 0 0-2 2v7a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7a2 2 0 0 0-2-2z M7 11V7a5 5 0 0 1 10 0v4",
     power:"M18.36 6.64a9 9 0 1 1-12.73 0 M12 2v10",
+    archive:"M21 8v13H3V8 M1 3h22v5H1z M10 12h4",
   };
   return <svg width={s} height={s} viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">{p[n] && <path d={p[n]} />}</svg>;
 };
@@ -572,43 +762,55 @@ select.fi option{background:var(--steel2);color:var(--white)}
 const isIOS = () => /iphone|ipad|ipod/i.test(navigator.userAgent);
 const isInStandalone = () => window.matchMedia("(display-mode: standalone)").matches || window.navigator.standalone === true;
 
-function InstallPrompt({ lang }) {
+function InstallPrompt({ lang, externalShow, onExternalClose }) {
   const [deferredPrompt, setDeferredPrompt] = useState(null);
   const [show, setShow] = useState(false);
-  const [step, setStep] = useState(0); // for iOS walkthrough
+  const [step, setStep] = useState(0);
 
+  // Capture Android deferred prompt
   useEffect(() => {
-    if (isInStandalone()) return; // already installed
-    if (localStorage.getItem("gsm_install_dismissed")) return;
-
-    if (isIOS()) {
-      // Show iOS instructions after a short delay
-      const t = setTimeout(() => setShow(true), 3000);
-      return () => clearTimeout(t);
+    if (window._pwaBeforeInstall) {
+      setDeferredPrompt(window._pwaBeforeInstall);
+      window._pwaBeforeInstall = null;
     }
-
-    // Android/Chrome — capture the beforeinstallprompt event
-    const handler = (e) => {
-      e.preventDefault();
-      setDeferredPrompt(e);
-      setShow(true);
-    };
+    const handler = (e) => { e.preventDefault(); setDeferredPrompt(e); };
     window.addEventListener("beforeinstallprompt", handler);
     return () => window.removeEventListener("beforeinstallprompt", handler);
   }, []);
 
+  // Button-driven: open immediately when parent requests it
+  useEffect(() => {
+    if (externalShow && !isInStandalone()) {
+      setStep(0);
+      setShow(true);
+    }
+  }, [externalShow]);
+
+  // Auto-show on first visit (non-iOS gets native prompt via deferred; iOS gets hint)
+  useEffect(() => {
+    if (isInStandalone()) return;
+    const dismissed = localStorage.getItem("gsm_install_dismissed");
+    if (dismissed && Date.now() - parseInt(dismissed) < 7 * 86400000) return;
+    if (!isIOS()) return; // Android handled by deferred prompt capture above
+    const t = setTimeout(() => setShow(true), 4000);
+    return () => clearTimeout(t);
+  }, []);
+
   const dismiss = () => {
-    localStorage.setItem("gsm_install_dismissed", "1");
+    localStorage.setItem("gsm_install_dismissed", String(Date.now()));
     setShow(false);
+    onExternalClose?.();
   };
 
   const installAndroid = async () => {
-    if (!deferredPrompt) return;
-    deferredPrompt.prompt();
-    const { outcome } = await deferredPrompt.userChoice;
-    if (outcome === "accepted") localStorage.setItem("gsm_install_dismissed", "1");
+    if (deferredPrompt) {
+      deferredPrompt.prompt();
+      const { outcome } = await deferredPrompt.userChoice;
+      if (outcome === "accepted") localStorage.setItem("gsm_install_dismissed", "1");
+      setDeferredPrompt(null);
+    }
     setShow(false);
-    setDeferredPrompt(null);
+    onExternalClose?.();
   };
 
   if (!show) return null;
@@ -677,7 +879,9 @@ function InstallPrompt({ lang }) {
           </div>
         </div>
         <div style={{ display:"flex", gap:8, flexShrink:0 }}>
-          <button className="btn btn-p btn-sm" onClick={installAndroid}>{es ? "Instalar" : "Install"}</button>
+          {deferredPrompt
+            ? <button className="btn btn-p btn-sm" onClick={installAndroid}>{es ? "Instalar" : "Install"}</button>
+            : <button className="btn btn-p btn-sm" onClick={() => { alert(es ? "En Chrome: toca los 3 puntos (⋮) → 'Agregar a pantalla de inicio'" : "In Chrome: tap the 3-dot menu (⋮) → 'Add to Home Screen'"); dismiss(); }}>{es ? "¿Cómo?" : "How?"}</button>}
           <button className="btn btn-s btn-sm" onClick={dismiss}>{es ? "No" : "Skip"}</button>
         </div>
       </div>
@@ -692,6 +896,7 @@ export default function App() {
     try {
       if (new URLSearchParams(window.location.search).get("login") === "1") {
         localStorage.removeItem("gsm_session");
+        localStorage.removeItem("gsm_quick");
         return null;
       }
       return JSON.parse(localStorage.getItem("gsm_session") || "null");
@@ -702,6 +907,7 @@ export default function App() {
   const [theme, setTheme] = useState(() => localStorage.getItem("gsm_theme") || "dark");
   const [online, setOnline] = useState(navigator.onLine);
   const [tab, setTab] = useState("dash");
+  const [showInstall, setShowInstall] = useState(false);
   const toggleTheme = () => setTheme(t => { const n = t === "dark" ? "light" : "dark"; localStorage.setItem("gsm_theme", n); return n; });
   const [menuOpen, setMenuOpen] = useState(false);
   const [jobs, setJobs] = useState([]);
@@ -717,9 +923,11 @@ export default function App() {
   const [dispatches, setDispatches] = useState([]);
   const t = T[lang];
 
+  // Restore auth token from sessionStorage on mount
+  useEffect(() => { restoreSession(); }, []);
+
   const login = (u) => {
     localStorage.setItem("gsm_session", JSON.stringify(u));
-    // Save slim quick-login record so next time only PIN needed
     localStorage.setItem("gsm_quick", JSON.stringify({ id: u.id, name: u.name, role: u.role, email: u.email }));
     setUser(u);
     setSessionChecked(true);
@@ -727,12 +935,18 @@ export default function App() {
   const logout = (clearQuick = false) => {
     localStorage.removeItem("gsm_session");
     if (clearQuick) localStorage.removeItem("gsm_quick");
+    setSession(null, null);
+    if (_tokenRefreshTimer) clearTimeout(_tokenRefreshTimer);
     setUser(null); setRevoked(false); setSessionChecked(false);
   };
 
-  // Validate cached session on every load — refresh role from DB so role changes take effect immediately
+  // Validate cached session on every load — if no auth token, force fresh login
   useEffect(() => {
     if (!user) { setSessionChecked(true); return; }
+    if (!_authToken) {
+      localStorage.removeItem("gsm_session");
+      setUser(null); setSessionChecked(true); return;
+    }
     sbGet("field_profiles", `id=eq.${user.id}&select=id,role,active,name,email`)
       .then(rows => {
         const match = rows?.[0];
@@ -776,6 +990,7 @@ export default function App() {
         if (dbReceipts) setReceipts(dbReceipts.map(fromReceipt));
         if (dbMats)     setMats(dbMats.map(fromMat));
         if (dbDispatch) setDispatches(dbDispatch.map(fromDispatch));
+        if (navigator.onLine) flushQueue();
       } catch (e) { console.error("Load:", e); }
       setLoading(false);
     };
@@ -804,7 +1019,7 @@ export default function App() {
         if (dbDispatch) setDispatches(dbDispatch.map(fromDispatch));
       } catch {}
     };
-    const iv = setInterval(sync, 300000); // 5 min — tasks/receipts don't need sub-minute sync
+    const iv = setInterval(sync, 30000); // 30s — crew needs to see new tasks quickly
     window.addEventListener("focus", sync); // still instant on tab focus
     return () => { clearInterval(iv); window.removeEventListener("focus", sync); };
   }, [user?.id]);
@@ -824,8 +1039,10 @@ export default function App() {
   };
 
   const deletePhoto = async (id) => {
+    const photo = photos.find(p => p.id === id);
     setPhotos(p => p.filter(x => x.id !== id));
     try { await sbDelete("field_photos", id); } catch {}
+    if (photo?.storagePath) { try { await deleteFromStorage(photo.storagePath); } catch {} }
   };
   const deleteReceipt = async (id) => {
     setReceipts(p => p.filter(x => x.id !== id));
@@ -852,9 +1069,21 @@ export default function App() {
   const upsertDispatch = async (entry) => {
     const id = "d_" + entry.crewId + "_" + entry.date;
     const row = { id, crew_id: entry.crewId, date: entry.date, job_ids: entry.jobIds, custom_stops: entry.customStops, created_by: user.id };
+    const isNew = !dispatches.some(d => d.crewId === entry.crewId && d.date === entry.date);
     setDispatches(p => [...p.filter(d => !(d.crewId === entry.crewId && d.date === entry.date)), { id, ...entry, createdBy: user.id }]);
     try { await sbFetch(`field_dispatch?id=eq.${id}`, { method: "DELETE", prefer: "return=minimal" }); } catch {}
     try { await sbPost("field_dispatch", row); } catch {}
+    // Notify crew member when dispatch is first set (not every toggle)
+    if (isNew && (entry.jobIds.length > 0 || entry.customStops.length > 0)) {
+      const member = users.find(u => u.id === entry.crewId);
+      const appUrl = settings?.appUrl || window.location.origin;
+      const stopCount = entry.jobIds.length + entry.customStops.length;
+      const msg = `📍 New dispatch for ${entry.date}: you have ${stopCount} stop${stopCount !== 1 ? "s" : ""} assigned. Open your app to see where to go. ${appUrl}/?tab=tasks`;
+      if (member?.phone) {
+        fetch("/.netlify/functions/send-sms", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ to: member.phone, body: msg }) }).catch(() => {});
+      }
+      sendPush([entry.crewId], "📍 New Dispatch", `You have ${stopCount} stop${stopCount !== 1 ? "s" : ""} for ${entry.date}. Tap to see where to go.`, "/?tab=tasks");
+    }
   };
   const deleteDispatch = async (id) => {
     setDispatches(p => p.filter(d => d.id !== id));
@@ -867,6 +1096,7 @@ export default function App() {
     const row = { id, name: member.name, role, email, phone: member.phone || "", pin: member.pin, active: true };
     setUsers(u => [...u, { ...row }]);
     try { await sbPost("field_profiles", row); } catch { enqueue({ table: "field_profiles", payload: row }); }
+    // Supabase trigger auto-creates auth.users entry on field_profiles INSERT
   };
   const updateUser = async (id, patch) => {
     setUsers(u => u.map(x => x.id === id ? { ...x, ...patch } : x));
@@ -875,6 +1105,7 @@ export default function App() {
     if (patch.email) dbPatch.email = patch.email;
     if (patch.phone) dbPatch.phone = patch.phone;
     if (patch.pin)   dbPatch.pin   = patch.pin;
+    if (patch.role)  dbPatch.role  = patch.role;
     try { await sbPatch("field_profiles", id, dbPatch); } catch {}
   };
   const removeUser = async (id) => {
@@ -906,14 +1137,51 @@ export default function App() {
   }, []);
 
   // Deep link: SMS links route crew to the right tab
+  // Also register push subscription for crew members
   useEffect(() => {
     if (!user || user.role !== "crew") return;
     const params = new URLSearchParams(window.location.search);
     if (params.get("log") === "1") setTab("log");
-    if (params.get("tab") === "tasks") setTab("tasks");
+    const tabParam = params.get("tab");
+    if (tabParam) setTab(tabParam);
+    // Register push — fires on login, silently no-ops if already subscribed or denied
+    registerPush(user.id);
   }, [user]);
 
-  const saveSettings = (s) => { setSettings(s); localStorage.setItem("gsm_set", JSON.stringify(s)); };
+  const saveSettings = async (s) => {
+    setSettings(s);
+    localStorage.setItem("gsm_set", JSON.stringify(s));
+    try {
+      await sbFetch("field_integration_settings?id=eq.1", {
+        method: "PATCH",
+        body: JSON.stringify({ gt_key: s.gtKey || null, app_url: s.appUrl || null, reminder_time: s.reminder || null, admin_phone: s.adminPhone || null }),
+        prefer: "return=minimal",
+      });
+    } catch {}
+  };
+
+  // Load settings from Supabase on startup (overrides stale localStorage)
+  useEffect(() => {
+    sbGet("field_integration_settings", "id=eq.1").then(rows => {
+      const r = rows?.[0];
+      if (!r) return;
+      const merged = {
+        ...JSON.parse(localStorage.getItem("gsm_set") || "{}"),
+        gtKey: r.gt_key || "",
+        appUrl: r.app_url || "",
+        reminder: r.reminder_time || "17:00",
+        adminPhone: r.admin_phone || "",
+      };
+      setSettings(merged);
+      localStorage.setItem("gsm_set", JSON.stringify(merged));
+    }).catch(() => {});
+  }, []);
+
+  // QR clock-in intercept — ?job=X&checkin=1 always takes priority
+  const _qrp = new URLSearchParams(window.location.search);
+  if (_qrp.get("checkin") === "1" && _qrp.get("job")) {
+    return <QRClockIn jobId={_qrp.get("job")} theme={theme} loggedInUser={user} />;
+  }
 
   // Wait for session validation before rendering anything
   if (!sessionChecked) return (
@@ -950,11 +1218,12 @@ export default function App() {
       <style>{CSS}</style>
       <TopBar user={user} onLogout={logout} t={t} lang={lang} setLang={setLang} online={online}
         theme={theme} toggleTheme={toggleTheme}
-        showMenu={user.role === "admin"} menuOpen={menuOpen} setMenuOpen={setMenuOpen} />
+        showMenu={user.role === "admin"} menuOpen={menuOpen} setMenuOpen={setMenuOpen}
+        onInstall={() => setShowInstall(true)} />
       {user.role === "admin"
         ? <Admin {...shared} tab={tab} setTab={setTab} menuOpen={menuOpen} setMenuOpen={setMenuOpen} />
         : <Crew {...shared} tab={tab} setTab={setTab} />}
-      <InstallPrompt lang={lang} />
+      <InstallPrompt lang={lang} externalShow={showInstall} onExternalClose={() => setShowInstall(false)} />
     </div>
   );
 }
@@ -999,22 +1268,17 @@ function QuickPIN({ quick, onLogin, onSwitch, theme, lang }) {
   const verify = async (code) => {
     setBusy(true);
     try {
-      const rows = await sbGet("field_profiles", `id=eq.${quick.id}&select=*`);
+      const rows = await sbGet("field_profiles", `id=eq.${quick.id}&select=id,name,role,email,phone,active,archived`);
       const u = rows?.[0];
-      if (!u || u.pin !== code) {
-        setErr(es ? "PIN incorrecto. Intenta de nuevo." : "Wrong PIN. Try again.");
-        setPin("");
-        setBusy(false);
-        return;
-      }
-      if (u.active === false) {
-        setErr(es ? "Cuenta desactivada." : "Account deactivated.");
-        setBusy(false);
-        return;
-      }
+      if (!u) { setErr(es ? "Cuenta no encontrada." : "Account not found."); setPin(""); setBusy(false); return; }
+      if (u.active === false) { setErr(es ? "Cuenta desactivada." : "Account deactivated."); setBusy(false); return; }
+      await sbAuthSignIn(u.id, code);
       onLogin(fromProfile(u));
-    } catch {
-      setErr(es ? "Error de conexión." : "Connection error. Try again.");
+    } catch (e) {
+      setErr(e.message === "auth_failed"
+        ? (es ? "PIN incorrecto. Intenta de nuevo." : "Wrong PIN. Try again.")
+        : (es ? "Error de conexión." : "Connection error. Try again."));
+      setPin("");
       setBusy(false);
     }
   };
@@ -1079,6 +1343,336 @@ function QuickPIN({ quick, onLogin, onSwitch, theme, lang }) {
   );
 }
 
+// ─── QR CLOCK-IN ─────────────────────────────────────────────────────
+const QR_MAX_DIST_MI = 0.5;
+
+function QRClockIn({ jobId, theme, loggedInUser }) {
+  const [job, setJob] = useState(null);
+  const [users, setUsers] = useState([]);
+  const [jobProgress, setJobProgress] = useState(null); // { done, total, pct }
+  const [step, setStep] = useState("loading"); // loading | pick | pin | confirm-out | done | error
+  const [selected, setSelected] = useState(loggedInUser || null);
+  const [pin, setPin] = useState("");
+  const [pinErr, setPinErr] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [errMsg, setErrMsg] = useState("");
+  const [openCheckin, setOpenCheckin] = useState(null); // existing open check-in at this job
+  const [doneAction, setDoneAction] = useState("in");   // "in" | "out"
+  const [doneTime, setDoneTime] = useState(null);
+  const [doneHrs, setDoneHrs] = useState(null);
+
+  useEffect(() => {
+    const load = async () => {
+      try {
+        const [jobRows, userRows, taskRows] = await Promise.all([
+          sbGet("field_jobs", `id=eq.${jobId}&select=*`),
+          sbGet("field_profiles", "active=eq.true&archived=eq.false&order=name"),
+          sbGet("field_tasks", `job_id=eq.${jobId}&recurring=eq.false&select=id,status`),
+        ]);
+        if (!jobRows?.[0]) { setErrMsg("Job not found."); setStep("error"); return; }
+        setJob(fromJob(jobRows[0]));
+        setUsers(userRows.map(fromProfile));
+        if (taskRows?.length) {
+          const done = taskRows.filter(t => t.status === "done").length;
+          setJobProgress({ done, total: taskRows.length, pct: Math.round(done / taskRows.length * 100) });
+        }
+        setStep(loggedInUser ? "pin" : "pick");
+      } catch { setErrMsg("Connection error. Try again."); setStep("error"); }
+    };
+    load();
+  }, [jobId]);
+
+  const doClockIn = async (u) => {
+    setBusy(true);
+    const gps = await getLocation();
+    if (gps && job?.lat && job?.lng) {
+      const dist = distanceMi(gps, { lat: job.lat, lng: job.lng });
+      if (dist !== null && dist > QR_MAX_DIST_MI) {
+        setPinErr(`Too far from site (${dist.toFixed(2)} mi away). Must be within ½ mile. / Demasiado lejos del sitio.`);
+        setBusy(false);
+        return;
+      }
+    }
+    try {
+      const now = new Date();
+      const today = localDate();
+      // Auto-close any open check-ins at OTHER jobs (job switch)
+      const openRows = await sbGet("field_checkins", `crew_id=eq.${u.id}&check_out=is.null`);
+      for (const other of (openRows || []).filter(r => r.job_id !== jobId)) {
+        const hrs = Math.round((now - new Date(other.check_in)) / 36000) / 100;
+        await sbFetch(`field_checkins?id=eq.${other.id}`, {
+          method: "PATCH",
+          body: JSON.stringify({ check_out: now.toISOString(), hours: hrs, method: "auto" }),
+          prefer: "return=minimal",
+        });
+      }
+      // Clock IN
+      await sbPost("field_checkins", {
+        id: "ci_" + Date.now(),
+        crew_id: u.id,
+        job_id: jobId,
+        check_in: now.toISOString(),
+        work_date: today,
+        lat_in: gps?.lat || null,
+        lng_in: gps?.lng || null,
+        method: "qr",
+      });
+      setDoneAction("in");
+      setDoneTime(now);
+      setStep("done");
+    } catch { setPinErr("Save failed. Try again."); }
+    setBusy(false);
+  };
+
+  const doClockOut = async () => {
+    if (!openCheckin) return;
+    setBusy(true);
+    const gps = await getLocation();
+    const now = new Date();
+    const hrs = Math.round((now - new Date(openCheckin.checkIn)) / 36000) / 100;
+    try {
+      await sbFetch(`field_checkins?id=eq.${openCheckin.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ check_out: now.toISOString(), hours: hrs, lat_out: gps?.lat || null, lng_out: gps?.lng || null, method: "qr" }),
+        prefer: "return=minimal",
+      });
+      setDoneAction("out");
+      setDoneTime(now);
+      setDoneHrs(hrs);
+      setStep("done");
+    } catch { setPinErr("Save failed. Try again."); }
+    setBusy(false);
+  };
+
+  const addDigit = (d) => {
+    if (pin.length >= 6) return;
+    const next = pin + d;
+    setPin(next);
+    setPinErr("");
+    if (next.length >= 4) verifyPin(next);
+  };
+
+  const verifyPin = async (code) => {
+    setBusy(true);
+    try {
+      const rows = await sbGet("field_profiles", `id=eq.${selected.id}&select=pin,active`);
+      const u = rows?.[0];
+      if (!u || u.pin !== code) { setPinErr("Wrong PIN. / PIN incorrecto."); setPin(""); setBusy(false); return; }
+      if (u.active === false) { setPinErr("Account deactivated."); setBusy(false); return; }
+
+      // Check all open check-ins for this user
+      const open = await sbGet("field_checkins", `crew_id=eq.${selected.id}&check_out=is.null`);
+      const sameJobOpen = (open || []).find(r => r.job_id === jobId);
+
+      if (sameJobOpen) {
+        const now = new Date();
+        const minsSince = (now - new Date(sameJobOpen.check_in)) / 60000;
+        if (minsSince < 15) {
+          // Within 15 min — block duplicate to prevent accidental double check-in
+          const since = new Date(sameJobOpen.check_in).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+          const minsLeft = Math.ceil(15 - minsSince);
+          setPinErr(`Already clocked in at ${since}. Rescan in ${minsLeft} min to clock out. / Ya registrado a las ${since}. Vuelve a escanear en ${minsLeft} min para salir.`);
+          setPin("");
+          setBusy(false);
+        } else {
+          // After 15 min on same job — rescan = clock out
+          setOpenCheckin(fromCheckin(sameJobOpen));
+          setBusy(false);
+          setStep("confirm-out");
+        }
+        return;
+      }
+
+      // Not clocked in at this job — proceed with clock-in (handles job switch internally)
+      await doClockIn(selected);
+    } catch { setPinErr("Connection error."); setBusy(false); }
+  };
+
+  const KEYS = ["1","2","3","4","5","6","7","8","9","","0","⌫"];
+
+  const dismiss = () => {
+    const url = new URL(window.location.href);
+    url.searchParams.delete("job");
+    url.searchParams.delete("checkin");
+    window.history.replaceState({}, "", url.toString());
+    window.location.reload();
+  };
+
+  const fmtTime = ts => ts ? new Date(ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "";
+
+  return (
+    <div className={`app${theme === "light" ? " light" : ""}`}>
+      <style>{CSS}</style>
+      <div className="login">
+        <div className="login-card" style={{ maxWidth: 360 }}>
+
+          {step === "loading" && (
+            <div style={{ textAlign: "center", padding: 48 }}>
+              <div className="spin" style={{ width: 36, height: 36, display: "inline-block" }} />
+            </div>
+          )}
+
+          {step === "error" && (
+            <div style={{ textAlign: "center", padding: 24 }}>
+              <div style={{ color: "var(--red)", marginBottom: 16 }}>{errMsg}</div>
+              <button className="btn btn-s" onClick={dismiss}>Go to App</button>
+            </div>
+          )}
+
+          {step === "pick" && (
+            <>
+              <div style={{ textAlign: "center", marginBottom: 20 }}>
+                <div className="logo-mark" style={{ background: "linear-gradient(135deg,var(--accent),#b45309)" }}>
+                  <Icon n="pin" s={28} c="#fff" />
+                </div>
+                <div style={{ fontFamily: "'Barlow Condensed'", fontSize: 24, fontWeight: 800, marginTop: 14 }}>{job?.name}</div>
+                {job?.address && <div className="muted" style={{ fontSize: 12, marginTop: 2 }}>{job.address}</div>}
+                {jobProgress && (
+                  <div style={{ marginTop: 10, padding: "8px 12px", background: "rgba(59,130,246,.1)", borderRadius: 8 }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
+                      <span style={{ fontSize: 11, color: "var(--slate)" }}>Job Progress</span>
+                      <span style={{ fontSize: 11, fontWeight: 700, color: jobProgress.pct === 100 ? "var(--green)" : "var(--sky2)" }}>{jobProgress.done}/{jobProgress.total} · {jobProgress.pct}%</span>
+                    </div>
+                    <div style={{ height: 4, background: "rgba(255,255,255,.1)", borderRadius: 2 }}>
+                      <div style={{ height: 4, borderRadius: 2, width: jobProgress.pct + "%", background: jobProgress.pct === 100 ? "var(--green)" : "var(--sky)", transition: ".3s" }} />
+                    </div>
+                  </div>
+                )}
+                <div className="muted" style={{ fontSize: 13, marginTop: 10 }}>Who are you? · ¿Quién eres tú?</div>
+              </div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                {users.map(u => (
+                  <button key={u.id}
+                    onClick={() => { setSelected(u); setStep("pin"); setPin(""); setPinErr(""); }}
+                    style={{ padding: "13px 16px", borderRadius: 12, border: "1px solid var(--border)",
+                      background: "rgba(59,130,246,.08)", color: "var(--white)", cursor: "pointer",
+                      fontFamily: "'Barlow Condensed'", fontSize: 18, fontWeight: 700, textAlign: "left",
+                      display: "flex", alignItems: "center", gap: 12 }}>
+                    <div style={{ width: 36, height: 36, borderRadius: "50%",
+                      background: "linear-gradient(135deg,var(--sky-dim),var(--sky))",
+                      display: "flex", alignItems: "center", justifyContent: "center",
+                      fontSize: 16, fontWeight: 800, color: "#fff", flexShrink: 0 }}>
+                      {u.name[0]}
+                    </div>
+                    {u.name}
+                  </button>
+                ))}
+              </div>
+              <button onClick={dismiss}
+                style={{ width: "100%", background: "none", border: "none", color: "var(--slate)", fontSize: 12, cursor: "pointer", textDecoration: "underline", marginTop: 16, padding: "4px 0" }}>
+                Not clocking in? Go to app →
+              </button>
+            </>
+          )}
+
+          {step === "pin" && (
+            <>
+              <div style={{ textAlign: "center", marginBottom: 20 }}>
+                <div style={{ width: 60, height: 60, borderRadius: "50%",
+                  background: "linear-gradient(135deg,var(--sky-dim),var(--sky))",
+                  display: "flex", alignItems: "center", justifyContent: "center",
+                  margin: "0 auto 12px", fontSize: 26, fontWeight: 800, color: "#fff" }}>
+                  {selected?.name?.[0]}
+                </div>
+                <div style={{ fontFamily: "'Barlow Condensed'", fontSize: 20, fontWeight: 800 }}>{selected?.name}</div>
+                <div style={{ color: "var(--accent)", fontWeight: 600, fontSize: 13, marginTop: 4 }}>{job?.name}</div>
+                <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>Enter your PIN / Ingresa tu PIN</div>
+              </div>
+              <div style={{ display: "flex", justifyContent: "center", gap: 14, marginBottom: 24 }}>
+                {[0,1,2,3].map(i => (
+                  <div key={i} style={{ width: 18, height: 18, borderRadius: "50%", border: "2px solid var(--sky)",
+                    background: pin.length > i ? "var(--sky)" : "transparent", transition: ".15s" }} />
+                ))}
+              </div>
+              {pinErr && <p style={{ color: "var(--red)", fontSize: 13, textAlign: "center", marginBottom: 16 }}>{pinErr}</p>}
+              {busy
+                ? <div style={{ textAlign: "center", padding: 24 }}><span className="spin" style={{ width: 32, height: 32, display: "inline-block" }} /></div>
+                : <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 10, marginBottom: 16 }}>
+                    {KEYS.map((k, i) => (
+                      k === "" ? <div key={i} />
+                        : <button key={i}
+                            onClick={() => k === "⌫" ? (setPin(p => p.slice(0,-1)), setPinErr("")) : addDigit(k)}
+                            style={{ padding: "18px 0", fontSize: k === "⌫" ? 22 : 26, fontWeight: 700,
+                              fontFamily: "'Barlow Condensed'", borderRadius: 14,
+                              border: "1px solid var(--border)",
+                              background: k === "⌫" ? "rgba(255,255,255,.05)" : "rgba(59,130,246,.1)",
+                              color: "var(--white)", cursor: "pointer", lineHeight: 1 }}>
+                            {k}
+                          </button>
+                    ))}
+                  </div>
+              }
+              {!loggedInUser && (
+                <button onClick={() => { setStep("pick"); setSelected(null); setPin(""); setPinErr(""); }}
+                  style={{ width: "100%", background: "none", border: "none", color: "var(--slate)", fontSize: 12, cursor: "pointer", textDecoration: "underline", padding: "4px 0" }}>
+                  ← Back / Regresar
+                </button>
+              )}
+            </>
+          )}
+
+          {step === "confirm-out" && openCheckin && (
+            <div style={{ textAlign: "center", padding: "8px 0" }}>
+              <div style={{ width: 60, height: 60, borderRadius: "50%",
+                background: "linear-gradient(135deg,var(--sky-dim),var(--sky))",
+                display: "flex", alignItems: "center", justifyContent: "center",
+                margin: "0 auto 14px", fontSize: 26, fontWeight: 800, color: "#fff" }}>
+                {selected?.name?.[0]}
+              </div>
+              <div style={{ fontFamily: "'Barlow Condensed'", fontSize: 20, fontWeight: 800, marginBottom: 4 }}>{selected?.name}</div>
+              <div style={{ fontWeight: 700, fontSize: 15, color: "var(--accent)", marginBottom: 16 }}>{job?.name}</div>
+              <div style={{ background: "rgba(16,185,129,.1)", border: "1px solid rgba(16,185,129,.3)", borderRadius: 12, padding: "14px 16px", marginBottom: 20 }}>
+                <div className="muted" style={{ fontSize: 12, marginBottom: 4 }}>Currently clocked in since</div>
+                <div style={{ fontFamily: "'Barlow Condensed'", fontSize: 28, fontWeight: 800, color: "var(--green)" }}>{fmtTime(openCheckin.checkIn)}</div>
+                <div style={{ fontSize: 12, color: "var(--slate)", marginTop: 4 }}>
+                  {(() => { const m = Math.round((Date.now() - new Date(openCheckin.checkIn)) / 60000); return m < 60 ? `${m} min on site` : `${(m/60).toFixed(1)} hrs on site`; })()}
+                </div>
+              </div>
+              {pinErr && <p style={{ color: "var(--red)", fontSize: 13, marginBottom: 12 }}>{pinErr}</p>}
+              <button onClick={doClockOut} disabled={busy}
+                style={{ width: "100%", padding: "16px", borderRadius: 12, border: "none",
+                  background: "linear-gradient(135deg,#059669,#10b981)", color: "#fff",
+                  fontFamily: "'Barlow Condensed'", fontSize: 20, fontWeight: 800, cursor: "pointer", marginBottom: 10 }}>
+                {busy ? "..." : "Clock Out · Salida"}
+              </button>
+              <button onClick={() => { setStep("pick"); setOpenCheckin(null); setPin(""); setPinErr(""); }}
+                style={{ background: "none", border: "none", color: "var(--slate)", fontSize: 12, cursor: "pointer", textDecoration: "underline" }}>
+                ← Back
+              </button>
+            </div>
+          )}
+
+          {step === "done" && (
+            <div style={{ textAlign: "center", padding: 24 }}>
+              <div style={{ width: 64, height: 64, borderRadius: "50%",
+                background: doneAction === "out" ? "linear-gradient(135deg,#059669,#10b981)" : "linear-gradient(135deg,var(--sky-dim),var(--sky))",
+                display: "flex", alignItems: "center", justifyContent: "center",
+                margin: "0 auto 18px" }}>
+                <Icon n="check" s={32} c="#fff" />
+              </div>
+              <div style={{ fontFamily: "'Barlow Condensed'", fontSize: 28, fontWeight: 800, marginBottom: 6 }}>
+                {doneAction === "out" ? "Clocked Out!" : "Clocked In!"}
+              </div>
+              <div style={{ color: "var(--accent)", fontWeight: 700, fontSize: 16, marginBottom: 4 }}>{job?.name}</div>
+              <div className="muted" style={{ fontSize: 13 }}>{selected?.name} · {fmtTime(doneTime)}</div>
+              {doneAction === "out" && doneHrs !== null && (
+                <div style={{ marginTop: 10, fontFamily: "'Barlow Condensed'", fontSize: 22, fontWeight: 800, color: "var(--green)" }}>
+                  {doneHrs.toFixed(1)} hrs
+                </div>
+              )}
+              <div className="muted" style={{ fontSize: 12, marginTop: 6 }}>
+                {doneAction === "out" ? "Salida registrada ✓" : "Entrada registrada ✓"}
+              </div>
+              <button className="btn btn-s" onClick={dismiss} style={{ marginTop: 24 }}>Done →</button>
+            </div>
+          )}
+
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─── LOGIN ────────────────────────────────────────────────────────────
 function Login({ onLogin, t, lang, setLang, theme, toggleTheme }) {
   const [login, setLogin] = useState(""), [pin, setPin] = useState(""), [err, setErr] = useState(""), [busy, setBusy] = useState(false);
@@ -1087,19 +1681,22 @@ function Login({ onLogin, t, lang, setLang, theme, toggleTheme }) {
     setBusy(true); setErr("");
     try {
       const val = login.trim().toLowerCase();
-      // Try email first, then phone number
-      let rows = await sbGet("field_profiles", `email=eq.${encodeURIComponent(val)}&select=*`);
+      let rows = await sbGet("field_profiles", `email=eq.${encodeURIComponent(val)}&select=id,name,role,email,phone,active,archived`);
       if (!rows?.length) {
-        // Try phone — strip everything non-digit, compare last 10 digits so +1 never required
         const digitsIn = login.trim().replace(/\D/g, "").slice(-10);
-        const allProfiles = await sbGet("field_profiles", "select=*");
+        const allProfiles = await sbGet("field_profiles", "select=id,name,role,email,phone,active,archived");
         rows = (allProfiles || []).filter(p => p.phone && p.phone.replace(/\D/g, "").slice(-10) === digitsIn);
       }
       const u = rows?.[0];
-      if (!u || u.pin !== pin) { setErr(lang === "en" ? "Invalid credentials." : "Credenciales inválidas."); setBusy(false); return; }
+      if (!u) { setErr(lang === "en" ? "Invalid credentials." : "Credenciales inválidas."); setBusy(false); return; }
       if (u.active === false) { setErr(lang === "en" ? "Account deactivated." : "Cuenta desactivada."); setBusy(false); return; }
+      await sbAuthSignIn(u.id, pin);
       onLogin(fromProfile(u));
-    } catch { setErr(lang === "en" ? "Connection error. Try again." : "Error de conexión."); }
+    } catch (e) {
+      setErr(e.message === "auth_failed"
+        ? (lang === "en" ? "Invalid credentials." : "Credenciales inválidas.")
+        : (lang === "en" ? "Connection error. Try again." : "Error de conexión."));
+    }
     setBusy(false);
   };
   return (
@@ -1133,8 +1730,9 @@ function Login({ onLogin, t, lang, setLang, theme, toggleTheme }) {
 }
 
 // ─── TOP BAR ──────────────────────────────────────────────────────────
-function TopBar({ user, onLogout, t, lang, setLang, online, showMenu, menuOpen, setMenuOpen, theme, toggleTheme }) {
+function TopBar({ user, onLogout, t, lang, setLang, online, showMenu, menuOpen, setMenuOpen, theme, toggleTheme, onInstall }) {
   const iconSrc = "/icon-admin.png";
+  const installed = isInStandalone();
   return (
     <div className="topbar">
       <div className="tb-brand">
@@ -1147,6 +1745,12 @@ function TopBar({ user, onLogout, t, lang, setLang, online, showMenu, menuOpen, 
       <div className="tb-right">
         <span className={`net-dot ${online ? "net-on" : "net-off"}`}>
           <Icon n={online ? "wifi" : "wifiOff"} s={12} /> <span className="net-txt">{online ? t.online : t.offline}</span></span>
+        {!installed && (
+          <button className="btn btn-s btn-sm" onClick={onInstall} title={lang === "es" ? "Agregar a pantalla de inicio" : "Add to Home Screen"}
+            style={{ fontWeight: 700, color: "var(--sky2)", borderColor: "rgba(59,130,246,.4)" }}>
+            📲 {lang === "es" ? "Instalar" : "Install"}
+          </button>
+        )}
         <button className="btn btn-ghost btn-sm btn-ic" onClick={toggleTheme} title={theme === "dark" ? "Switch to Light Mode" : "Switch to Dark Mode"}
           style={{ fontSize: 15 }}>{theme === "dark" ? "☀️" : "🌙"}</button>
         <button className="btn btn-s btn-sm" onClick={() => setLang(lang === "en" ? "es" : "en")}>
@@ -1169,6 +1773,7 @@ function Admin(props) {
     { k: "dispatch", i: "pin",       l: "Dispatch"     },
     { k: "activity", i: "report",    l: "Live Activity" },
     { k: "tasks",    i: "tasks",     l: t.tasks        },
+    { k: "archive",  i: "archive",   l: "Archive"      },
     { k: "cal",      i: "calendar",  l: "Calendar"     },
     { k: "report",   i: "report",   l: "Reports"      },
     { k: "receipts", i: "receipt",   l: t.receipts     },
@@ -1176,6 +1781,7 @@ function Admin(props) {
     { k: "jobs",     i: "briefcase", l: "Jobs"         },
     { k: "crew",     i: "users",     l: "Crew"         },
     { k: "hours",    i: "calendar",  l: "Hours"        },
+    { k: "qr",       i: "pin",       l: "QR Codes"     },
     { k: "set",      i: "settings",  l: "Settings"     },
     { k: "field",    i: "pin",       l: "📱 Field Mode" },
   ];
@@ -1189,10 +1795,11 @@ function Admin(props) {
         {nav.map(n => <div key={n.k} className={`nav ${tab === n.k ? "on" : ""}`} onClick={() => pick(n.k)}>
           <Icon n={n.i} s={17} /> {n.l}</div>)}</div>
       <div className="content">
-        {tab === "dash"     && <Dash {...props} navTo={navTo} setTab={setTab} openJobDetail={openJobDetail} />}
+        {tab === "dash"     && <Dash {...props} navTo={navTo} setTab={setTab} openJobDetail={openJobDetail} mats={props.mats} setMats={props.setMats} />}
         {tab === "dispatch" && <AdminDispatch {...props} />}
         {tab === "activity" && <AdminActivity {...props} />}
         {tab === "tasks"    && <AdminTasks {...props} statusFilter={statusFilter} setStatusFilter={setStatusFilter} />}
+        {tab === "archive"  && <AdminArchive {...props} />}
         {tab === "cal"      && <Calendar {...props} />}
         {tab === "report"   && <Report {...props} />}
         {tab === "receipts" && <AdminReceipts {...props} />}
@@ -1200,6 +1807,7 @@ function Admin(props) {
         {tab === "jobs"     && <Jobs {...props} />}
         {tab === "crew"     && <CrewMgmt {...props} />}
         {tab === "hours"    && <AdminHours {...props} />}
+        {tab === "qr"       && <AdminQRCodes {...props} />}
         {tab === "set"      && <Settings {...props} />}
         {tab === "field"    && <AdminFieldMode {...props} />}
         {tab === "jobdetail"&& <JobDetail {...props} selectedJobId={selectedJobId} setTab={setTab} />}
@@ -1208,15 +1816,255 @@ function Admin(props) {
   );
 }
 
-function Dash({ tasks, jobs, users, receipts, setTab, navTo, openJobDetail }) {
-  const today = new Date().toISOString().split("T")[0];
+function Dash({ tasks, jobs, users, receipts, mats, setMats, setTab, navTo, openJobDetail, settings }) {
+  const today = localDate();
+  const [checkins, setCheckins] = useState([]);
+  const [checkinLoading, setCheckinLoading] = useState(true);
+  const [issues, setIssues] = useState([]);
+  const [replyOpen, setReplyOpen] = useState(null);
+  const [replyText, setReplyText] = useState("");
+
+  const loadCheckins = () =>
+    sbGet("field_checkins", `work_date=eq.${today}&order=check_in.asc`)
+      .then(rows => { if (rows) setCheckins(rows.map(fromCheckin)); })
+      .catch(() => {})
+      .finally(() => setCheckinLoading(false));
+
+  const loadIssues = () =>
+    sbGet("field_logs", `log_date=eq.${today}&text_en=ilike.*ISSUE*&order=created_at.desc`)
+      .then(rows => { if (rows) setIssues(rows); })
+      .catch(() => {});
+
+  const clockOutCrew = async (ci) => {
+    const now = new Date();
+    const hrs = Math.round(((now - new Date(ci.checkIn)) / 3600000) * 100) / 100;
+    setCheckins(p => p.map(c => c.id === ci.id ? { ...c, checkOut: now.toISOString(), hours: hrs } : c));
+    try { await sbFetch(`field_checkins?id=eq.${ci.id}`, { method: "PATCH", body: JSON.stringify({ check_out: now.toISOString(), hours: hrs }), prefer: "return=minimal" }); } catch {}
+  };
+
+  const pendingMats = (mats || []).filter(m => !m.fulfilled);
+
+  const fulfillMat = async (id) => {
+    setMats(p => p.map(m => m.id === id ? { ...m, fulfilled: true } : m));
+    try { await sbFetch(`field_material_requests?id=eq.${id}`, { method: "PATCH", body: JSON.stringify({ fulfilled: true }), prefer: "return=minimal" }); } catch {}
+    const m = (mats || []).find(x => x.id === id);
+    const crewPhone = m && users.find(u => u.id === m.crewId)?.phone;
+    if (crewPhone) {
+      const j = m ? jobs.find(x => x.id === m.jobId)?.name : "";
+      fetch("/.netlify/functions/send-sms", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ to: crewPhone, body: `🔧 Your material request has been fulfilled: "${m.en}"${j ? " — " + j : ""}. Check the job site. — G.S. Masters` }) }).catch(() => {});
+    }
+  };
+
+  const resolveIssue = async (id) => {
+    setIssues(p => p.map(i => i.id === id ? { ...i, resolved: true } : i));
+    try { await sbFetch(`field_logs?id=eq.${id}`, { method: "PATCH", body: JSON.stringify({ resolved: true }), prefer: "return=minimal" }); } catch {}
+  };
+
+  const sendReply = async (issue) => {
+    if (!replyText.trim()) return;
+    const reply = replyText.trim();
+    setIssues(p => p.map(i => i.id === issue.id ? { ...i, admin_reply: reply } : i));
+    setReplyOpen(null);
+    setReplyText("");
+    try { await sbFetch(`field_logs?id=eq.${issue.id}`, { method: "PATCH", body: JSON.stringify({ admin_reply: reply }), prefer: "return=minimal" }); } catch {}
+    const crewMember = users.find(u => u.id === issue.crewId);
+    if (crewMember?.phone) {
+      const crewFirstName = crewMember.name?.split(" ")[0] || "Crew";
+      const smsBody = `Hi ${crewFirstName}, Admin replied to your issue: "${reply}" — GS Masters Field App`;
+      fetch("/.netlify/functions/send-sms", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ to: crewMember.phone, body: smsBody }) }).catch(() => {});
+    }
+    sendPush([issue.crewId], "💬 Admin Reply", reply.slice(0, 100), "/?log=1");
+  };
+
+  useEffect(() => {
+    loadCheckins();
+    loadIssues();
+    const iv = setInterval(() => { loadCheckins(); loadIssues(); }, 90000);
+    return () => clearInterval(iv);
+  }, []);
+
+  const crewName = id => users.find(u => u.id === id)?.name || "Unknown";
+  const jobName  = id => jobs.find(j => j.id === id)?.name  || id;
+  const fmt = ts => ts ? new Date(ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "";
+
+  const onSite = checkins.filter(c => !c.checkOut);
   const activeJobs = jobs.filter(j => j.status !== "closed");
-  const done  = tasks.filter(t => t.status === "done").length;
+  const done    = tasks.filter(t => t.status === "done").length;
   const overdue = tasks.filter(t => t.status === "pending" && t.dueDate && t.dueDate < today).length;
   const pending = tasks.filter(t => t.status === "pending" && (!t.dueDate || t.dueDate >= today)).length;
+
   return (
     <div>
-      <h2 className="h2 fade" style={{ marginBottom: 22 }}>Dashboard</h2>
+      <h2 className="h2 fade" style={{ marginBottom: 18 }}>Dashboard</h2>
+
+      {/* ── TODAY'S ATTENDANCE ────────────────────────────────── */}
+      <div className="card fade" style={{ marginBottom: 20, border: onSite.length > 0 ? "1px solid rgba(16,185,129,.4)" : "1px solid var(--border)" }}>
+        <div className="flexb" style={{ marginBottom: checkins.length > 0 ? 14 : 4 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <span style={{ fontWeight: 700, fontSize: 15, color: onSite.length > 0 ? "var(--green)" : "var(--silver)" }}>
+              {onSite.length > 0 ? "●" : "○"} Today's Attendance
+            </span>
+            {onSite.length > 0 && (
+              <span style={{ background: "rgba(16,185,129,.18)", color: "var(--green)", fontWeight: 800, fontSize: 12, padding: "2px 8px", borderRadius: 20, fontFamily: "'Barlow Condensed'" }}>
+                {onSite.length} on site
+              </span>
+            )}
+          </div>
+          <button onClick={loadCheckins} title="Refresh"
+            style={{ background: "none", border: "none", color: "var(--slate)", fontSize: 14, cursor: "pointer", padding: "2px 8px", lineHeight: 1 }}>↻</button>
+        </div>
+
+        {checkinLoading
+          ? <div style={{ padding: "14px 0", textAlign: "center" }}><span className="spin" style={{ width: 20, height: 20, display: "inline-block" }} /></div>
+          : checkins.length === 0
+            ? <div className="muted" style={{ fontSize: 13 }}>No check-ins yet today.</div>
+            : <div style={{ display: "flex", flexDirection: "column", gap: 0 }}>
+                {/* Header row */}
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 70px 70px 50px 90px", gap: "0 8px", padding: "0 4px 8px", borderBottom: "1px solid var(--border)", marginBottom: 8 }}>
+                  {["Name","Job","In","Out","Hrs",""].map(h => (
+                    <div key={h} style={{ fontSize: 10, fontWeight: 700, color: "var(--slate)", textTransform: "uppercase", letterSpacing: 1 }}>{h}</div>
+                  ))}
+                </div>
+                {checkins.map(ci => {
+                  const open = !ci.checkOut;
+                  const hrs = ci.checkOut && !ci.autoClosed
+                    ? (+(ci.hours || 0)).toFixed(1)
+                    : ci.checkOut && ci.autoClosed ? "—" : null;
+                  return (
+                    <div key={ci.id}
+                      style={{ display: "grid", gridTemplateColumns: "1fr 1fr 70px 70px 50px 90px", gap: "0 8px", padding: "7px 4px", borderBottom: "1px solid rgba(255,255,255,.04)", cursor: open ? "default" : "pointer", borderRadius: 6 }}
+                      onClick={() => !open && setTab("hours")}>
+                      {/* Name */}
+                      <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
+                        <div style={{ width: 28, height: 28, borderRadius: "50%", flexShrink: 0,
+                          background: open ? "linear-gradient(135deg,var(--sky-dim),var(--sky))" : "rgba(255,255,255,.1)",
+                          display: "flex", alignItems: "center", justifyContent: "center",
+                          fontFamily: "'Barlow Condensed'", fontWeight: 800, fontSize: 13, color: "#fff" }}>
+                          {crewName(ci.crewId)[0]}
+                        </div>
+                        <span style={{ fontSize: 13, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                          {crewName(ci.crewId)}
+                        </span>
+                      </div>
+                      {/* Job */}
+                      <div style={{ fontSize: 12, color: open ? "var(--white)" : "var(--silver)", fontWeight: open ? 600 : 400, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", alignSelf: "center" }}>
+                        {jobName(ci.jobId)}
+                      </div>
+                      {/* In */}
+                      <div style={{ fontSize: 12, color: "var(--sky2)", fontFamily: "'Barlow Condensed'", fontWeight: 700, alignSelf: "center" }}>
+                        {fmt(ci.checkIn)}
+                      </div>
+                      {/* Out */}
+                      <div style={{ fontSize: 12, fontFamily: "'Barlow Condensed'", fontWeight: 700, alignSelf: "center",
+                        color: open ? "var(--green)" : ci.autoClosed ? "var(--slate)" : "var(--silver)" }}>
+                        {open ? "● on site" : ci.autoClosed ? `${fmt(ci.checkOut)} (auto)` : fmt(ci.checkOut)}
+                      </div>
+                      {/* Hours */}
+                      <div style={{ fontSize: 13, fontFamily: "'Barlow Condensed'", fontWeight: 800, alignSelf: "center",
+                        color: open ? "var(--green)" : ci.autoClosed ? "var(--slate)" : "var(--accent)" }}>
+                        {open ? "…" : hrs}
+                      </div>
+                      {/* Clock Out */}
+                      <div style={{ alignSelf: "center" }}>
+                        {open ? (
+                          <button onClick={e => { e.stopPropagation(); clockOutCrew(ci); }}
+                            style={{ fontSize: 11, fontWeight: 700, padding: "4px 9px", borderRadius: 7, border: "1px solid rgba(16,185,129,.5)", background: "rgba(16,185,129,.12)", color: "var(--green)", cursor: "pointer", whiteSpace: "nowrap" }}>
+                            Clock Out
+                          </button>
+                        ) : (
+                          <span style={{ fontSize: 10, color: "var(--slate)", cursor: "pointer" }} onClick={e => { e.stopPropagation(); setTab("hours"); }}>view →</span>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+        }
+      </div>
+
+      {/* ── FLAGGED ISSUES TODAY ─────────────────────────────── */}
+      {issues.length > 0 && (
+        <div className="card fade" style={{ marginBottom: 20, border: `1px solid ${issues.some(i => !i.resolved) ? "rgba(239,68,68,.4)" : "rgba(16,185,129,.3)"}`, background: issues.some(i => !i.resolved) ? "rgba(239,68,68,.04)" : "rgba(16,185,129,.04)" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
+            <span style={{ fontSize: 16 }}>🚩</span>
+            <span style={{ fontWeight: 800, fontSize: 15, color: issues.some(i => !i.resolved) ? "var(--red)" : "var(--green)" }}>Issues Flagged Today</span>
+            {issues.filter(i => !i.resolved).length > 0 && <span style={{ background: "rgba(239,68,68,.18)", color: "var(--red)", fontWeight: 800, fontSize: 12, padding: "2px 8px", borderRadius: 20, fontFamily: "'Barlow Condensed'" }}>{issues.filter(i => !i.resolved).length} open</span>}
+            {issues.filter(i => i.resolved).length > 0 && <span style={{ background: "rgba(16,185,129,.18)", color: "var(--green)", fontWeight: 800, fontSize: 12, padding: "2px 8px", borderRadius: 20, fontFamily: "'Barlow Condensed'" }}>{issues.filter(i => i.resolved).length} resolved</span>}
+          </div>
+          {issues.map(issue => {
+            const name = users.find(u => u.id === issue.crew_id)?.name || "Crew";
+            const msg = (issue.text_en || "").replace(/^🚩 ISSUE from [^:]+: /, "");
+            const isResolved = issue.resolved;
+            const isReplyOpen = replyOpen === issue.id;
+            return (
+              <div key={issue.id} style={{ padding: "10px 12px", background: isResolved ? "rgba(16,185,129,.06)" : "rgba(239,68,68,.07)", borderRadius: 8, marginBottom: 6, borderLeft: `3px solid ${isResolved ? "var(--green)" : "var(--red)"}` }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 3 }}>
+                  <div style={{ fontWeight: 700, fontSize: 13, color: isResolved ? "var(--green)" : "var(--red)" }}>{name}{isResolved ? " ✓" : ""}</div>
+                  {!isResolved && (
+                    <div style={{ display: "flex", gap: 4, flexShrink: 0, marginLeft: 8 }}>
+                      <button onClick={() => { setReplyOpen(isReplyOpen ? null : issue.id); setReplyText(""); }}
+                        style={{ fontSize: 11, fontWeight: 700, padding: "3px 8px", borderRadius: 6, border: "1px solid rgba(59,130,246,.4)", background: isReplyOpen ? "rgba(59,130,246,.2)" : "rgba(59,130,246,.1)", color: "var(--sky2)", cursor: "pointer" }}>
+                        💬 Reply
+                      </button>
+                      <button onClick={() => resolveIssue(issue.id)}
+                        style={{ fontSize: 11, fontWeight: 700, padding: "3px 8px", borderRadius: 6, border: "1px solid rgba(16,185,129,.4)", background: "rgba(16,185,129,.1)", color: "var(--green)", cursor: "pointer" }}>
+                        ✓ Resolved
+                      </button>
+                    </div>
+                  )}
+                </div>
+                <div style={{ fontSize: 13 }}>{msg}</div>
+                {issue.admin_reply && (
+                  <div style={{ marginTop: 6, fontSize: 12, color: "var(--sky2)", background: "rgba(59,130,246,.08)", borderRadius: 6, padding: "5px 8px", borderLeft: "2px solid var(--sky2)" }}>
+                    <span style={{ fontWeight: 700 }}>Admin:</span> {issue.admin_reply}
+                  </div>
+                )}
+                {isReplyOpen && (
+                  <div style={{ marginTop: 8, display: "flex", gap: 6 }}>
+                    <input type="text" value={replyText} onChange={e => setReplyText(e.target.value)}
+                      onKeyDown={e => e.key === "Enter" && sendReply(issue)}
+                      placeholder="Type reply — sends SMS to crew…"
+                      style={{ flex: 1, background: "rgba(255,255,255,.07)", border: "1px solid var(--border)", borderRadius: 8, padding: "7px 10px", fontSize: 13, color: "var(--white)" }} />
+                    <button onClick={() => sendReply(issue)}
+                      style={{ padding: "7px 14px", borderRadius: 8, border: "none", background: "var(--sky)", color: "#fff", fontWeight: 700, fontSize: 12, cursor: "pointer" }}>Send</button>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* ── MATERIAL REQUESTS ─────────────────────────────────── */}
+      {pendingMats.length > 0 && (
+        <div className="card fade" style={{ marginBottom: 20, border: "1px solid rgba(245,158,11,.4)", background: "rgba(245,158,11,.04)" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
+            <span style={{ fontSize: 16 }}>🔧</span>
+            <span style={{ fontWeight: 800, fontSize: 15, color: "var(--accent)" }}>Material Requests</span>
+            <span style={{ background: "rgba(245,158,11,.18)", color: "var(--accent)", fontWeight: 800, fontSize: 12, padding: "2px 8px", borderRadius: 20, fontFamily: "'Barlow Condensed'" }}>{pendingMats.length} pending</span>
+          </div>
+          {pendingMats.map(m => {
+            const cr = users.find(u => u.id === m.crewId);
+            const j  = jobs.find(j => j.id === m.jobId);
+            const tk = tasks.find(t => t.id === m.taskId);
+            return (
+              <div key={m.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "9px 12px", background: "rgba(245,158,11,.07)", borderRadius: 8, marginBottom: 6, borderLeft: "3px solid var(--accent)" }}>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontWeight: 600, fontSize: 13 }}>{m.en}</div>
+                  <div style={{ fontSize: 11, color: "var(--slate)", marginTop: 2 }}>
+                    {cr?.name}{j ? ` · ${j.name}` : ""}{tk ? ` · ${tk.title}` : ""}
+                  </div>
+                </div>
+                <button onClick={() => fulfillMat(m.id)}
+                  style={{ fontSize: 11, fontWeight: 700, padding: "4px 10px", borderRadius: 6, border: "1px solid rgba(16,185,129,.4)", background: "rgba(16,185,129,.1)", color: "var(--green)", cursor: "pointer", whiteSpace: "nowrap" }}>
+                  ✓ Fulfilled
+                </button>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
       <div className="stats">
         {[
           ["Total Tasks",  tasks.length,    "var(--sky2)",    "tasks", "all"],
@@ -1256,14 +2104,14 @@ function Dash({ tasks, jobs, users, receipts, setTab, navTo, openJobDetail }) {
 }
 
 function AdminTasks(props) {
-  const { tasks, setTasks, jobs, users, t, settings, statusFilter = "all", setStatusFilter, photos, setPhotos, user } = props;
+  const { tasks, setTasks, jobs, users, t, lang, settings, statusFilter = "all", setStatusFilter, photos, setPhotos, user } = props;
   const [jobFilter, setJobFilter] = useState("all");
   const [modal, setModal] = useState(false);
-  const [nt, setNt] = useState({ title: "", titleEs: "", jobId: "", assignedTo: [], dueDate: "", priority: "normal", recurring: false });
+  const [nt, setNt] = useState({ title: "", titleEs: "", jobId: "", assignedTo: [], dueDate: "", priority: "normal", recurring: false, photoRequired: false });
   const [editTask, setEditTask] = useState(null); // task being edited
   const [editForm, setEditForm] = useState({});
   const [busy, setBusy] = useState(false);
-  const today = new Date().toISOString().split("T")[0];
+  const today = localDate();
   // Photo attachment on task creation
   const [taskPhoto, setTaskPhoto] = useState(null);   // { dataUrl, sizeKB }
   const [taskPhotoNote, setTaskPhotoNote] = useState("");
@@ -1271,13 +2119,16 @@ function AdminTasks(props) {
   const photoRef = useRef();
   const captureTaskPhoto = async (e) => {
     const file = e.target.files[0]; if (!file) return;
-    const { dataUrl, sizeKB } = await compressImage(file);
-    setTaskPhoto({ dataUrl, sizeKB });
+    try { const { dataUrl, sizeKB } = await compressImage(file); setTaskPhoto({ dataUrl, sizeKB }); }
+    catch { alert("Could not process image. Try again."); }
     e.target.value = "";
   };
 
   // Apply status filter first, then job filter
+  // Done tasks older than 24h are archived — never shown here
+  const adminCutoff24h = new Date(Date.now() - 24 * 3600000).toISOString();
   const statusFiltered = tasks.filter(task => {
+    if (task.status === "done" && task.completedAt && task.completedAt < adminCutoff24h) return false;
     if (statusFilter === "done")    return task.status === "done";
     if (statusFilter === "overdue") return task.status === "pending" && task.dueDate && task.dueDate < today;
     if (statusFilter === "pending") return task.status === "pending" && (!task.dueDate || task.dueDate >= today);
@@ -1291,42 +2142,53 @@ function AdminTasks(props) {
   const toggleCrew = (id) => setNt(p => ({ ...p, assignedTo: p.assignedTo.includes(id) ? p.assignedTo.filter(x => x !== id) : [...p.assignedTo, id] }));
 
   const add = async () => {
-    if (!nt.title || !nt.jobId || !nt.assignedTo.length) return;
+    if (!nt.title || !nt.jobId) return;
+    if (!nt.recurring && !nt.assignedTo.length) return;
     setBusy(true);
-    let es = nt.titleEs;
-    if (!es && settings.gtKey) es = await translateText(nt.title, "es", settings.gtKey);
+    let es;
+    try { es = settings?.gtKey ? await translateText(nt.title, "es", settings.gtKey) : nt.title; }
+    catch { es = nt.title; }
     const id = "t" + Date.now();
-    const task = { id, jobId: nt.jobId, title: nt.title, titleEs: es || nt.title, assignedTo: nt.assignedTo, dueDate: nt.dueDate, status: "pending", createdAt: today, priority: nt.priority, recurring: nt.recurring };
+    const task = { id, jobId: nt.jobId, title: nt.title, titleEs: es || nt.title, assignedTo: nt.assignedTo, dueDate: nt.dueDate, status: "pending", createdAt: today, priority: nt.priority, recurring: nt.recurring, photoRequired: nt.photoRequired };
     setTasks(p => [...p, task]);
-    const row = { id, job_id: nt.jobId, title: nt.title, title_es: es || nt.title, assigned_to: nt.assignedTo, due_date: nt.dueDate || null, status: "pending", priority: nt.priority, recurring: nt.recurring };
+    const row = { id, job_id: nt.jobId, title: nt.title, title_es: es || nt.title, assigned_to: nt.assignedTo, due_date: nt.dueDate || null, status: "pending", priority: toPriority(nt.priority), recurring: nt.recurring, photo_required: nt.photoRequired };
     try { await sbPost("field_tasks", row); } catch { enqueue({ table: "field_tasks", payload: row }); }
     // Save attached photo if provided
     if (taskPhoto && nt.jobId) {
       const pid = "p" + Date.now();
-      const prow = { id: pid, data_url: taskPhoto.dataUrl, photo_type: taskPhotoType, task_id: id, job_id: nt.jobId, crew_id: user?.id || "admin", size_kb: taskPhoto.sizeKB, note: taskPhotoNote || null };
+      let storagePath = null;
+      try { storagePath = await uploadToStorage(taskPhoto.dataUrl, `${user?.id||"admin"}/${pid}.jpg`); } catch {}
+      const prow = { id: pid, data_url: storagePath ? null : taskPhoto.dataUrl, storage_path: storagePath, photo_type: taskPhotoType, task_id: id, job_id: nt.jobId, crew_id: user?.id || "admin", size_kb: taskPhoto.sizeKB, note: taskPhotoNote || null };
       if (setPhotos) setPhotos(p => [...p, { id: pid, dataUrl: taskPhoto.dataUrl, type: taskPhotoType, taskId: id, jobId: nt.jobId, crewId: user?.id || "admin", sizeKB: taskPhoto.sizeKB, note: taskPhotoNote, date: new Date().toISOString() }]);
       try { await sbPost("field_photos", prow); } catch { enqueue({ table: "field_photos", payload: prow }); }
     }
-    // Twilio SMS to each assigned crew member
+    // Notify each assigned crew member — SMS + Web Push
     const jobName = jobs.find(j => j.id === nt.jobId)?.name || "";
     const appUrl = settings?.appUrl || window.location.origin;
+    const pushTitle = `📋 New Task: ${nt.title}`;
+    const pushBody = `Job: ${jobName}${nt.dueDate ? ` · Due ${nt.dueDate}` : ""}`;
     for (const crewId of nt.assignedTo) {
       const member = users.find(u => u.id === crewId);
       if (member?.phone) {
-        const crewLink = `${appUrl}/?tab=tasks`;
-        const msg = `New task assigned to you: "${nt.title}"\nJob: ${jobName}${nt.dueDate ? `\nDue: ${nt.dueDate}` : ""}\nOpen your crew app: ${crewLink}`;
+        const msg = `New task assigned to you: "${nt.title}"\nJob: ${jobName}${nt.dueDate ? `\nDue: ${nt.dueDate}` : ""}\nOpen your crew app: ${appUrl}/?tab=tasks`;
         fetch("/.netlify/functions/send-sms", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ to: member.phone, body: msg }) }).catch(() => {});
       }
     }
-    setNt({ title: "", titleEs: "", jobId: "", assignedTo: [], dueDate: "", priority: "normal", recurring: false });
+    sendPush(nt.assignedTo, pushTitle, pushBody, "/?tab=tasks");
+    setNt({ title: "", jobId: "", assignedTo: [], dueDate: "", priority: "normal", recurring: false, photoRequired: false });
     setTaskPhoto(null); setTaskPhotoNote(""); setTaskPhotoType("before");
     setModal(false); setBusy(false);
   };
-  const openEdit = (task) => { setEditTask(task); setEditForm({ title: task.title, titleEs: task.titleEs, dueDate: task.dueDate, priority: task.priority || "normal", recurring: task.recurring || false, assignedTo: task.assignedTo || [] }); };
+  const openEdit = (task) => { setEditTask(task); setEditForm({ title: task.title, dueDate: task.dueDate, priority: task.priority || "normal", recurring: task.recurring || false, assignedTo: task.assignedTo || [] }); };
   const saveEdit = async () => {
     if (!editTask) return;
-    const patch = { title: editForm.title, title_es: editForm.titleEs, due_date: editForm.dueDate || null, priority: editForm.priority, recurring: editForm.recurring, assigned_to: editForm.assignedTo };
-    setTasks(p => p.map(t => t.id === editTask.id ? { ...t, title: editForm.title, titleEs: editForm.titleEs, dueDate: editForm.dueDate, priority: editForm.priority, recurring: editForm.recurring, assignedTo: editForm.assignedTo } : t));
+    let es = editTask.titleEs;
+    if (editForm.title !== editTask.title && settings?.gtKey) {
+      try { es = await translateText(editForm.title, "es", settings.gtKey); }
+      catch { es = editForm.title; }
+    }
+    const patch = { title: editForm.title, title_es: es || editForm.title, due_date: editForm.dueDate || null, priority: toPriority(editForm.priority), recurring: editForm.recurring, assigned_to: editForm.assignedTo };
+    setTasks(p => p.map(t => t.id === editTask.id ? { ...t, title: editForm.title, titleEs: es || editForm.title, dueDate: editForm.dueDate, priority: editForm.priority, recurring: editForm.recurring, assignedTo: editForm.assignedTo } : t));
     try { await sbFetch(`field_tasks?id=eq.${editTask.id}`, { method: "PATCH", body: JSON.stringify(patch), prefer: "return=minimal" }); } catch {}
     setEditTask(null);
   };
@@ -1338,6 +2200,7 @@ function AdminTasks(props) {
     try { await sbPatch("field_tasks", id, { status: next, completed_at: next === "done" ? new Date().toISOString() : null }); } catch {}
   };
   const deleteTask = async (id) => {
+    if (tasks.find(t => t.id === id)?.status === "done") return;
     setTasks(p => p.filter(t => t.id !== id));
     try { await sbDelete("field_tasks", id); } catch {}
   };
@@ -1364,53 +2227,107 @@ function AdminTasks(props) {
 
       {shown.length === 0 && <div className="empty"><p>No {filterLabel[statusFilter].toLowerCase()} for the selected job.</p></div>}
       {shown.map(job => {
-        const jt = statusFiltered
-          .filter(t => t.jobId === job.id)
+        const allJobTasks = tasks.filter(t => t.jobId === job.id);
+        const recurringTasks = allJobTasks.filter(t => t.recurring);
+        const regularTasks = statusFiltered
+          .filter(t => t.jobId === job.id && !t.recurring)
           .sort((a, b) => {
-            if (a.recurring !== b.recurring) return a.recurring ? -1 : 1;
             if (a.priority === "urgent" && b.priority !== "urgent") return -1;
             if (a.priority !== "urgent" && b.priority === "urgent") return 1;
             return 0;
           });
-        if (!jt.length) return null;
-        return <div key={job.id} className="jobsec">
-          <div className="jobhead"><div><div className="jobname">{job.name}</div><MapAddr addr={job.address} /></div>
-            <span className="tag-l">{jt.length} task{jt.length !== 1 ? "s" : ""}</span></div>
-          <div className="jobbody">{jt.map(task => {
-            const s = st(task), crew = (task.assignedTo || []).map(id => users.find(u => u.id === id)).filter(Boolean);
-            const rowClass = `trow${task.recurring ? " trow-recurring" : task.priority === "urgent" ? " trow-urgent" : ""}`;
-            return <div key={task.id} className={rowClass}>
-              <div className="tchk"><input type="checkbox" checked={task.status === "done"} onChange={() => toggle(task.id)} /></div>
-              <div className="tinfo">
-                <div className="ten" style={{ textDecoration: task.status === "done" ? "line-through" : "none", opacity: task.status === "done" ? .6 : 1 }}>
-                  {task.recurring && <span style={{ fontSize: 11, marginRight: 5 }}>🔁</span>}
-                  {task.title}
+        if (!recurringTasks.length && !regularTasks.length) return null;
+        return (
+          <div key={job.id} className="jobsec">
+            <div className="jobhead">
+              <div><div className="jobname">{job.name}</div><MapAddr addr={job.address} /></div>
+              <span className="tag-l">{allJobTasks.length} task{allJobTasks.length !== 1 ? "s" : ""}</span>
+            </div>
+
+            {/* ── Recurring subsection ── */}
+            {recurringTasks.length > 0 && (
+              <div style={{ margin: "0 0 12px", borderRadius: 10, overflow: "hidden", border: "1px solid rgba(245,158,11,.4)" }}>
+                <div style={{ padding: "8px 14px", background: "rgba(245,158,11,.15)", display: "flex", alignItems: "center", gap: 8 }}>
+                  <span style={{ fontSize: 13 }}>🔁</span>
+                  <span style={{ fontWeight: 800, fontSize: 12, color: "var(--accent)", textTransform: "uppercase", letterSpacing: 1, fontFamily: "'Barlow Condensed'" }}>
+                    Recurring Tasks
+                  </span>
+                  <span style={{ fontSize: 11, color: "var(--accent)", opacity: .7 }}>— crew checks daily, never removed unless deleted</span>
                 </div>
-                <div className="tes">{task.titleEs}</div>
-                <div className="tmeta">
-                  {task.recurring && <span className="tag tag-recurring">Recurring</span>}
-                  {task.priority === "urgent" && <span className="tag tag-urgent">⚡ Urgent</span>}
-                  <span className={`tag tag-${s}`}>{t[s]}</span>
-                  {task.dueDate && <span className="tag" style={{ background: "rgba(255,255,255,.06)", color: "var(--silver)" }}>Due {task.dueDate}</span>}
-                  {crew.map(a => <span key={a.id} className="tag-l" style={{ marginRight: 3 }}>{a.name}</span>)}
-                </div>
+                {recurringTasks.map(task => {
+                  const crew = (task.assignedTo || []).map(id => users.find(u => u.id === id)).filter(Boolean);
+                  const doneToday = task.completedAt && localDateOf(task.completedAt) === today;
+                  return (
+                    <div key={task.id} style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 14px",
+                      background: doneToday ? "rgba(245,158,11,.08)" : "rgba(245,158,11,.04)",
+                      borderTop: "1px solid rgba(245,158,11,.2)" }}>
+                      <div style={{ width: 10, height: 10, borderRadius: "50%", background: "var(--accent)", flexShrink: 0 }} />
+                      <div className="tinfo" style={{ flex: 1 }}>
+                        <div className="ten">
+                          {lang === "es" && task.titleEs && task.titleEs !== task.title ? task.titleEs : task.title}
+                        </div>
+                        {task.titleEs && task.titleEs !== task.title && (
+                          <div style={{ fontSize: 11, color: "var(--slate)", fontStyle: "italic", marginTop: 1 }}>
+                            {lang === "es" ? task.title : task.titleEs}
+                          </div>
+                        )}
+                        <div className="tmeta">
+                          {crew.length > 0
+                            ? crew.map(a => <span key={a.id} className="tag-l" style={{ marginRight: 3 }}>{a.name}</span>)
+                            : <span className="muted" style={{ fontSize: 11 }}>All crew</span>}
+                          {doneToday && <span style={{ fontSize: 10, color: "var(--green)", fontWeight: 700, marginLeft: 4 }}>✓ Done today</span>}
+                        </div>
+                      </div>
+                      <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
+                        <button className="btn btn-s btn-sm btn-ic" title="Edit" onClick={() => openEdit(task)}><Icon n="pen" s={14} /></button>
+                        {task.status !== "done" && <button className="btn btn-s btn-sm btn-ic" style={{ color: "var(--red)" }} title="Delete" onClick={() => deleteTask(task.id)}><Icon n="x" s={14} /></button>}
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
-              <div style={{ display:"flex", gap:4, flexShrink:0 }}>
-                <button className="btn btn-s btn-sm btn-ic" title="Edit" onClick={() => openEdit(task)}><Icon n="pen" s={14} /></button>
-                <button className="btn btn-s btn-sm btn-ic" style={{ color: "var(--red)" }} title="Delete" onClick={() => deleteTask(task.id)}><Icon n="x" s={14} /></button>
-              </div>
-            </div>;
-          })}</div>
-        </div>;
+            )}
+
+            {/* ── Regular tasks subsection ── */}
+            {regularTasks.length > 0 && (
+              <div className="jobbody">{regularTasks.map(task => {
+                const s = st(task), crew = (task.assignedTo || []).map(id => users.find(u => u.id === id)).filter(Boolean);
+                const rowClass = `trow${task.priority === "urgent" ? " trow-urgent" : ""}`;
+                return <div key={task.id} className={rowClass}>
+                  <div className="tchk"><input type="checkbox" checked={task.status === "done"} onChange={() => toggle(task.id)} /></div>
+                  <div className="tinfo">
+                    <div className="ten" style={{ textDecoration: task.status === "done" ? "line-through" : "none", opacity: task.status === "done" ? .6 : 1 }}>
+                      {lang === "es" && task.titleEs && task.titleEs !== task.title ? task.titleEs : task.title}
+                    </div>
+                    {task.titleEs && task.titleEs !== task.title && (
+                      <div style={{ fontSize: 11, color: "var(--slate)", marginTop: 1, fontStyle: "italic" }}>
+                        {lang === "es" ? task.title : task.titleEs}
+                      </div>
+                    )}
+                    <div className="tmeta">
+                      {task.priority === "urgent" && <span className="tag tag-urgent">⚡ Urgent</span>}
+                      <span className={`tag tag-${s}`}>{t[s]}</span>
+                      {task.dueDate && <span className="tag" style={{ background: "rgba(255,255,255,.06)", color: "var(--silver)" }}>Due {task.dueDate}</span>}
+                      {crew.map(a => <span key={a.id} className="tag-l" style={{ marginRight: 3 }}>{a.name}</span>)}
+                    </div>
+                  </div>
+                  <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
+                    <button className="btn btn-s btn-sm btn-ic" title="Edit" onClick={() => openEdit(task)}><Icon n="pen" s={14} /></button>
+                    {task.status !== "done" && <button className="btn btn-s btn-sm btn-ic" style={{ color: "var(--red)" }} title="Delete" onClick={() => deleteTask(task.id)}><Icon n="x" s={14} /></button>}
+                  </div>
+                </div>;
+              })}</div>
+            )}
+          </div>
+        );
       })}
 
       {/* ── Edit Task Modal ── */}
       {editTask && <div className="modal-bg" onClick={e => e.target === e.currentTarget && setEditTask(null)}>
         <div className="modal"><div className="mt">Edit Task</div>
-          <div className="fg"><label className="fl">Task (English)</label>
-            <input className="fi" value={editForm.title} onChange={e => setEditForm(p => ({ ...p, title: e.target.value }))} /></div>
-          <div className="fg"><label className="fl">Tarea (Español)</label>
-            <input className="fi" value={editForm.titleEs} onChange={e => setEditForm(p => ({ ...p, titleEs: e.target.value }))} /></div>
+          <div className="fg"><label className="fl">Task Description</label>
+            <input className="fi" value={editForm.title} onChange={e => setEditForm(p => ({ ...p, title: e.target.value }))} />
+            {settings?.gtKey && <p style={{ fontSize:11, color:"var(--slate)", marginTop:5 }}>Auto-translates to Spanish for crew</p>}</div>
           <div className="fg"><label className="fl">Due Date</label>
             <input className="fi" type="date" value={editForm.dueDate} onChange={e => setEditForm(p => ({ ...p, dueDate: e.target.value }))} /></div>
           <div className="grid2" style={{ marginBottom: 18 }}>
@@ -1442,12 +2359,13 @@ function AdminTasks(props) {
           </div>
           <div className="fg"><label className="fl">Assigned To</label>
             <div style={{ background:"rgba(0,0,0,.15)", borderRadius:10, padding:"6px 4px", border:"1px solid var(--border)" }}>
-              {users.filter(u => u.role === "crew").map(u => (
+              {users.filter(u => u.active && !u.archived).sort((a,b) => (a.role==="crew"?0:1)-(b.role==="crew"?0:1) || a.name.localeCompare(b.name)).map(u => (
                 <label key={u.id} style={{ display:"flex", alignItems:"center", gap:11, padding:"8px 12px", cursor:"pointer", borderRadius:8,
                   background: editForm.assignedTo.includes(u.id) ? "rgba(59,130,246,.12)" : "transparent" }}>
                   <input type="checkbox" checked={editForm.assignedTo.includes(u.id)} onChange={() => toggleEditCrew(u.id)}
                     style={{ width:17, height:17, accentColor:"var(--sky)", flexShrink:0 }} />
                   <span style={{ fontSize:14, fontWeight:500 }}>{u.name}</span>
+                  {u.role === "admin" && <span style={{ fontSize:10, color:"var(--accent)", marginLeft:4, fontWeight:700 }}>ADMIN</span>}
                 </label>
               ))}
             </div>
@@ -1464,14 +2382,13 @@ function AdminTasks(props) {
           <div className="fg"><label className="fl">Job</label>
             <select className="fi" value={nt.jobId} onChange={e => setNt(p => ({ ...p, jobId: e.target.value }))}>
               <option value="">Select Job</option>{jobs.map(j => <option key={j.id} value={j.id}>{j.name}</option>)}</select></div>
-          <div className="fg"><label className="fl">Task (English)</label>
-            <input className="fi" value={nt.title} onChange={e => setNt(p => ({ ...p, title: e.target.value }))} placeholder="Task..." /></div>
-          <div className="fg"><label className="fl">Tarea (Español) — auto-translates if blank</label>
-            <input className="fi" value={nt.titleEs} onChange={e => setNt(p => ({ ...p, titleEs: e.target.value }))} placeholder="Opcional..." /></div>
+          <div className="fg"><label className="fl">Task Description</label>
+            <input className="fi" value={nt.title} onChange={e => setNt(p => ({ ...p, title: e.target.value }))} placeholder="Task..." />
+            {settings?.gtKey && <p style={{ fontSize:11, color:"var(--slate)", marginTop:5 }}>Auto-translates to Spanish for crew</p>}</div>
           <div className="fg">
             <label className="fl">Assign To <span style={{ color: "var(--silver)", fontWeight: 400, textTransform: "none", letterSpacing: 0 }}>— select one or more</span></label>
             <div style={{ background: "rgba(0,0,0,.15)", borderRadius: 10, padding: "6px 4px", border: "1px solid var(--border)" }}>
-              {users.filter(u => u.role === "crew").map(u => (
+              {users.filter(u => u.active && !u.archived).sort((a,b) => (a.role==="crew"?0:1)-(b.role==="crew"?0:1) || a.name.localeCompare(b.name)).map(u => (
                 <label key={u.id} style={{ display: "flex", alignItems: "center", gap: 11, padding: "8px 12px", cursor: "pointer", borderRadius: 8,
                   background: nt.assignedTo.includes(u.id) ? "rgba(59,130,246,.12)" : "transparent", transition: ".15s" }}>
                   <input type="checkbox" checked={nt.assignedTo.includes(u.id)} onChange={() => toggleCrew(u.id)}
@@ -1479,12 +2396,14 @@ function AdminTasks(props) {
                   <div style={{ width: 32, height: 32, borderRadius: "50%", background: nt.assignedTo.includes(u.id) ? "linear-gradient(135deg,var(--sky-dim),var(--sky))" : "rgba(255,255,255,.1)",
                     display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "'Barlow Condensed'", fontWeight: 800, fontSize: 14, flexShrink: 0 }}>{u.name[0]}</div>
                   <span style={{ fontSize: 14, fontWeight: 500 }}>{u.name}</span>
+                  {u.role === "admin" && <span style={{ fontSize: 10, color: "var(--accent)", fontWeight: 700 }}>ADMIN</span>}
                   {nt.assignedTo.includes(u.id) && <span style={{ marginLeft: "auto", fontSize: 11, color: "var(--sky2)" }}>✓ assigned</span>}
                 </label>
               ))}
-              {!users.filter(u => u.role === "crew").length && <p className="muted" style={{ padding: "10px 12px", fontSize: 13 }}>No crew members added yet.</p>}
+              {!users.filter(u => u.active && !u.archived).length && <p className="muted" style={{ padding: "10px 12px", fontSize: 13 }}>No users added yet.</p>}
             </div>
-            {!nt.assignedTo.length && <p style={{ fontSize: 11, color: "var(--orange)", marginTop: 6 }}>Select at least one crew member</p>}
+            {!nt.assignedTo.length && !nt.recurring && <p style={{ fontSize: 11, color: "var(--orange)", marginTop: 6 }}>Select at least one person (or toggle 🔁 Recurring for all-crew tasks)</p>}
+            {!nt.assignedTo.length && nt.recurring && <p style={{ fontSize: 11, color: "var(--accent)", marginTop: 6 }}>🔁 Recurring tasks show for all crew — no assignment needed</p>}
           </div>
           <div className="fg"><label className="fl">Due Date</label>
             <input className="fi" type="date" value={nt.dueDate} onChange={e => setNt(p => ({ ...p, dueDate: e.target.value }))} /></div>
@@ -1514,6 +2433,14 @@ function AdminTasks(props) {
                   fontFamily: "'Barlow Condensed'", fontWeight: 700, fontSize: 13, letterSpacing: 1, textTransform: "uppercase", cursor: "pointer" }}>
                 🔁 {nt.recurring ? "Recurring" : "One-Time"}
               </button>
+              <button type="button" onClick={() => setNt(n => ({ ...n, photoRequired: !n.photoRequired }))}
+                style={{ flex: 1, padding: "9px 0", borderRadius: 10,
+                  border: `1px solid ${nt.photoRequired ? "var(--sky)" : "var(--border)"}`,
+                  background: nt.photoRequired ? "rgba(59,130,246,.15)" : "rgba(255,255,255,.04)",
+                  color: nt.photoRequired ? "var(--sky2)" : "var(--silver)",
+                  fontFamily: "'Barlow Condensed'", fontWeight: 700, fontSize: 13, letterSpacing: 1, textTransform: "uppercase", cursor: "pointer" }}>
+                📷 {nt.photoRequired ? "Photo Required" : "Photo Optional"}
+              </button>
             </div>
           </div>
 
@@ -1528,7 +2455,7 @@ function AdminTasks(props) {
                   <Icon n="camera" s={15}/> Open Camera
                 </button>
                 <button className="btn btn-s btn-sm" style={{ justifyContent:"center" }}
-                  onClick={() => { photoRef.current?.removeAttribute("capture"); photoRef.current?.click(); }}>
+                  onClick={() => openGallery(captureTaskPhoto)}>
                   <Icon n="photo" s={15}/> From Library
                 </button>
               </div>
@@ -1560,6 +2487,52 @@ function AdminTasks(props) {
           <div className="macts"><button className="btn btn-s" onClick={() => { setModal(false); setTaskPhoto(null); }}>Cancel</button>
             <button className="btn btn-p" onClick={add} disabled={busy}>{busy ? <span className="spin" /> : "Add Task"}</button></div>
         </div></div>}
+    </div>
+  );
+}
+
+function AdminArchive({ tasks, jobs, users }) {
+  const cutoff = new Date(Date.now() - 24 * 3600000).toISOString();
+  const archived = tasks.filter(t => t.status === "done" && t.completedAt && t.completedAt < cutoff);
+  const byJob = jobs
+    .map(j => ({ job: j, jt: archived.filter(t => t.jobId === j.id) }))
+    .filter(x => x.jt.length > 0);
+  const crewName = id => users.find(u => u.id === id)?.name || id;
+
+  return (
+    <div>
+      <div className="flexb" style={{ marginBottom: 6 }}><h2 className="h2">Archive</h2></div>
+      <p className="muted" style={{ fontSize: 13, marginBottom: 20 }}>Completed tasks older than 24 hours — read-only record for payroll and reporting. Tasks here can never be deleted.</p>
+      {byJob.length === 0
+        ? <div className="empty"><p>No archived tasks yet.</p></div>
+        : byJob.map(({ job, jt }) => (
+          <div key={job.id} className="jobsec">
+            <div className="jobhead">
+              <div><div className="jobname">{job.name}</div><MapAddr addr={job.address} /></div>
+              <span className="tag-l">{jt.length} archived</span>
+            </div>
+            {jt.sort((a, b) => (b.completedAt || "").localeCompare(a.completedAt || "")).map(task => {
+              const crew = (task.assignedTo || []).map(id => crewName(id));
+              return (
+                <div key={task.id} style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 14px", borderTop: "1px solid rgba(255,255,255,.05)" }}>
+                  <Icon n="check" s={14} c="var(--green)" />
+                  <div className="tinfo" style={{ flex: 1 }}>
+                    <div className="ten" style={{ textDecoration: "line-through", opacity: 0.65 }}>{task.title}</div>
+                    <div className="tmeta">
+                      {crew.map((n, i) => <span key={i} className="tag-l" style={{ marginRight: 3 }}>{n}</span>)}
+                      {task.completedAt && <span className="tag" style={{ background: "rgba(16,185,129,.12)", color: "var(--green)" }}>
+                        Done {localDateOf(task.completedAt)}
+                      </span>}
+                      {task.dueDate && <span className="tag" style={{ background: "rgba(255,255,255,.06)", color: "var(--silver)" }}>Due {task.dueDate}</span>}
+                    </div>
+                  </div>
+                  <Icon n="lock" s={13} c="var(--slate)" />
+                </div>
+              );
+            })}
+          </div>
+        ))
+      }
     </div>
   );
 }
@@ -1696,7 +2669,7 @@ function Calendar({ tasks, setTasks, jobs, users, receipts }) {
   const [newTask,    setNewTask]    = useState({ jobId:"", title:"", assignedTo:[] });
   const y = d.getFullYear(), mo = d.getMonth();
   const first = new Date(y, mo, 1).getDay(), days = new Date(y, mo + 1, 0).getDate();
-  const today = new Date().toISOString().split("T")[0];
+  const today = localDate();
   const mn = ["January","February","March","April","May","June","July","August","September","October","November","December"];
   const dn = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
 
@@ -1723,7 +2696,7 @@ function Calendar({ tasks, setTasks, jobs, users, receipts }) {
     setAddForDay(null);
   };
 
-  const todayStr = new Date().toISOString().split("T")[0];
+  const todayStr = localDate();
 
   const toggleTaskStatus = async (task) => {
     const next = task.status === "done" ? "pending" : "done";
@@ -1732,6 +2705,7 @@ function Calendar({ tasks, setTasks, jobs, users, receipts }) {
   };
 
   const deleteCalTask = async (id) => {
+    if (tasks.find(t => t.id === id)?.status === "done") { setConfirmDel(null); return; }
     setTasks(p => p.filter(t => t.id !== id));
     try { await sbDelete("field_tasks", id); } catch {}
     setConfirmDel(null);
@@ -1919,9 +2893,9 @@ function Calendar({ tasks, setTasks, jobs, users, receipts }) {
                         <button className="btn btn-s btn-sm btn-ic" title="Edit" onClick={() => { setEditTask(task); setEditForm({ title:task.title, dueDate:task.dueDate||"" }); }}>
                           <Icon n="pen" s={13}/>
                         </button>
-                        <button className="btn btn-s btn-sm btn-ic" style={{ color:"var(--red)" }} title="Delete" onClick={() => setConfirmDel(task.id)}>
+                        {task.status !== "done" && <button className="btn btn-s btn-sm btn-ic" style={{ color:"var(--red)" }} title="Delete" onClick={() => setConfirmDel(task.id)}>
                           <Icon n="x" s={13}/>
-                        </button>
+                        </button>}
                       </div>
                     </div>
                   );
@@ -1962,7 +2936,7 @@ function Calendar({ tasks, setTasks, jobs, users, receipts }) {
             <div className="fg"><label className="fl">Due Date</label>
               <input className="fi" type="date" value={editForm.dueDate} onChange={e => setEditForm(p=>({...p,dueDate:e.target.value}))} /></div>
             <div className="macts">
-              <button className="btn btn-s" style={{ marginRight:"auto", color:"var(--red)" }} onClick={() => { setConfirmDel(editTask.id); setEditTask(null); }}>Delete</button>
+              {editTask?.status !== "done" && <button className="btn btn-s" style={{ marginRight:"auto", color:"var(--red)" }} onClick={() => { setConfirmDel(editTask.id); setEditTask(null); }}>Delete</button>}
               <button className="btn btn-s" onClick={() => setEditTask(null)}>Cancel</button>
               <button className="btn btn-p" onClick={saveEditTask}>Save</button>
             </div>
@@ -2047,36 +3021,197 @@ function Calendar({ tasks, setTasks, jobs, users, receipts }) {
   );
 }
 
-function Report({ tasks, jobs, users, logs, t }) {
-  const [filter, setFilter] = useState("all");
-  const crew = users.filter(u => u.role === "crew");
-  const ft = filter === "all" ? tasks : tasks.filter(t => t.jobId === filter);
-  const today = new Date().toISOString().split("T")[0];
+function Report({ tasks, jobs, users, logs, photos, receipts }) {
+  const today = localDate();
+  const offsetDay = (n) => { const d = new Date(); d.setDate(d.getDate() + n); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`; };
+  const [rangeStart, setRangeStart] = useState(offsetDay(-6));
+  const [rangeEnd,   setRangeEnd]   = useState(today);
+  const [jobFilter,  setJobFilter]  = useState("all");
+
+  const lo = rangeStart || "0000-00-00";
+  const hi = rangeEnd   || "9999-99-99";
+  const inRange = (d) => d && d.slice(0,10) >= lo && d.slice(0,10) <= hi;
+
+  const rTasks    = tasks.filter(tk => (jobFilter === "all" || tk.jobId === jobFilter) && inRange(tk.dueDate || tk.createdAt));
+  const rLogs     = (logs    || []).filter(l => (jobFilter === "all" || l.jobId  === jobFilter) && inRange(l.date));
+  const rPhotos   = (photos  || []).filter(p => (jobFilter === "all" || p.jobId  === jobFilter) && inRange((p.date||"").slice(0,10)));
+  const rReceipts = (receipts|| []).filter(r => (jobFilter === "all" || r.jobId  === jobFilter) && inRange(r.createdAt));
+
+  const shownJobs = jobs.filter(j => jobFilter === "all" || j.id === jobFilter)
+    .filter(j => rTasks.some(t=>t.jobId===j.id) || rLogs.some(l=>l.jobId===j.id) || rPhotos.some(p=>p.jobId===j.id) || rReceipts.some(r=>r.jobId===j.id));
+
+  const userName = id => users.find(u=>u.id===id)?.name || "Unknown";
+  const statusColor = s => s==="done"?"#16a34a":s==="overdue"?"#dc2626":"#d97706";
+
+  const printReport = () => {
+    const w = window.open("", "_blank", "width=950,height=1200");
+    const logoUrl = `${window.location.origin}/icon-admin.png`;
+
+    const photoHtml = (ph) => ph.map(p => `
+      <div style="width:130px;flex-shrink:0">
+        <img src="${p.dataUrl||''}" style="width:130px;height:100px;object-fit:cover;border-radius:6px;border:2px solid ${p.type==="before"?"#f97316":p.type==="after"?"#16a34a":"#ef4444"}" onerror="this.style.display='none'"/>
+        <div style="font-size:9px;font-weight:700;text-transform:uppercase;color:${p.type==="before"?"#f97316":p.type==="after"?"#16a34a":"#ef4444"};margin-top:3px">${p.type}${p.note?` — ${p.note}`:""}</div>
+        <div style="font-size:8px;color:#999">${(p.date||"").slice(0,10)} · ${userName(p.crewId)}</div>
+      </div>`).join("");
+
+    const jobBlocks = shownJobs.map(job => {
+      const jTasks    = rTasks.filter(t=>t.jobId===job.id);
+      const jLogs     = rLogs.filter(l=>l.jobId===job.id);
+      const jPhotos   = rPhotos.filter(p=>p.jobId===job.id);
+      const jReceipts = rReceipts.filter(r=>r.jobId===job.id);
+      const done = jTasks.filter(t=>t.status==="done").length;
+
+      const taskRows = jTasks.map(tk => {
+        const s = tk.status==="done"?"done":(tk.dueDate&&tk.dueDate<today?"overdue":"pending");
+        const tphotos = jPhotos.filter(p=>p.taskId===tk.id);
+        const crew = (Array.isArray(tk.assignedTo)?tk.assignedTo:[tk.assignedTo]).map(id=>userName(id)).join(", ");
+        return `
+          <tr style="page-break-inside:avoid">
+            <td style="padding:8px 10px;vertical-align:top;font-size:13px;font-weight:600;border-bottom:1px solid #e5e7eb">${tk.title}</td>
+            <td style="padding:8px 10px;vertical-align:top;font-size:11px;color:#6b7280;font-style:italic;border-bottom:1px solid #e5e7eb">${tk.titleEs||""}</td>
+            <td style="padding:8px 10px;vertical-align:top;font-size:11px;color:#6b7280;border-bottom:1px solid #e5e7eb;white-space:nowrap">${crew}</td>
+            <td style="padding:8px 10px;vertical-align:top;font-size:11px;color:#6b7280;border-bottom:1px solid #e5e7eb;white-space:nowrap">${tk.dueDate||tk.createdAt||""}</td>
+            <td style="padding:8px 10px;vertical-align:top;border-bottom:1px solid #e5e7eb"><span style="background:${statusColor(s)}22;color:${statusColor(s)};padding:2px 8px;border-radius:4px;font-size:10px;font-weight:700;text-transform:uppercase">${s}</span></td>
+          </tr>
+          ${tphotos.length?`<tr style="page-break-inside:avoid"><td colspan="5" style="padding:6px 10px 12px;border-bottom:1px solid #e5e7eb;background:#fafafa">
+            <div style="font-size:10px;color:#9ca3af;margin-bottom:6px">📷 ${tphotos.length} photo${tphotos.length!==1?"s":""}</div>
+            <div style="display:flex;gap:10px;flex-wrap:wrap">${photoHtml(tphotos)}</div>
+          </td></tr>`:""}`;
+      }).join("");
+
+      const jobOnlyPhotos = jPhotos.filter(p=>!p.taskId);
+      const logRows = jLogs.map(l => {
+        const lphoto = jPhotos.find(p=>p.taskId===null&&Math.abs(new Date(p.date)-new Date(l.date+"T00:00:00"))<86400000*2&&!l.consumed);
+        return `<div style="padding:8px 14px;border-bottom:1px solid #e5e7eb">
+          <div style="font-size:11px;color:#6b7280;margin-bottom:3px">${l.date} — <strong>${userName(l.crewId)}</strong></div>
+          <div style="font-size:13px">${l.en||""}</div>
+          ${lphoto?`<div style="margin-top:6px"><img src="${lphoto.dataUrl||''}" style="width:100px;height:75px;object-fit:cover;border-radius:6px" onerror="this.style.display='none'"/></div>`:""}
+        </div>`;
+      }).join("");
+
+      const receiptRows = jReceipts.map(r => `
+        <tr>
+          <td style="padding:6px 10px;font-size:12px;border-bottom:1px solid #e5e7eb">${r.createdAt||""}</td>
+          <td style="padding:6px 10px;font-size:12px;border-bottom:1px solid #e5e7eb">${r.store||""}</td>
+          <td style="padding:6px 10px;font-size:12px;border-bottom:1px solid #e5e7eb">${userName(r.crewId)}</td>
+          <td style="padding:6px 10px;font-size:12px;border-bottom:1px solid #e5e7eb">${r.note||""}</td>
+          <td style="padding:6px 10px;font-size:12px;text-align:right;font-weight:700;border-bottom:1px solid #e5e7eb;color:${r.paidBy==="crew"?"#f97316":"#1a1a1a"}">$${(+r.amount||0).toFixed(2)}</td>
+          <td style="padding:6px 10px;font-size:11px;border-bottom:1px solid #e5e7eb">${r.paidBy==="crew"?"Crew/Reimb":"Company"}</td>
+          <td style="padding:6px 10px;border-bottom:1px solid #e5e7eb">${r.dataUrl?`<img src="${r.dataUrl}" style="width:48px;height:36px;object-fit:cover;border-radius:4px" onerror="this.style.display='none'"/>`:"—"}</td>
+        </tr>`).join("");
+
+      return `
+        <div style="margin-bottom:32px;page-break-inside:avoid">
+          <div style="background:#4a2c1a;color:#fff;padding:10px 16px;border-radius:8px 8px 0 0;display:flex;justify-content:space-between;align-items:center">
+            <div style="font-size:16px;font-weight:bold">${job.name}</div>
+            <div style="font-size:11px;opacity:.75">${done}/${jTasks.length} tasks done${job.address?` · ${job.address}`:""}</div>
+          </div>
+
+          ${jTasks.length?`
+          <div style="background:#fdf8f3;padding:6px 14px;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.8px;color:#7c3f1e;border:1px solid #e8d5c4;border-top:none">Tasks</div>
+          <table style="width:100%;border-collapse:collapse;border:1px solid #e8d5c4;border-top:none;border-radius:0 0 0 0">
+            <thead><tr style="background:#f9f5f1">
+              <th style="padding:7px 10px;text-align:left;font-size:11px;color:#7c3f1e;border-bottom:2px solid #e8d5c4">Task</th>
+              <th style="padding:7px 10px;text-align:left;font-size:11px;color:#7c3f1e;border-bottom:2px solid #e8d5c4">Tarea (ES)</th>
+              <th style="padding:7px 10px;text-align:left;font-size:11px;color:#7c3f1e;border-bottom:2px solid #e8d5c4">Assigned</th>
+              <th style="padding:7px 10px;text-align:left;font-size:11px;color:#7c3f1e;border-bottom:2px solid #e8d5c4">Due</th>
+              <th style="padding:7px 10px;text-align:left;font-size:11px;color:#7c3f1e;border-bottom:2px solid #e8d5c4">Status</th>
+            </tr></thead>
+            <tbody>${taskRows}</tbody>
+          </table>
+          `:""}
+
+          ${jobOnlyPhotos.length?`
+          <div style="background:#f0f4ff;padding:6px 14px;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.8px;color:#3b82f6;border:1px solid #dbeafe;border-top:none">Job Photos (No Specific Task)</div>
+          <div style="border:1px solid #dbeafe;border-top:none;padding:10px 14px"><div style="display:flex;gap:10px;flex-wrap:wrap">${photoHtml(jobOnlyPhotos)}</div></div>
+          `:""}
+
+          ${jLogs.length?`
+          <div style="background:#f0fdf4;padding:6px 14px;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.8px;color:#16a34a;border:1px solid #bbf7d0;border-top:none">Site Notes</div>
+          <div style="border:1px solid #bbf7d0;border-top:none">${logRows}</div>
+          `:""}
+
+          ${jReceipts.length?`
+          <div style="background:#fffbeb;padding:6px 14px;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.8px;color:#d97706;border:1px solid #fde68a;border-top:none">Receipts — Total: $${jReceipts.reduce((s,r)=>s+(+r.amount||0),0).toFixed(2)}</div>
+          <table style="width:100%;border-collapse:collapse;border:1px solid #fde68a;border-top:none">
+            <thead><tr style="background:#fffdf0">
+              <th style="padding:5px 10px;text-align:left;font-size:10px;color:#d97706;border-bottom:1px solid #fde68a">Date</th>
+              <th style="padding:5px 10px;text-align:left;font-size:10px;color:#d97706;border-bottom:1px solid #fde68a">Vendor</th>
+              <th style="padding:5px 10px;text-align:left;font-size:10px;color:#d97706;border-bottom:1px solid #fde68a">By</th>
+              <th style="padding:5px 10px;text-align:left;font-size:10px;color:#d97706;border-bottom:1px solid #fde68a">Note</th>
+              <th style="padding:5px 10px;text-align:right;font-size:10px;color:#d97706;border-bottom:1px solid #fde68a">Amount</th>
+              <th style="padding:5px 10px;text-align:left;font-size:10px;color:#d97706;border-bottom:1px solid #fde68a">Paid By</th>
+              <th style="padding:5px 10px;text-align:left;font-size:10px;color:#d97706;border-bottom:1px solid #fde68a">Photo</th>
+            </tr></thead>
+            <tbody>${receiptRows}</tbody>
+          </table>
+          `:""}
+        </div>`;
+    }).join("");
+
+    w.document.write(`<!DOCTYPE html><html><head><title>GSM Field Report — ${lo} to ${hi}</title>
+<style>
+@page{size:8.5in 11in;margin:.4in}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:'Helvetica Neue',Arial,sans-serif;color:#1a1a1a;background:#fff;font-size:13px}
+@media print{body{-webkit-print-color-adjust:exact;print-color-adjust:exact}}
+</style></head><body>
+<div style="display:flex;align-items:center;gap:14px;padding-bottom:12px;border-bottom:3px solid #7c3f1e;margin-bottom:20px">
+  <img src="${logoUrl}" style="width:52px;height:52px;object-fit:contain;border-radius:8px"/>
+  <div>
+    <div style="font-size:20px;font-weight:bold;color:#4a2c1a">G.S. MASTERS, INC.</div>
+    <div style="font-size:11px;color:#888">255 Grande View Pkwy, Maylene AL 35114 · (205) 620-1698</div>
+  </div>
+  <div style="margin-left:auto;text-align:right">
+    <div style="font-size:14px;font-weight:700;color:#4a2c1a">Field Report</div>
+    <div style="font-size:11px;color:#888">${lo} – ${hi}</div>
+    <div style="font-size:10px;color:#bbb">Printed ${new Date().toLocaleString()}</div>
+  </div>
+</div>
+${jobBlocks || '<p style="color:#888;text-align:center;padding:40px">No activity in selected date range.</p>'}
+<script>window.onload=function(){window.print();}</script>
+</body></html>`);
+    w.document.close();
+  };
+
   return (
     <div>
-      <div className="flexb" style={{ marginBottom: 20 }}><h2 className="h2">Weekly Report</h2>
-        <div style={{ display: "flex", gap: 8 }}>
-          <select className="fi" style={{ width: "auto", padding: "8px 13px" }} value={filter} onChange={e => setFilter(e.target.value)}>
-            <option value="all">All Jobs</option>{jobs.map(j => <option key={j.id} value={j.id}>{j.name}</option>)}</select>
-          <button className="btn btn-s btn-sm" onClick={() => window.print()}><Icon n="print" s={14} /> Print</button></div></div>
-      {crew.map(m => {
-        const mt = ft.filter(t => (Array.isArray(t.assignedTo) ? t.assignedTo.includes(m.id) : t.assignedTo === m.id));
-        if (!mt.length) return null;
-        const done = mt.filter(t => t.status === "done").length;
-        const jw = [...new Set(mt.map(t => t.jobId))];
-        return <div key={m.id} style={{ marginBottom: 26 }}>
-          <div style={{ padding: "11px 15px", background: "rgba(59,130,246,.1)", borderRadius: "10px 10px 0 0", border: "1px solid rgba(59,130,246,.2)", borderBottom: "none" }}>
-            <div className="flexb"><span style={{ fontFamily: "'Barlow Condensed'", fontWeight: 700, fontSize: 16 }}>{m.name}</span>
-              <span className="muted">{done}/{mt.length} tasks · {jw.length} job{jw.length !== 1 ? "s" : ""}</span></div></div>
-          <div className="tbl-wrap" style={{ border: "1px solid rgba(59,130,246,.2)", borderTop: "none", borderRadius: "0 0 10px 10px", overflow: "hidden" }}>
-            <table><thead><tr><th>Date</th><th>Job</th><th>Task (EN)</th><th>Tarea (ES)</th><th>Status</th></tr></thead>
-              <tbody>{mt.map(task => { const job = jobs.find(j => j.id === task.jobId);
-                const s = task.status === "done" ? "done" : (task.dueDate < today ? "overdue" : "pending");
-                return <tr key={task.id}><td data-l="Date" className="muted" style={{ whiteSpace: "nowrap" }}>{task.createdAt}</td>
-                  <td data-l="Job"><span className="tag-l" style={{ fontSize: 11 }}>{job?.name}</span></td><td data-l="Task">{task.title}</td>
-                  <td data-l="Tarea" style={{ color: "var(--sky2)", fontStyle: "italic" }}>{task.titleEs}</td>
-                  <td data-l="Status"><span className={`tag tag-${s}`}>{t[s]}</span></td></tr>; })}</tbody></table></div></div>;
-      })}
+      <div className="flexb" style={{ marginBottom: 16 }}>
+        <h2 className="h2">Reports</h2>
+        <button className="btn btn-p" onClick={printReport}><Icon n="print" s={15} /> Generate &amp; Print Report</button>
+      </div>
+      <div className="card" style={{ display:"flex", gap:12, flexWrap:"wrap", alignItems:"flex-end", marginBottom:16 }}>
+        <div className="fg" style={{ flex:"none" }}><label className="fl">From</label>
+          <input type="date" className="fi" value={rangeStart} onChange={e=>setRangeStart(e.target.value)} style={{ width:"auto" }} /></div>
+        <div className="fg" style={{ flex:"none" }}><label className="fl">To</label>
+          <input type="date" className="fi" value={rangeEnd} onChange={e=>setRangeEnd(e.target.value)} style={{ width:"auto" }} /></div>
+        <div className="fg" style={{ flex:"none" }}><label className="fl">Job</label>
+          <select className="fi" style={{ width:"auto" }} value={jobFilter} onChange={e=>setJobFilter(e.target.value)}>
+            <option value="all">All Jobs</option>
+            {jobs.map(j=><option key={j.id} value={j.id}>{j.name}</option>)}
+          </select></div>
+      </div>
+      <div className="card" style={{ padding:"14px 18px" }}>
+        <div style={{ fontFamily:"'Barlow Condensed'", fontWeight:700, fontSize:13, letterSpacing:1, color:"var(--slate)", marginBottom:12 }}>REPORT PREVIEW — {lo} to {hi}</div>
+        {shownJobs.length === 0
+          ? <div className="empty"><Icon n="report" s={40} c="var(--slate)" /><p>No activity in selected date range.</p></div>
+          : shownJobs.map(job => {
+              const jt = rTasks.filter(t=>t.jobId===job.id);
+              const jl = rLogs.filter(l=>l.jobId===job.id);
+              const jp = rPhotos.filter(p=>p.jobId===job.id);
+              const jr = rReceipts.filter(r=>r.jobId===job.id);
+              return <div key={job.id} style={{ marginBottom:14, padding:"10px 14px", background:"rgba(255,255,255,.04)", borderRadius:10, border:"1px solid var(--border)" }}>
+                <div style={{ fontFamily:"'Barlow Condensed'", fontWeight:800, fontSize:15, marginBottom:6 }}>{job.name}</div>
+                <div style={{ display:"flex", gap:14, fontSize:12, color:"var(--silver)", flexWrap:"wrap" }}>
+                  {jt.length > 0 && <span>✓ {jt.length} task{jt.length!==1?"s":""} ({jt.filter(t=>t.status==="done").length} done)</span>}
+                  {jp.length > 0 && <span>📷 {jp.length} photo{jp.length!==1?"s":""}</span>}
+                  {jl.length > 0 && <span>📝 {jl.length} note{jl.length!==1?"s":""}</span>}
+                  {jr.length > 0 && <span>🧾 {jr.length} receipt{jr.length!==1?"s":""} (${jr.reduce((s,r)=>s+(+r.amount||0),0).toFixed(2)})</span>}
+                </div>
+              </div>;
+            })
+        }
+      </div>
     </div>
   );
 }
@@ -2092,34 +3227,43 @@ function AdminReceipts({ receipts, setReceipts, jobs, tasks, users, user, delete
   const [reassignJob, setReassignJob] = useState("");
   const [reassignTask, setReassignTask] = useState("");
   const [reassignConfirm, setReassignConfirm] = useState(false);
-  const today = new Date().toISOString().split("T")[0];
+  const today = localDate();
   const jobTasks = tasks.filter(t => t.jobId === nr.jobId);
 
   const addReceipt = async () => {
     if (!nr.jobId || !nr.store || !nr.amount) return;
     setBusy(true);
     const id = "r" + Date.now();
+    let storagePath = null;
+    if (nr.dataUrl) { try { storagePath = await uploadToStorage(nr.dataUrl, `${nr.crewId||user.id}/${id}.jpg`); } catch {} }
     const receipt = { id, jobId: nr.jobId, taskId: nr.taskId || null, crewId: nr.crewId || user.id,
       dataUrl: nr.dataUrl, store: nr.store, amount: nr.amount, note: nr.note,
       paidBy: nr.paidBy, reimbursementStatus: nr.paidBy === "crew" ? "pending" : "na", createdAt: today };
     setReceipts(p => [...p, receipt]);
     const row = { id, job_id: nr.jobId, task_id: nr.taskId || null, crew_id: nr.crewId || user.id,
-      data_url: nr.dataUrl, store: nr.store, amount: parseFloat(nr.amount) || 0, note: nr.note,
+      data_url: storagePath ? null : nr.dataUrl, storage_path: storagePath, store: nr.store, amount: parseFloat(nr.amount) || 0, note: nr.note,
       paid_by: nr.paidBy, reimbursement_status: nr.paidBy === "crew" ? "pending" : "na" };
     try { await sbPost("field_receipts", row); } catch { enqueue({ table: "field_receipts", payload: row }); }
+    pushReceiptToGSM(receipt, jobs, users.find(u => u.id === receipt.crewId)?.name);
     setNr({ jobId: "", taskId: "", crewId: "", store: "", amount: "", note: "", paidBy: "company", dataUrl: null });
     setModal(false); setBusy(false);
   };
 
   const photoCapture = async e => {
     const file = e.target.files[0]; if (!file) return;
-    const { dataUrl } = await compressImage(file, 1000, 0.6);
-    setNr(p => ({ ...p, dataUrl }));
+    try { const { dataUrl } = await compressImage(file, 1000, 0.6); setNr(p => ({ ...p, dataUrl })); }
+    catch { alert("Could not process image. Try again."); }
   };
 
   const markReimbursed = async (id) => {
     setReceipts(p => p.map(r => r.id === id ? { ...r, reimbursementStatus: "paid", reimbursementDate: today } : r));
     try { await sbPatch("field_receipts", id, { reimbursement_status: "paid", reimbursement_date: today }); } catch {}
+    const r = receipts.find(x => x.id === id);
+    const crewPhone = r && users.find(u => u.id === r.crewId)?.phone;
+    if (crewPhone) {
+      const j = r ? jobs.find(x => x.id === r.jobId)?.name : "";
+      fetch("/.netlify/functions/send-sms", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ to: crewPhone, body: `✅ Your receipt has been reimbursed: ${r.store} $${(+r.amount||0).toFixed(2)}${j ? " — " + j : ""}. — G.S. Masters` }) }).catch(() => {});
+    }
   };
 
   const exportBills = () => {
@@ -2134,6 +3278,69 @@ function AdminReceipts({ receipts, setReceipts, jobs, tasks, users, user, delete
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a"); a.href = url;
     a.download = "gsm-bills-export-" + today + ".json"; a.click(); URL.revokeObjectURL(url);
+  };
+
+  const printReceipt = (r) => {
+    const j    = jobs.find(x => x.id === r.jobId);
+    const cr   = users.find(u => u.id === r.crewId);
+    const tk   = tasks.find(t => t.id === r.taskId);
+    const reimb = r.paidBy === "crew" ? (r.reimbursementStatus === "paid" ? "Crew — Reimbursed ✓" : "Crew — Pending Reimbursement") : "Company";
+    const extras = [tk ? `Task: ${tk.title}` : "", r.note ? `Note: ${r.note}` : ""].filter(Boolean).join("  ·  ");
+    const w = window.open("", "_blank", "width=850,height=1100");
+    w.document.write(`<!DOCTYPE html><html><head><title>Receipt — ${r.store || ""}</title>
+<style>
+@page{size:8.5in 11in;margin:.35in}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{width:100%;height:100%}
+body{font-family:'Helvetica Neue',Arial,sans-serif;color:#1a1a1a;background:#fff;display:flex;flex-direction:column;height:10.3in;overflow:hidden}
+.hdr{display:flex;align-items:center;gap:12px;padding-bottom:8px;border-bottom:2px solid #7c3f1e;flex-shrink:0}
+.logo{width:44px;height:44px;object-fit:contain;border-radius:6px;flex-shrink:0}
+.co-name{font-size:16px;font-weight:bold;color:#4a2c1a;letter-spacing:.3px}
+.co-sub{font-size:9px;color:#888;margin-top:1px}
+.badge{margin-left:auto;background:#4a2c1a;color:#fff;font-size:9px;font-weight:bold;text-transform:uppercase;letter-spacing:1.5px;padding:4px 10px;border-radius:4px;white-space:nowrap}
+.info{display:flex;gap:0;border:1px solid #d4b896;border-radius:6px;overflow:hidden;margin:8px 0;flex-shrink:0}
+.cell{flex:1;padding:7px 10px;background:#fdf8f3;border-right:1px solid #d4b896}
+.cell:last-child{border-right:none}
+.cell.wide{flex:2}
+.cell .lbl{font-size:7px;font-weight:bold;color:#7c3f1e;text-transform:uppercase;letter-spacing:.8px;display:block;margin-bottom:2px}
+.cell .val{font-size:11px;font-weight:600;color:#1a1a1a;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.amt-row{display:flex;align-items:center;gap:10px;margin-bottom:8px;flex-shrink:0}
+.amt-box{background:#4a2c1a;color:#fff;padding:6px 18px;border-radius:6px;display:flex;align-items:baseline;gap:6px}
+.amt-lbl{font-size:8px;text-transform:uppercase;letter-spacing:1px;opacity:.75}
+.amt-val{font-size:26px;font-weight:bold;line-height:1}
+.extras{font-size:10px;color:#666;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.photo-wrap{flex:1;min-height:0;overflow:hidden;border-radius:6px;border:1px solid #ddd}
+.photo-wrap img{width:100%;height:100%;object-fit:cover;display:block}
+.no-photo{flex:1;display:flex;align-items:center;justify-content:center;color:#aaa;font-style:italic;font-size:13px;border:1px dashed #ddd;border-radius:6px}
+.foot{flex-shrink:0;margin-top:6px;font-size:7.5px;color:#bbb;text-align:center}
+@media print{body{-webkit-print-color-adjust:exact;print-color-adjust:exact}}
+</style></head><body>
+<div class="hdr">
+  <img class="logo" src="https://quiet-seahorse-2ba028.netlify.app/icon-admin.png" alt="GSM"/>
+  <div>
+    <div class="co-name">G.S. MASTERS, INC.</div>
+    <div class="co-sub">255 Grande View Pkwy, Maylene AL 35114 &nbsp;&middot;&nbsp; (205) 620-1698</div>
+  </div>
+  <div class="badge">Field Receipt</div>
+</div>
+<div class="info">
+  <div class="cell"><span class="lbl">Date</span><span class="val">${r.createdAt}</span></div>
+  <div class="cell wide"><span class="lbl">Job</span><span class="val">${j?.name || "—"}</span></div>
+  <div class="cell wide"><span class="lbl">Vendor</span><span class="val">${r.store || "—"}</span></div>
+  <div class="cell"><span class="lbl">Submitted By</span><span class="val">${cr?.name || "Admin"}</span></div>
+  <div class="cell"><span class="lbl">Paid By</span><span class="val">${reimb}</span></div>
+</div>
+<div class="amt-row">
+  <div class="amt-box"><span class="amt-lbl">Amount</span><span class="amt-val">$${(+r.amount || 0).toFixed(2)}</span></div>
+  ${extras ? `<div class="extras">${extras}</div>` : ""}
+</div>
+${r.dataUrl
+  ? `<div class="photo-wrap"><img src="${r.dataUrl}" alt="Receipt"/></div>`
+  : `<div class="no-photo">No photo attached</div>`}
+<div class="foot">GS Masters Field App &nbsp;&middot;&nbsp; Printed ${new Date().toLocaleString()} &nbsp;&middot;&nbsp; ID: ${r.id}</div>
+<script>window.onload=function(){window.print();window.onafterprint=function(){window.close();}}</script>
+</body></html>`);
+    w.document.close();
   };
 
   const pendingReimb = receipts.filter(r => r.paidBy === "crew" && r.reimbursementStatus !== "paid");
@@ -2162,9 +3369,42 @@ function AdminReceipts({ receipts, setReceipts, jobs, tasks, users, user, delete
             <span className="muted">{receipts.length} receipt{receipts.length!==1?"s":""}</span>
             <span style={{ fontFamily: "'Barlow Condensed'", fontWeight: 800, fontSize: 20, color: "var(--accent)" }}>${total.toFixed(2)}</span>
           </div>
+          {(() => {
+            const byJob = {}, byCrew = {};
+            receipts.forEach(r => {
+              const jk = r.jobId || "unknown";
+              if (!byJob[jk]) byJob[jk] = { name: jobs.find(j=>j.id===jk)?.name||"Unknown Job", total:0 };
+              byJob[jk].total += +r.amount||0;
+              const ck = r.crewId || "unknown";
+              if (!byCrew[ck]) byCrew[ck] = { name: users.find(u=>u.id===ck)?.name||"Unknown", total:0 };
+              byCrew[ck].total += +r.amount||0;
+            });
+            return (
+              <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10, marginBottom:16 }}>
+                <div style={{ padding:"10px 14px", background:"rgba(255,255,255,.03)", borderRadius:10, border:"1px solid var(--border)" }}>
+                  <div style={{ fontFamily:"'Barlow Condensed'", fontWeight:700, fontSize:12, letterSpacing:1, marginBottom:8, color:"var(--slate)" }}>BY JOB</div>
+                  {Object.values(byJob).sort((a,b)=>b.total-a.total).map((j,i)=>(
+                    <div key={i} style={{ display:"flex", justifyContent:"space-between", fontSize:13, padding:"2px 0" }}>
+                      <span className="muted" style={{ fontSize:12 }}>{j.name}</span>
+                      <span style={{ fontWeight:700, color:"var(--accent)" }}>${j.total.toFixed(2)}</span>
+                    </div>
+                  ))}
+                </div>
+                <div style={{ padding:"10px 14px", background:"rgba(255,255,255,.03)", borderRadius:10, border:"1px solid var(--border)" }}>
+                  <div style={{ fontFamily:"'Barlow Condensed'", fontWeight:700, fontSize:12, letterSpacing:1, marginBottom:8, color:"var(--slate)" }}>BY CREW</div>
+                  {Object.values(byCrew).sort((a,b)=>b.total-a.total).map((c,i)=>(
+                    <div key={i} style={{ display:"flex", justifyContent:"space-between", fontSize:13, padding:"2px 0" }}>
+                      <span className="muted" style={{ fontSize:12 }}>{c.name}</span>
+                      <span style={{ fontWeight:700, color:"var(--accent)" }}>${c.total.toFixed(2)}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            );
+          })()}
           <div className="tbl-wrap"><table><thead><tr>
             <th>Photo</th><th>Date</th><th>By</th><th>Job</th><th>Vendor</th><th>Memo</th>
-            <th>Paid By</th><th>Reimburse</th><th style={{ textAlign: "right" }}>Amount</th><th></th>
+            <th>Paid By</th><th>Reimburse</th><th>GSM Builder</th><th style={{ textAlign: "right" }}>Amount</th><th></th>
           </tr></thead>
           <tbody>{receipts.map(r => {
             const j=jobs.find(x=>x.id===r.jobId), cr=users.find(u=>u.id===r.crewId);
@@ -2192,8 +3432,25 @@ function AdminReceipts({ receipts, setReceipts, jobs, tasks, users, user, delete
                   ?<button className="btn btn-sm" style={{ background:"rgba(249,115,22,.15)",color:"var(--orange)",padding:"4px 10px",fontSize:11,border:"1px solid rgba(249,115,22,.4)" }} onClick={()=>markReimbursed(r.id)}>Mark Paid</button>
                   :<span className="tag tag-done">Reimbursed</span>
                 :<span className="muted">—</span>}</td>
+              <td data-l="GSM Builder">
+                {j?.gsmSync && j?.gsmJobId
+                  ? r.billStatus === "posted"
+                    ? <span className="tag tag-done" style={{ fontSize: 10 }}>✓ Posted</span>
+                    : <button className="btn btn-sm"
+                        style={{ fontSize: 10, padding: "3px 8px", background: "rgba(59,130,246,.15)", color: "var(--sky2)", border: "1px solid rgba(59,130,246,.35)" }}
+                        onClick={async () => {
+                          const ok = await pushReceiptToGSM(r, jobs, cr?.name);
+                          if (ok) setReceipts(p => p.map(x => x.id === r.id ? { ...x, billStatus: "posted", integrationSentAt: new Date().toISOString() } : x));
+                        }}>
+                        Post →
+                      </button>
+                  : <span className="muted" style={{ fontSize: 10 }}>—</span>}
+              </td>
               <td data-l="Amount" style={{ textAlign:"right",fontWeight:700,color:needsReimb?"var(--orange)":"var(--accent)" }}>${(+r.amount).toFixed(2)}</td>
-              <td><button onClick={() => setConfirmDel(r.id)} style={{ background:"none",border:"none",cursor:"pointer",color:"var(--red)",fontSize:16,padding:4 }}>✕</button></td>
+              <td style={{ whiteSpace:"nowrap" }}>
+                <button onClick={() => printReceipt(r)} title="Print receipt" style={{ background:"none",border:"none",cursor:"pointer",color:"var(--sky2)",fontSize:15,padding:"2px 5px" }}>🖨</button>
+                <button onClick={() => setConfirmDel(r.id)} style={{ background:"none",border:"none",cursor:"pointer",color:"var(--red)",fontSize:16,padding:"2px 5px" }}>✕</button>
+              </td>
             </tr>;
           })}</tbody></table></div>
         </div>
@@ -2302,7 +3559,7 @@ function AdminReceipts({ receipts, setReceipts, jobs, tasks, users, user, delete
                 </div>
               :<div style={{ display:"flex",gap:8 }}>
                   <button className="btn btn-s btn-sm" onClick={()=>fileRef.current?.click()}><Icon n="camera" s={14} /> Take Photo</button>
-                  <button className="btn btn-s btn-sm" onClick={()=>{fileRef.current?.removeAttribute("capture");fileRef.current?.click();}}><Icon n="photo" s={14} /> From Library</button>
+                  <button className="btn btn-s btn-sm" onClick={() => openGallery(photoCapture)}><Icon n="photo" s={14} /> From Library</button>
                 </div>
             }</div>
           <div className="macts">
@@ -2342,7 +3599,10 @@ function AdminPhotos({ photos, setPhotos, tasks, jobs, users, user, deletePhoto,
     const file = e.target.files[0];
     if (!file || !uploadJob) return;
     setBusy(true);
-    const { dataUrl, sizeKB } = await compressImage(file);
+    let compressed;
+    try { compressed = await compressImage(file); }
+    catch { setBusy(false); alert("Could not process image. Try again."); e.target.value = ""; return; }
+    const { dataUrl, sizeKB } = compressed;
     e.target.value = "";
     setBusy(false);
     setPendingAdminPhoto({ dataUrl, sizeKB });
@@ -2354,9 +3614,11 @@ function AdminPhotos({ photos, setPhotos, tasks, jobs, users, user, deletePhoto,
     setBusy(true);
     const id = "p" + Date.now();
     const { dataUrl, sizeKB } = pendingAdminPhoto;
+    let storagePath = null;
+    try { storagePath = await uploadToStorage(dataUrl, `${user.id}/${id}.jpg`); } catch {}
     const photo = { id, dataUrl, type: uploadType, taskId: uploadTask || null, jobId: uploadJob, crewId: user.id, sizeKB, note: note || "", date: new Date().toISOString() };
     setPhotos(p => [...p, photo]);
-    const row = { id, data_url: dataUrl, photo_type: uploadType, task_id: uploadTask || null, job_id: uploadJob, crew_id: user.id, size_kb: sizeKB, note: note || null };
+    const row = { id, data_url: storagePath ? null : dataUrl, storage_path: storagePath, photo_type: uploadType, task_id: uploadTask || null, job_id: uploadJob, crew_id: user.id, size_kb: sizeKB, note: note || null };
     try { await sbPost("field_photos", row); } catch { enqueue({ table: "field_photos", payload: row }); }
     setPendingAdminPhoto(null);
     setAdminPhotoNote("");
@@ -2404,7 +3666,7 @@ function AdminPhotos({ photos, setPhotos, tasks, jobs, users, user, deletePhoto,
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
           <button className="btn btn-p" disabled={!uploadJob || busy} onClick={() => { fileRef.current?.setAttribute("capture","environment"); fileRef.current?.click(); }}>
             {busy ? <span className="spin" /> : <><Icon n="camera" s={16} /> Take Photo</>}</button>
-          <button className="btn btn-s" disabled={!uploadJob || busy} onClick={() => { fileRef.current?.removeAttribute("capture"); fileRef.current?.click(); }}>
+          <button className="btn btn-s" disabled={!uploadJob || busy} onClick={() => openGallery(upload)}>
             <Icon n="photo" s={16} /> From Library</button>
           {saved > 0 && (
             <button className="btn btn-g btn-sm" onClick={nextJob}>
@@ -2588,7 +3850,7 @@ function Jobs({ jobs, setJobs, tasks }) {
   };
 
   const setStatus = async (id, status) => {
-    const closedAt = status === "closed" ? new Date().toISOString().split("T")[0] : null;
+    const closedAt = status === "closed" ? localDate() : null;
     setJobs(p => p.map(j => j.id === id ? { ...j, status, closedAt } : j)); setConfirm(null);
     try { await sbPatch("field_jobs", id, { status, closed_at: closedAt }); } catch {}
   };
@@ -2766,12 +4028,13 @@ function CrewMgmt({ users, tasks, setActive, addUser, updateUser, removeUser, ar
         <button className="btn btn-p" onClick={openAdd}><Icon n="plus" s={16} /> Add Crew</button></div>
       <p className="muted" style={{ marginBottom: 18, fontSize: 13 }}>Add a member to generate their login + invite. Deactivate blocks access immediately. Archive moves them out of active crew but keeps all their records for bookkeeping.</p>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(270px,1fr))", gap: 14 }}>
-        {users.filter(u => u.role === "crew" && !u.archived).map(m => { const mt = tasks.filter(t => (Array.isArray(t.assignedTo) ? t.assignedTo.includes(m.id) : t.assignedTo === m.id)), done = mt.filter(t => t.status === "done").length;
+        {users.filter(u => !u.archived).sort((a,b) => (a.role==="admin"?0:1)-(b.role==="admin"?0:1) || a.name.localeCompare(b.name)).map(m => { const mt = tasks.filter(t => (Array.isArray(t.assignedTo) ? t.assignedTo.includes(m.id) : t.assignedTo === m.id)), done = mt.filter(t => t.status === "done").length;
           const active = isActive(m);
-          return <div key={m.id} className="card" style={{ borderTop: `4px solid ${active ? "var(--sky)" : "var(--red)"}`, opacity: active ? 1 : .75 }}>
+          const isAdmin = m.role === "admin";
+          return <div key={m.id} className="card" style={{ borderTop: `4px solid ${isAdmin ? "var(--accent)" : active ? "var(--sky)" : "var(--red)"}`, opacity: active ? 1 : .75 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 14 }}>
-              <div style={{ width: 46, height: 46, borderRadius: "50%", background: active ? "linear-gradient(135deg,var(--sky-dim),var(--sky))" : "linear-gradient(135deg,#7f1d1d,var(--red))", display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "'Barlow Condensed'", fontWeight: 800, fontSize: 19 }}>{m.name[0]}</div>
-              <div style={{ flex: 1 }}><div style={{ fontWeight: 700, fontSize: 16 }}>{m.name}</div><div className="muted" style={{ fontSize: 12 }}>{m.email}</div></div></div>
+              <div style={{ width: 46, height: 46, borderRadius: "50%", background: isAdmin ? "linear-gradient(135deg,#b45309,var(--accent))" : active ? "linear-gradient(135deg,var(--sky-dim),var(--sky))" : "linear-gradient(135deg,#7f1d1d,var(--red))", display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "'Barlow Condensed'", fontWeight: 800, fontSize: 19 }}>{m.name[0]}</div>
+              <div style={{ flex: 1 }}><div style={{ fontWeight: 700, fontSize: 16, display:"flex", alignItems:"center", gap:6 }}>{m.name}{isAdmin && <span style={{ fontSize:10, fontWeight:800, color:"var(--accent)", background:"rgba(245,158,11,.15)", border:"1px solid rgba(245,158,11,.3)", borderRadius:4, padding:"1px 5px" }}>ADMIN</span>}</div><div className="muted" style={{ fontSize: 12 }}>{m.email}</div></div></div>
             <div className="grid2" style={{ marginBottom: 12 }}><div style={{ textAlign: "center", padding: 10, background: "rgba(0,0,0,.2)", borderRadius: 8 }}>
               <div style={{ fontSize: 22, fontWeight: 800, color: "var(--sky2)" }}>{mt.length}</div><div className="muted" style={{ fontSize: 11 }}>Tasks</div></div>
               <div style={{ textAlign: "center", padding: 10, background: "rgba(0,0,0,.2)", borderRadius: 8 }}>
@@ -2791,13 +4054,13 @@ function CrewMgmt({ users, tasks, setActive, addUser, updateUser, removeUser, ar
           </div>; })}</div>
 
       {/* ── Archived crew ── */}
-      {users.filter(u => u.role === "crew" && u.archived).length > 0 && (
+      {users.filter(u => u.archived).length > 0 && (
         <div style={{ marginTop: 28 }}>
           <div style={{ fontFamily: "'Barlow Condensed'", fontSize: 14, fontWeight: 700, color: "var(--slate)", letterSpacing: 1, textTransform: "uppercase", marginBottom: 10 }}>
-            📦 Archived Crew — kept for bookkeeping, no app access
+            📦 Archived — kept for bookkeeping, no app access
           </div>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(270px,1fr))", gap: 10 }}>
-            {users.filter(u => u.role === "crew" && u.archived).map(m => (
+            {users.filter(u => u.archived).map(m => (
               <div key={m.id} className="card" style={{ borderTop: "4px solid var(--slate)", opacity: .7 }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10 }}>
                   <div style={{ width: 38, height: 38, borderRadius: "50%", background: "rgba(100,116,139,.3)", display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "'Barlow Condensed'", fontWeight: 800, fontSize: 16 }}>{m.name[0]}</div>
@@ -2961,7 +4224,7 @@ function AdminHours({ jobs, users }) {
   const load = async () => {
     setRefreshing(true);
     try {
-      const since = new Date(Date.now() - dateRange * 86400000).toISOString().split("T")[0];
+      const since = localDateOf(new Date(Date.now() - dateRange * 86400000).toISOString());
       const rows = await sbGet("field_checkins", `work_date=gte.${since}&order=work_date.desc,check_in.desc`);
       if (rows) setCheckins(rows.map(fromCheckin));
     } catch {}
@@ -2970,13 +4233,30 @@ function AdminHours({ jobs, users }) {
 
   useEffect(() => { load(); }, [dateRange]);
 
+  const exportCSV = () => {
+    const crewName = id => users.find(u => u.id === id)?.name || "Unknown";
+    const jobName  = id => jobs.find(j => j.id === id)?.name  || id;
+    const fmt = ts => ts ? new Date(ts).toLocaleString() : "";
+    const rows = [["Date","Crew","Job","Clock In","Clock Out","Hours","Method","Auto Closed"]];
+    checkins.filter(c => c.checkOut && !c.autoClosed).forEach(c => {
+      rows.push([c.date, crewName(c.crewId), jobName(c.jobId), fmt(c.checkIn), fmt(c.checkOut), (+(c.hours||0)).toFixed(2), c.method, c.autoClosed ? "Yes" : "No"]);
+    });
+    const csv = rows.map(r => r.map(v => `"${String(v).replace(/"/g,'""')}"`).join(",")).join("\n");
+    const blob = new Blob([csv], { type: "text/csv" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a"); a.href = url;
+    a.download = `timesheet-${new Date().toISOString().slice(0,10)}.csv`; a.click();
+    URL.revokeObjectURL(url);
+  };
+
   const crewName = id => users.find(u => u.id === id)?.name || "Unknown";
   const jobName  = id => jobs.find(j => j.id === id)?.name  || id;
   const fmt = ts => ts ? new Date(ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "—";
+  const fmtFull = ts => ts ? new Date(ts).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "—";
 
   // Summary: total hours per crew per job
   const summary = {};
-  checkins.filter(c => c.checkOut).forEach(c => {
+  checkins.filter(c => c.checkOut && !c.autoClosed).forEach(c => {
     const key = `${c.crewId}|${c.jobId}`;
     if (!summary[key]) summary[key] = { crewId: c.crewId, jobId: c.jobId, hours: 0, days: new Set() };
     summary[key].hours += +(c.hours || 0);
@@ -2985,6 +4265,101 @@ function AdminHours({ jobs, users }) {
   const summaryRows = Object.values(summary).sort((a, b) => b.hours - a.hours);
   const totalHours = summaryRows.reduce((s, r) => s + r.hours, 0);
   const openCount  = checkins.filter(c => !c.checkOut).length;
+
+  const printHoursReport = () => {
+    const rangeLabel = dateRange === 1 ? "Today" : `Last ${dateRange} Days`;
+    const since = new Date(Date.now() - dateRange * 86400000).toLocaleDateString();
+    const through = new Date().toLocaleDateString();
+    const completedCheckins = checkins.filter(c => c.checkOut && !c.autoClosed);
+
+    // Build per-crew summary for print
+    const perCrew = {};
+    completedCheckins.forEach(c => {
+      if (!perCrew[c.crewId]) perCrew[c.crewId] = { name: crewName(c.crewId), hours: 0, days: new Set(), jobs: {} };
+      perCrew[c.crewId].hours += +(c.hours || 0);
+      perCrew[c.crewId].days.add(c.date);
+      const jn = jobName(c.jobId);
+      perCrew[c.crewId].jobs[jn] = (perCrew[c.crewId].jobs[jn] || 0) + +(c.hours || 0);
+    });
+    const crewRows = Object.values(perCrew).sort((a, b) => b.hours - a.hours);
+
+    const summaryHtml = crewRows.map(r => `
+      <tr>
+        <td style="font-weight:600">${r.name}</td>
+        <td style="color:#555">${Object.keys(r.jobs).join(", ")}</td>
+        <td style="text-align:center">${r.days.size}</td>
+        <td style="text-align:right;font-weight:bold;font-size:15px;color:#4a2c1a">${r.hours.toFixed(1)}</td>
+      </tr>`).join("");
+
+    const detailHtml = completedCheckins.map(c => `
+      <tr>
+        <td style="color:#555;white-space:nowrap">${c.date}</td>
+        <td style="font-weight:600">${crewName(c.crewId)}</td>
+        <td style="color:#555">${jobName(c.jobId)}</td>
+        <td style="white-space:nowrap;color:#2563eb">${fmt(c.checkIn)}</td>
+        <td style="white-space:nowrap">${fmt(c.checkOut)}</td>
+        <td style="text-align:right;font-weight:bold;color:#7c3f1e">${(+(c.hours||0)).toFixed(1)}</td>
+      </tr>`).join("");
+
+    const w = window.open("", "_blank", "width=900,height=1100");
+    w.document.write(`<!DOCTYPE html><html><head><title>GSM Hours Report — ${rangeLabel}</title>
+<style>
+@page{size:8.5in 11in;margin:.5in}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:'Georgia',serif;color:#1a1a1a;background:#fff;font-size:11px}
+.hdr{display:flex;align-items:center;gap:16px;border-bottom:3px solid #7c3f1e;padding-bottom:12px;margin-bottom:16px}
+.logo{width:56px;height:56px;object-fit:contain;border-radius:8px}
+.co h1{font-size:19px;font-weight:bold;color:#4a2c1a}
+.co p{font-size:9px;color:#777;margin-top:2px}
+.co .dt{font-size:10px;font-weight:bold;color:#7c3f1e;text-transform:uppercase;letter-spacing:1.5px;margin-top:4px}
+.period{background:#fdf8f3;border:1px solid #d4b896;border-radius:6px;padding:10px 14px;margin-bottom:14px;display:flex;gap:24px;align-items:center}
+.period .lbl{font-size:8px;font-weight:bold;color:#7c3f1e;text-transform:uppercase;letter-spacing:1px;display:block;margin-bottom:2px}
+.period .val{font-size:13px;font-weight:600}
+.totbox{display:inline-block;background:#4a2c1a;color:#fff;padding:8px 18px;border-radius:6px;margin-left:auto}
+.totbox .tl{font-size:8px;text-transform:uppercase;letter-spacing:1px;opacity:.75}
+.totbox .tv{font-size:22px;font-weight:bold}
+h2{font-size:11px;font-weight:bold;color:#7c3f1e;text-transform:uppercase;letter-spacing:1px;margin:14px 0 6px}
+table{width:100%;border-collapse:collapse}
+th{font-size:8px;font-weight:bold;color:#7c3f1e;text-transform:uppercase;letter-spacing:.5px;padding:5px 8px;border-bottom:2px solid #d4b896;text-align:left;background:#fdf8f3}
+td{padding:5px 8px;border-bottom:1px solid #eee;font-size:10px}
+tr:last-child td{border-bottom:none}
+.foot{margin-top:14px;border-top:1px solid #ddd;padding-top:8px;font-size:8px;color:#aaa;text-align:center}
+@media print{body{-webkit-print-color-adjust:exact;print-color-adjust:exact}}
+</style></head><body>
+<div class="hdr">
+  <img class="logo" src="https://quiet-seahorse-2ba028.netlify.app/icon-admin.png" alt="GSM"/>
+  <div class="co">
+    <h1>G.S. MASTERS, INC.</h1>
+    <p>Custom Home Builder &middot; 255 Grande View Pkwy, Maylene AL 35114 &middot; (205) 620-1698</p>
+    <div class="dt">Weekly Hours Report</div>
+  </div>
+</div>
+<div class="period">
+  <div><span class="lbl">Period</span><span class="val">${rangeLabel}</span></div>
+  <div><span class="lbl">From</span><span class="val">${since}</span></div>
+  <div><span class="lbl">Through</span><span class="val">${through}</span></div>
+  <div style="margin-left:auto">
+    <div class="totbox"><div class="tl">Total Hours</div><div class="tv">${totalHours.toFixed(1)}</div></div>
+  </div>
+</div>
+
+<h2>Summary by Crew Member</h2>
+<table>
+  <thead><tr><th>Name</th><th>Jobs</th><th style="text-align:center">Days</th><th style="text-align:right">Total Hrs</th></tr></thead>
+  <tbody>${summaryHtml || "<tr><td colspan='4' style='color:#aaa;text-align:center;padding:12px'>No completed check-ins in this period.</td></tr>"}</tbody>
+</table>
+
+<h2 style="margin-top:18px">Detailed Check-in Log</h2>
+<table>
+  <thead><tr><th>Date</th><th>Crew</th><th>Job</th><th>Clock In</th><th>Clock Out</th><th style="text-align:right">Hours</th></tr></thead>
+  <tbody>${detailHtml || "<tr><td colspan='6' style='color:#aaa;text-align:center;padding:12px'>No records.</td></tr>"}</tbody>
+</table>
+
+<div class="foot">Printed from GS Masters Field App &middot; ${new Date().toLocaleString()} &middot; ${completedCheckins.length} record${completedCheckins.length !== 1 ? "s" : ""}</div>
+<script>window.onload=function(){window.print();window.onafterprint=function(){window.close();}}</script>
+</body></html>`);
+    w.document.close();
+  };
 
   return (
     <div>
@@ -2998,6 +4373,8 @@ function AdminHours({ jobs, users }) {
             <option value={30}>Last 30 days</option>
           </select>
           <button className="btn btn-s btn-sm" onClick={load} disabled={refreshing}>{refreshing ? <span className="spin" /> : "↻ Refresh"}</button>
+          <button className="btn btn-s btn-sm" onClick={exportCSV} title="Download timesheet CSV">⬇ CSV</button>
+          <button className="btn btn-s btn-sm" onClick={printHoursReport} title="Print hours report"><Icon n="print" s={14} /> Print</button>
         </div>
       </div>
 
@@ -3036,11 +4413,11 @@ function AdminHours({ jobs, users }) {
                 <td data-l="Crew">{crewName(c.crewId)}</td>
                 <td data-l="Job"><span className="tag-l" style={{ fontSize: 11 }}>{jobName(c.jobId)}</span></td>
                 <td data-l="In" style={{ whiteSpace: "nowrap" }}>{fmt(c.checkIn)}</td>
-                <td data-l="Out" style={{ whiteSpace: "nowrap", color: c.checkOut ? "inherit" : "var(--green)", fontWeight: c.checkOut ? 400 : 700 }}>
-                  {c.checkOut ? fmt(c.checkOut) : "● On site"}
+                <td data-l="Out" style={{ whiteSpace: "nowrap", color: c.checkOut ? (c.autoClosed ? "var(--slate)" : "inherit") : "var(--green)", fontWeight: c.checkOut ? 400 : 700 }}>
+                  {c.checkOut ? (c.autoClosed ? `${fmt(c.checkOut)} (auto)` : fmt(c.checkOut)) : "● On site"}
                 </td>
-                <td data-l="Hours" style={{ textAlign: "right", fontWeight: 700, color: c.checkOut ? "var(--accent)" : "var(--green)", fontFamily: "'Barlow Condensed'", fontSize: 15 }}>
-                  {c.checkOut ? (+(c.hours||0)).toFixed(1) : "..."}
+                <td data-l="Hours" style={{ textAlign: "right", fontWeight: 700, color: c.autoClosed ? "var(--slate)" : (c.checkOut ? "var(--accent)" : "var(--green)"), fontFamily: "'Barlow Condensed'", fontSize: 15 }}>
+                  {c.checkOut ? (c.autoClosed ? "—" : (+(c.hours||0)).toFixed(1)) : "..."}
                 </td>
               </tr>
             ))}</tbody></table></div>
@@ -3050,9 +4427,90 @@ function AdminHours({ jobs, users }) {
   );
 }
 
+// ─── ADMIN QR CODES ───────────────────────────────────────────────────
+function AdminQRCodes({ jobs }) {
+  const activeJobs = jobs.filter(j => j.status === "active");
+  const appUrl = window.location.origin + window.location.pathname.replace(/\/$/, "");
+  const qrUrl = (jobId) => `https://api.qrserver.com/v1/create-qr-code/?data=${encodeURIComponent(`${appUrl}/?job=${jobId}&checkin=1`)}&size=160x160&margin=6`;
+  const qrUrlLg = (jobId) => `https://api.qrserver.com/v1/create-qr-code/?data=${encodeURIComponent(`${appUrl}/?job=${jobId}&checkin=1`)}&size=300x300&margin=10`;
+  // Fallback: if qrserver.com is down, show URL text
+  const handleQRError = (e, url) => {
+    const parent = e.target.parentNode;
+    e.target.remove();
+    const fb = document.createElement("div");
+    fb.style.cssText = "padding:8px;background:#fff;border-radius:8px;font-size:9px;color:#333;word-break:break-all;border:1px solid #ccc;width:100px;";
+    fb.textContent = url;
+    parent.insertBefore(fb, parent.firstChild);
+  };
+
+  const printCard = (job) => {
+    const jobUrl = `${appUrl}/?job=${job.id}&checkin=1`;
+    const win = window.open("", "_blank");
+    win.document.write(`<!DOCTYPE html><html><head><title>QR – ${job.name}</title>
+<style>
+  body{font-family:Georgia,serif;padding:48px;text-align:center;max-width:480px;margin:0 auto;}
+  .co{font-size:13px;color:#888;letter-spacing:1px;text-transform:uppercase;margin-bottom:6px;}
+  .job{font-size:30px;font-weight:700;margin:0 0 6px;}
+  .addr{font-size:15px;color:#666;margin-bottom:28px;}
+  img{border:1px solid #ddd;border-radius:8px;padding:8px;}
+  .inst{font-size:17px;margin-top:20px;color:#333;}
+  .inst-es{font-size:15px;color:#888;margin-top:4px;}
+  .fallback-url{font-size:10px;color:#555;margin-top:12px;word-break:break-all;}
+  @media print{button{display:none!important;}}
+</style></head><body>
+<div class="co">G.S. Masters, Inc.</div>
+<div class="job">${job.name}</div>
+<div class="addr">${job.address || ""}</div>
+<img id="qr" src="${qrUrlLg(job.id)}" width="300" height="300"
+  onerror="document.getElementById('qr').remove();document.getElementById('qr-fb').style.display='block'"/>
+<div id="qr-fb" style="display:none;padding:16px;border:2px solid #ccc;border-radius:8px;display:none;">
+  <div style="font-size:13px;color:#555;margin-bottom:8px;">QR code unavailable — scan this URL:</div>
+  <div class="fallback-url">${jobUrl}</div>
+</div>
+<div class="inst">Scan to clock in</div>
+<div class="inst-es">Escanea para registrar entrada</div>
+</body></html>`);
+    win.document.close();
+    win.focus();
+    setTimeout(() => win.print(), 600);
+  };
+
+  return (
+    <div>
+      <h2 className="h2" style={{ marginBottom: 6 }}>QR Codes</h2>
+      <p className="muted" style={{ fontSize: 13, marginBottom: 8 }}>Print and post at each job site. Crew scans to clock in with GPS verification.</p>
+      <div style={{ background: "rgba(245,158,11,.12)", border: "1px solid rgba(245,158,11,.4)", borderRadius: 10, padding: "10px 14px", fontSize: 13, color: "var(--accent)", marginBottom: 20 }}>
+        ⚠️ <strong>Reprint required when jobs are added or re-created.</strong> Old printed QR codes encode stale job IDs and will show "Job not found." Always reprint from this page after adding new jobs.
+      </div>
+      {activeJobs.length === 0
+        ? <div className="empty"><p>No active jobs.</p></div>
+        : <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+            {activeJobs.map(job => {
+              const jobUrl = `${appUrl}/?job=${job.id}&checkin=1`;
+              return (
+                <div key={job.id} className="card" style={{ display: "flex", alignItems: "center", gap: 18 }}>
+                  <img src={qrUrl(job.id)} alt={job.name} width={100} height={100}
+                    style={{ borderRadius: 8, border: "1px solid var(--border)", background: "#fff", flexShrink: 0 }}
+                    onError={e => handleQRError(e, jobUrl)} />
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontWeight: 700, fontSize: 16, marginBottom: 2 }}>{job.name}</div>
+                    <div className="muted" style={{ fontSize: 12, marginBottom: 14 }}>{job.address || "No address set"}</div>
+                    <button className="btn btn-s btn-sm" onClick={() => printCard(job)}>
+                      Print QR Card
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+      }
+    </div>
+  );
+}
+
 // ─── ADMIN FIELD MODE ─────────────────────────────────────────────────
 function AdminFieldMode({ jobs, tasks, setTasks, photos, setPhotos, receipts, setReceipts, logs, setLogs, users, settings, user }) {
-  const today = new Date().toISOString().split("T")[0];
+  const today = localDate();
   const activeJobs = jobs.filter(j => j.status !== "closed");
   const [selJob, setSelJob] = useState("");
   const [mode, setMode] = useState("photo"); // 'photo' | 'receipt' | 'task' | 'log'
@@ -3074,6 +4532,7 @@ function AdminFieldMode({ jobs, tasks, setTasks, photos, setPhotos, receipts, se
   const [taskTitle, setTaskTitle] = useState("");
   const [taskAssign, setTaskAssign] = useState([]);
   const [taskDue, setTaskDue] = useState("");
+  const [taskRecurring, setTaskRecurring] = useState(false);
   const [taskPhoto, setTaskPhoto] = useState(null);
   const [taskPhotoNote, setTaskPhotoNote] = useState("");
   const [taskBusy, setTaskBusy] = useState(false);
@@ -3085,15 +4544,18 @@ function AdminFieldMode({ jobs, tasks, setTasks, photos, setPhotos, receipts, se
 
   const capturePhoto = async (e) => {
     const file = e.target.files[0]; if (!file) return;
-    const { dataUrl, sizeKB } = await compressImage(file);
-    setPendingPhoto({ dataUrl, sizeKB }); setPhotoNote(""); e.target.value = "";
+    try { const { dataUrl, sizeKB } = await compressImage(file); setPendingPhoto({ dataUrl, sizeKB }); setPhotoNote(""); }
+    catch { alert("Could not process image. Try again."); }
+    e.target.value = "";
   };
   const savePhoto = async (done) => {
     if (!pendingPhoto || !selJob) return;
     const id = "p" + Date.now();
+    let storagePath = null;
+    try { storagePath = await uploadToStorage(pendingPhoto.dataUrl, `${user.id}/${id}.jpg`); } catch {}
     const photo = { id, dataUrl: pendingPhoto.dataUrl, type: photoType, taskId: null, jobId: selJob, crewId: user.id, sizeKB: pendingPhoto.sizeKB, note: photoNote, date: new Date().toISOString() };
     setPhotos(p => [...p, photo]);
-    const row = { id, data_url: pendingPhoto.dataUrl, photo_type: photoType, task_id: null, job_id: selJob, crew_id: user.id, size_kb: pendingPhoto.sizeKB, note: photoNote || null };
+    const row = { id, data_url: storagePath ? null : pendingPhoto.dataUrl, storage_path: storagePath, photo_type: photoType, task_id: null, job_id: selJob, crew_id: user.id, size_kb: pendingPhoto.sizeKB, note: photoNote || null };
     try { await sbPost("field_photos", row); } catch { enqueue({ table: "field_photos", payload: row }); }
     setPhotoSaved(n => n + 1); setPendingPhoto(null); setPhotoNote("");
     if (done) setPhotoSaved(0);
@@ -3101,41 +4563,50 @@ function AdminFieldMode({ jobs, tasks, setTasks, photos, setPhotos, receipts, se
 
   const captureRcPhoto = async (e) => {
     const file = e.target.files[0]; if (!file) return;
-    const { dataUrl } = await compressImage(file, 1000, 0.6);
-    setRcPhoto(dataUrl); e.target.value = "";
+    try { const { dataUrl } = await compressImage(file, 1000, 0.6); setRcPhoto(dataUrl); }
+    catch { alert("Could not process image. Try again."); }
+    e.target.value = "";
   };
   const saveReceipt = async () => {
     if (!selJob || !rcForm.store || !rcForm.amount) return;
     setRcBusy(true);
     const id = "r" + Date.now();
+    let storagePath = null;
+    if (rcPhoto) { try { storagePath = await uploadToStorage(rcPhoto, `${user.id}/${id}.jpg`); } catch {} }
     const receipt = { id, dataUrl: rcPhoto, taskId: null, jobId: selJob, crewId: user.id, store: rcForm.store, amount: rcForm.amount, note: rcForm.note, paidBy: rcForm.paidBy, reimbursementStatus: rcForm.paidBy === "crew" ? "pending" : "na", createdAt: today };
     setReceipts(p => [...p, receipt]);
-    const row = { id, data_url: rcPhoto, task_id: null, job_id: selJob, crew_id: user.id, store: rcForm.store, amount: parseFloat(rcForm.amount)||0, note: rcForm.note, paid_by: rcForm.paidBy, reimbursement_status: rcForm.paidBy==="crew"?"pending":"na" };
+    const row = { id, data_url: storagePath ? null : rcPhoto, storage_path: storagePath, task_id: null, job_id: selJob, crew_id: user.id, store: rcForm.store, amount: parseFloat(rcForm.amount)||0, note: rcForm.note, paid_by: rcForm.paidBy, reimbursement_status: rcForm.paidBy==="crew"?"pending":"na" };
     try { await sbPost("field_receipts", row); } catch { enqueue({ table: "field_receipts", payload: row }); }
+    pushReceiptToGSM(receipt, jobs, user.name);
     setRcForm({ store:"", amount:"", note:"", paidBy:"crew" }); setRcPhoto(null); setRcBusy(false);
     alert("Receipt saved!");
   };
 
   const captureTaskPhoto = async (e) => {
     const file = e.target.files[0]; if (!file) return;
-    const { dataUrl, sizeKB } = await compressImage(file);
-    setTaskPhoto({ dataUrl, sizeKB }); e.target.value = "";
+    try { const { dataUrl, sizeKB } = await compressImage(file); setTaskPhoto({ dataUrl, sizeKB }); }
+    catch { alert("Could not process image. Try again."); }
+    e.target.value = "";
   };
   const saveTask = async () => {
     if (!selJob || !taskTitle.trim()) return;
     setTaskBusy(true);
     const id = "t" + Date.now();
-    const task = { id, jobId: selJob, title: taskTitle, titleEs: taskTitle, assignedTo: taskAssign, dueDate: taskDue, status: "pending", createdAt: today };
+    let esTitle = taskTitle;
+    try { if (settings?.gtKey) esTitle = (await translateText(taskTitle, "es", settings.gtKey)) || taskTitle; } catch {}
+    const task = { id, jobId: selJob, title: taskTitle, titleEs: esTitle, assignedTo: taskAssign, dueDate: taskDue, status: "pending", createdAt: today, priority: "normal", recurring: taskRecurring };
     setTasks(p => [...p, task]);
-    const row = { id, job_id: selJob, title: taskTitle, title_es: taskTitle, assigned_to: taskAssign, due_date: taskDue || null, status: "pending" };
+    const row = { id, job_id: selJob, title: taskTitle, title_es: esTitle, assigned_to: taskAssign, due_date: taskDue || null, status: "pending", priority: 3, recurring: taskRecurring };
     try { await sbPost("field_tasks", row); } catch { enqueue({ table: "field_tasks", payload: row }); }
     if (taskPhoto) {
       const pid = "p" + Date.now();
-      const prow = { id: pid, data_url: taskPhoto.dataUrl, photo_type: "before", task_id: id, job_id: selJob, crew_id: user.id, size_kb: taskPhoto.sizeKB, note: taskPhotoNote || null };
+      let storagePath = null;
+      try { storagePath = await uploadToStorage(taskPhoto.dataUrl, `${user.id}/${pid}.jpg`); } catch {}
+      const prow = { id: pid, data_url: storagePath ? null : taskPhoto.dataUrl, storage_path: storagePath, photo_type: "before", task_id: id, job_id: selJob, crew_id: user.id, size_kb: taskPhoto.sizeKB, note: taskPhotoNote || null };
       setPhotos(p => [...p, { id: pid, dataUrl: taskPhoto.dataUrl, type:"before", taskId: id, jobId: selJob, crewId: user.id, note: taskPhotoNote, date: new Date().toISOString() }]);
       try { await sbPost("field_photos", prow); } catch { enqueue({ table: "field_photos", payload: prow }); }
     }
-    setTaskTitle(""); setTaskAssign([]); setTaskDue(""); setTaskPhoto(null); setTaskPhotoNote(""); setTaskBusy(false);
+    setTaskTitle(""); setTaskAssign([]); setTaskDue(""); setTaskRecurring(false); setTaskPhoto(null); setTaskPhotoNote(""); setTaskBusy(false);
     alert("Task created!");
   };
 
@@ -3149,12 +4620,13 @@ function AdminFieldMode({ jobs, tasks, setTasks, photos, setPhotos, receipts, se
     setLogText(""); setLogBusy(false); alert("Note saved!");
   };
 
-  const crew = users.filter(u => u.role === "crew" && !u.archived);
+  const crew = users.filter(u => u.active && !u.archived).sort((a,b) => (a.role==="crew"?0:1)-(b.role==="crew"?0:1) || a.name.localeCompare(b.name));
   const MODES = [
-    { k:"photo",   label:"📷 Photo",   desc:"Take or upload a photo" },
-    { k:"receipt", label:"🧾 Receipt", desc:"Log a purchase" },
-    { k:"task",    label:"✅ Task",    desc:"Create a task" },
-    { k:"log",     label:"📝 Note",    desc:"Write a site note" },
+    { k:"status",  label:"☑ Status",  desc:"Update task status" },
+    { k:"photo",   label:"📷 Photo",  desc:"Take or upload a photo" },
+    { k:"receipt", label:"🧾 Receipt",desc:"Log a purchase" },
+    { k:"task",    label:"✅ Task",   desc:"Create a task" },
+    { k:"log",     label:"📝 Note",   desc:"Write a site note" },
   ];
 
   return (
@@ -3176,7 +4648,7 @@ function AdminFieldMode({ jobs, tasks, setTasks, photos, setPhotos, receipts, se
       </div>
 
       {/* Mode picker */}
-      <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:8, marginBottom:16 }}>
+      <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:8, marginBottom:16 }}>
         {MODES.map(m => (
           <button key={m.k} onClick={() => setMode(m.k)}
             style={{ padding:"14px 12px", borderRadius:12, border:`2px solid ${mode===m.k?"var(--sky)":"var(--border)"}`,
@@ -3193,6 +4665,59 @@ function AdminFieldMode({ jobs, tasks, setTasks, photos, setPhotos, receipts, se
 
       {selJob && (
         <div className="card">
+
+          {/* STATUS MODE */}
+          {mode === "status" && (() => {
+            const jobTasks = tasks.filter(t => t.jobId === selJob);
+            const todayStr = localDate();
+            const toggleDone = async (task) => {
+              if (task.recurring) {
+                // Recurring tasks: only toggle completed_at, never change status
+                const doneToday = task.completedAt && localDateOf(task.completedAt) === todayStr;
+                const nextAt = doneToday ? null : new Date().toISOString();
+                setTasks(p => p.map(t => t.id === task.id ? { ...t, completedAt: nextAt } : t));
+                try { await sbFetch(`field_tasks?id=eq.${task.id}`, { method: "PATCH", body: JSON.stringify({ completed_at: nextAt }), prefer: "return=minimal" }); } catch {}
+                return;
+              }
+              const next = task.status === "done" ? "pending" : "done";
+              setTasks(p => p.map(t => t.id === task.id ? { ...t, status: next, completedAt: next === "done" ? new Date().toISOString() : null } : t));
+              try { await sbFetch(`field_tasks?id=eq.${task.id}`, { method: "PATCH", body: JSON.stringify({ status: next, completed_at: next === "done" ? new Date().toISOString() : null }), prefer: "return=minimal" }); } catch {}
+            };
+            return (
+              <div>
+                <div style={{ fontFamily:"'Barlow Condensed'", fontSize:16, fontWeight:700, marginBottom:12 }}>☑ Task Status</div>
+                {jobTasks.length === 0
+                  ? <div className="muted" style={{ fontSize:13 }}>No tasks for this job.</div>
+                  : <div style={{ display:"flex", flexDirection:"column", gap:6 }}>
+                      {jobTasks.map(task => {
+                        const done = task.status === "done";
+                        const assignees = (task.assignedTo || []).map(id => users.find(u => u.id === id)?.name?.split(" ")[0]).filter(Boolean).join(", ");
+                        return (
+                          <div key={task.id}
+                            onClick={() => toggleDone(task)}
+                            style={{ display:"flex", alignItems:"center", gap:12, padding:"12px 14px", borderRadius:10, cursor:"pointer",
+                              background: done ? "rgba(16,185,129,.1)" : "rgba(255,255,255,.04)",
+                              border: `1px solid ${done ? "rgba(16,185,129,.3)" : "var(--border)"}`, transition:".15s" }}>
+                            <div style={{ width:26, height:26, borderRadius:6, flexShrink:0, border:`2px solid ${done?"var(--green)":"var(--slate)"}`,
+                              background: done ? "var(--green)" : "transparent",
+                              display:"flex", alignItems:"center", justifyContent:"center" }}>
+                              {done && <Icon n="check" s={14} c="#fff" />}
+                            </div>
+                            <div style={{ flex:1, minWidth:0 }}>
+                              <div style={{ fontSize:14, fontWeight:600, textDecoration: done ? "line-through" : "none", color: done ? "var(--slate)" : "var(--white)", lineHeight:1.3 }}>{task.title}</div>
+                              {assignees && <div style={{ fontSize:11, color:"var(--slate)", marginTop:2 }}>{assignees}</div>}
+                            </div>
+                            <div style={{ fontSize:11, fontWeight:700, color: done ? "var(--green)" : "var(--slate)", fontFamily:"'Barlow Condensed'", flexShrink:0 }}>
+                              {done ? "DONE" : "PENDING"}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                }
+              </div>
+            );
+          })()}
 
           {/* PHOTO MODE */}
           {mode === "photo" && (
@@ -3220,7 +4745,7 @@ function AdminFieldMode({ jobs, tasks, setTasks, photos, setPhotos, receipts, se
                       <Icon n="camera" s={20}/><span style={{ display:"block", fontSize:11, marginTop:4 }}>Open Camera</span>
                     </button>
                     <button className="btn btn-s" style={{ justifyContent:"center", padding:"16px", fontSize:15 }}
-                      onClick={() => { photoRef.current?.removeAttribute("capture"); photoRef.current?.click(); }}>
+                      onClick={() => openGallery(capturePhoto)}>
                       <Icon n="photo" s={20}/><span style={{ display:"block", fontSize:11, marginTop:4 }}>From Library</span>
                     </button>
                   </div>
@@ -3298,6 +4823,16 @@ function AdminFieldMode({ jobs, tasks, setTasks, photos, setPhotos, receipts, se
               <div className="fg"><label className="fl">Due Date (optional)</label>
                 <input className="fi" type="date" value={taskDue} onChange={e => setTaskDue(e.target.value)} /></div>
 
+              <div className="fg">
+                <button type="button" onClick={() => setTaskRecurring(r => !r)}
+                  style={{ width:"100%", padding:"11px", borderRadius:10, cursor:"pointer", fontFamily:"'Barlow Condensed'", fontWeight:700, fontSize:15,
+                    border:`1px solid ${taskRecurring?"var(--accent)":"var(--border)"}`,
+                    background: taskRecurring?"rgba(245,158,11,.15)":"rgba(255,255,255,.04)",
+                    color: taskRecurring?"var(--accent)":"var(--silver)" }}>
+                  🔁 {taskRecurring ? "Recurring — crew checks daily" : "One-Time Task"}
+                </button>
+              </div>
+
               {/* Optional photo */}
               <div style={{ borderTop:"1px solid var(--border)", paddingTop:12, marginBottom:14 }}>
                 <label className="fl" style={{ marginBottom:8 }}>📷 Attach a Photo (optional)</label>
@@ -3306,7 +4841,7 @@ function AdminFieldMode({ jobs, tasks, setTasks, photos, setPhotos, receipts, se
                       <button className="btn btn-s btn-sm" style={{ justifyContent:"center" }} onClick={()=>{taskPhotoRef.current?.setAttribute("capture","environment");taskPhotoRef.current?.click();}}>
                         <Icon n="camera" s={14}/> Camera
                       </button>
-                      <button className="btn btn-s btn-sm" style={{ justifyContent:"center" }} onClick={()=>{taskPhotoRef.current?.removeAttribute("capture");taskPhotoRef.current?.click();}}>
+                      <button className="btn btn-s btn-sm" style={{ justifyContent:"center" }} onClick={() => openGallery(captureTaskPhoto)}>
                         <Icon n="photo" s={14}/> Library
                       </button>
                     </div>
@@ -3356,7 +4891,7 @@ function AdminActivity({ jobs, tasks, users, logs: initLogs, photos: initPhotos,
   const refresh = useCallback(async () => {
     setRefreshing(true);
     try {
-      const today = new Date().toISOString().split("T")[0];
+      const today = localDate();
       const [dbTasks, dbLogs, dbPhotos, dbReceipts, dbCheckins] = await Promise.all([
         sbGet("field_tasks",    "order=created_at"),
         sbGet("field_logs",     "order=created_at.desc"),
@@ -3561,7 +5096,7 @@ function parseStop(s) {
   catch { return { label: s, address: "" }; }
 }
 
-function DispatchCrewRow({ member, date, activeJobs, dispatch: d, toggleJob, addStop, removeStop, clearAll }) {
+function DispatchCrewRow({ member, date, activeJobs, dispatch: d, toggleJob, addStop, removeStop, clearAll, onNotify, notified }) {
   const [stopLabel, setStopLabel] = useState("");
   const [stopAddress, setStopAddress] = useState("");
   return (
@@ -3576,9 +5111,17 @@ function DispatchCrewRow({ member, date, activeJobs, dispatch: d, toggleJob, add
               : <div style={{ fontSize: 11, color: "var(--slate)" }}>No dispatch for this day</div>}
           </div>
         </div>
-        {d.jobIds.length > 0 && (
-          <button className="btn btn-s btn-sm" style={{ color: "var(--red)" }} onClick={() => clearAll(member.id)}>✕ Clear</button>
-        )}
+        <div style={{ display: "flex", gap: 6 }}>
+          {d.jobIds.length > 0 && (
+            <button className="btn btn-sm" onClick={onNotify}
+              style={{ background: notified ? "rgba(16,185,129,.2)" : "rgba(59,130,246,.15)", color: notified ? "var(--green)" : "var(--sky2)", border: `1px solid ${notified ? "rgba(16,185,129,.4)" : "rgba(59,130,246,.35)"}`, fontWeight: 700, fontSize: 12 }}>
+              {notified ? "✓ Sent!" : "📣 Notify"}
+            </button>
+          )}
+          {d.jobIds.length > 0 && (
+            <button className="btn btn-s btn-sm" style={{ color: "var(--red)" }} onClick={() => clearAll(member.id)}>✕ Clear</button>
+          )}
+        </div>
       </div>
 
       <div style={{ marginBottom: 12 }}>
@@ -3649,12 +5192,28 @@ function DispatchCrewRow({ member, date, activeJobs, dispatch: d, toggleJob, add
 }
 
 // ─── ADMIN DISPATCH ───────────────────────────────────────────────────
-function AdminDispatch({ users, jobs, dispatches, upsertDispatch, deleteDispatch }) {
-  const today = new Date().toISOString().split("T")[0];
+function AdminDispatch({ users, jobs, dispatches, upsertDispatch, deleteDispatch, settings }) {
+  const today = localDate();
   const [date, setDate] = useState(today);
-  const crew = users.filter(u => u.role === "crew" && !u.archived);
+  const [notified, setNotified] = useState({}); // crewId → true
+  const crew = users.filter(u => u.active !== false && !u.archived).sort((a,b) => (a.role==="crew"?0:1)-(b.role==="crew"?0:1) || a.name.localeCompare(b.name));
 
   const getDispatch = (crewId) => dispatches.find(d => d.crewId === crewId && d.date === date) || { jobIds: [], customStops: [] };
+
+  const notifyNow = (crewId) => {
+    const d = getDispatch(crewId);
+    const member = users.find(u => u.id === crewId);
+    const stopCount = d.jobIds.length + d.customStops.length;
+    if (stopCount === 0) return;
+    const appUrl = settings?.appUrl || window.location.origin;
+    const msg = `📍 Dispatch for ${date}: ${stopCount} stop${stopCount !== 1 ? "s" : ""} assigned. Open your app: ${appUrl}/?tab=tasks`;
+    if (member?.phone) {
+      fetch("/.netlify/functions/send-sms", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ to: member.phone, body: msg }) }).catch(() => {});
+    }
+    sendPush([crewId], "📍 Dispatch Update", `${stopCount} stop${stopCount !== 1 ? "s" : ""} assigned for ${date}. Tap to see where to go.`, "/?tab=tasks");
+    setNotified(p => ({ ...p, [crewId]: true }));
+    setTimeout(() => setNotified(p => ({ ...p, [crewId]: false })), 3000);
+  };
 
   const toggleJob = (crewId, jobId) => {
     const cur = getDispatch(crewId);
@@ -3695,7 +5254,8 @@ function AdminDispatch({ users, jobs, dispatches, upsertDispatch, deleteDispatch
 
       {crew.map(member => (
         <DispatchCrewRow key={member.id} member={member} date={date} activeJobs={activeJobs}
-          dispatch={getDispatch(member.id)} toggleJob={toggleJob} addStop={addStop} removeStop={removeStop} clearAll={clearAll} />
+          dispatch={getDispatch(member.id)} toggleJob={toggleJob} addStop={addStop} removeStop={removeStop} clearAll={clearAll}
+          onNotify={() => notifyNow(member.id)} notified={!!notified[member.id]} />
       ))}
     </div>
   );
@@ -3704,8 +5264,8 @@ function AdminDispatch({ users, jobs, dispatches, upsertDispatch, deleteDispatch
 // ─── JOB DETAIL DASHBOARD ─────────────────────────────────────────────
 function JobDetail({ selectedJobId, jobs, tasks, photos, receipts, logs, users, setTab, deletePhoto, deleteReceipt, deleteLog }) {
   const job = jobs.find(j => j.id === selectedJobId);
-  const today = new Date().toISOString().split("T")[0];
-  const threeMonthsAgo = new Date(Date.now() - 90 * 86400000).toISOString().split("T")[0];
+  const today = localDate();
+  const threeMonthsAgo = localDateOf(new Date(Date.now() - 90 * 86400000).toISOString());
   const [from, setFrom] = useState(threeMonthsAgo);
   const [to, setTo]     = useState(today);
   const [section, setSection] = useState("tasks");
@@ -3726,7 +5286,7 @@ function JobDetail({ selectedJobId, jobs, tasks, photos, receipts, logs, users, 
   const total   = jTasks.length;
   const pct     = total ? Math.round(done / total * 100) : 0;
   const crewName = id => users.find(u => u.id === id)?.name || "Unknown";
-  const today2 = new Date().toISOString().split("T")[0];
+  const today2 = localDate();
   const st = task => task.status === "done" ? "done" : (task.dueDate && task.dueDate < today2 ? "overdue" : "pending");
   const totalSpend = jReceipts.reduce((s, r) => s + (+r.amount || 0), 0);
 
@@ -3939,18 +5499,255 @@ function JobDetail({ selectedJobId, jobs, tasks, photos, receipts, logs, users, 
 
 // ─── CREW ─────────────────────────────────────────────────────────────
 function Crew(props) {
-  const { t, tab, setTab } = props;
+  const { t, tab, setTab, user, jobs, settings, lang } = props;
+  const [openCheckin, setOpenCheckin] = useState(null);
+  const [staleCheckin, setStaleCheckin] = useState(null);
+  const [manualDate, setManualDate] = useState("");
+  const [manualTime, setManualTime] = useState("");
+  const [manualBusy, setManualBusy] = useState(false);
+  const [clockingOut, setClockingOut] = useState(false);
+  const [issueModal, setIssueModal] = useState(false);
+  const [issueText, setIssueText] = useState("");
+  const [issuePhoto, setIssuePhoto] = useState(null);
+  const [issueBusy, setIssueBusy] = useState(false);
+  const [pushBanner, setPushBanner] = useState(null);
+  const issueRef = useRef();
+
+  useEffect(() => {
+    if (!("Notification" in window)) return;
+    const isIOS = /iPhone|iPad|iPod/i.test(navigator.userAgent);
+    const isStandalone = window.matchMedia("(display-mode: standalone)").matches;
+    const perm = Notification.permission;
+    if (isIOS && !isStandalone) { setPushBanner("ios-install"); return; }
+    if (isIOS && isStandalone && perm === "denied") { setPushBanner("ios-settings"); return; }
+    if (!isIOS && perm === "denied") { setPushBanner("browser-denied"); }
+  }, []);
+
+  const submitIssue = async () => {
+    if (!issueText.trim()) return;
+    setIssueBusy(true);
+    const id = "l" + Date.now();
+    const today = localDate();
+    const note = `🚩 ISSUE from ${user.name}: ${issueText}`;
+    const row = { id, text_en: note, text_es: note, task_id: null, job_id: null, crew_id: user.id, log_date: today };
+    try { await sbPost("field_logs", row); } catch {}
+    // SMS to admin
+    const adminPhone = settings?.adminPhone || "+12053699710";
+    fetch("/.netlify/functions/send-sms", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ to: adminPhone, body: `🚩 ISSUE — ${user.name}: ${issueText}${issuePhoto ? " [photo attached]" : ""}` }),
+    }).catch(() => {});
+    setIssueText(""); setIssuePhoto(null); setIssueModal(false); setIssueBusy(false);
+    alert("Issue reported to admin.");
+  };
+
+  useEffect(() => {
+    const today = localDate();
+    // Query ALL open check-ins (not just today) to catch forgotten checkouts
+    sbGet("field_checkins", `crew_id=eq.${user.id}&check_out=is.null&order=check_in.desc&limit=1`)
+      .then(rows => {
+        if (!rows?.[0]) return;
+        const ci = fromCheckin(rows[0]);
+        if (ci.date === today) {
+          setOpenCheckin(ci);
+        } else {
+          // Stale — from a previous day, need manual checkout time
+          setStaleCheckin(ci);
+          const d = new Date(ci.checkIn);
+          setManualDate(ci.date);
+          // Default checkout time = 5:00pm on the day they checked in
+          setManualTime("17:00");
+        }
+      })
+      .catch(() => {});
+  }, [user.id]);
+
+  const clockOut = async () => {
+    if (!openCheckin || clockingOut) return;
+    setClockingOut(true);
+    const now = new Date();
+    const hrs = Math.round((now - new Date(openCheckin.checkIn)) / 36000) / 100;
+    const gps = await getLocation();
+    try {
+      await sbFetch(`field_checkins?id=eq.${openCheckin.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ check_out: now.toISOString(), hours: hrs, lat_out: gps?.lat || null, lng_out: gps?.lng || null }),
+        prefer: "return=minimal",
+      });
+      setOpenCheckin(null);
+    } catch {}
+    setClockingOut(false);
+  };
+
+  const submitManualCheckout = async () => {
+    if (!staleCheckin || !manualDate || !manualTime || manualBusy) return;
+    setManualBusy(true);
+    try {
+      const checkoutDt = new Date(`${manualDate}T${manualTime}:00`);
+      const hrs = Math.max(0, Math.round((checkoutDt - new Date(staleCheckin.checkIn)) / 36000) / 100);
+      await sbFetch(`field_checkins?id=eq.${staleCheckin.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ check_out: checkoutDt.toISOString(), hours: hrs }),
+        prefer: "return=minimal",
+      });
+      setStaleCheckin(null);
+    } catch {}
+    setManualBusy(false);
+  };
+
   const ctab = (tab === "dash" || !tab) ? "tasks" : tab;
+  const openJobName  = openCheckin  ? (jobs.find(j => j.id === openCheckin.jobId)?.name  || openCheckin.jobId)  : null;
+  const staleJobName = staleCheckin ? (jobs.find(j => j.id === staleCheckin.jobId)?.name || staleCheckin.jobId) : null;
   const nav = [{ k: "tasks", i: "tasks", l: t.tasks }, { k: "cam", i: "camera", l: t.photos },
     { k: "rec", i: "receipt", l: t.receipts }, { k: "log", i: "report", l: t.log }];
   return (
     <div style={{ minHeight: "calc(100vh - 62px)", background: "var(--steel)" }}>
-      <div style={{ padding: 18, paddingBottom: 80 }}>
+
+      {/* ── Stale check-in — forgot to clock out ── */}
+      {staleCheckin && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.75)", zIndex: 999, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}>
+          <div style={{ background: "var(--steel)", border: "2px solid var(--red)", borderRadius: 16, padding: 24, maxWidth: 360, width: "100%" }}>
+            <div style={{ fontSize: 32, textAlign: "center", marginBottom: 8 }}>⚠️</div>
+            <div style={{ fontFamily: "'Barlow Condensed'", fontSize: 20, fontWeight: 800, color: "var(--red)", textAlign: "center", marginBottom: 6 }}>
+              {lang === "es" ? "¡Olvidaste registrar tu salida!" : "You forgot to clock out!"}
+            </div>
+            <div style={{ fontSize: 13, color: "var(--slate)", textAlign: "center", marginBottom: 20, lineHeight: 1.5 }}>
+              {lang === "es"
+                ? `Quedaste registrado en ${staleJobName} el ${staleCheckin.date} a las ${new Date(staleCheckin.checkIn).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}. ¿A qué hora saliste?`
+                : `You were clocked in at ${staleJobName} on ${staleCheckin.date} at ${new Date(staleCheckin.checkIn).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}. What time did you leave?`}
+            </div>
+            <div style={{ display: "flex", gap: 10, marginBottom: 16 }}>
+              <div style={{ flex: 1 }}>
+                <div style={{ fontSize: 11, color: "var(--slate)", marginBottom: 4 }}>{lang === "es" ? "Fecha" : "Date"}</div>
+                <input type="date" value={manualDate} onChange={e => setManualDate(e.target.value)}
+                  style={{ width: "100%", padding: "10px 12px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--bg)", color: "var(--text)", fontSize: 14 }} />
+              </div>
+              <div style={{ flex: 1 }}>
+                <div style={{ fontSize: 11, color: "var(--slate)", marginBottom: 4 }}>{lang === "es" ? "Hora de salida" : "Time left"}</div>
+                <input type="time" value={manualTime} onChange={e => setManualTime(e.target.value)}
+                  style={{ width: "100%", padding: "10px 12px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--bg)", color: "var(--text)", fontSize: 14 }} />
+              </div>
+            </div>
+            <button onClick={submitManualCheckout} disabled={manualBusy || !manualDate || !manualTime}
+              style={{ width: "100%", padding: "13px 0", borderRadius: 10, border: "none", background: "var(--accent)", color: "#000", fontFamily: "'Barlow Condensed'", fontSize: 17, fontWeight: 800, cursor: "pointer" }}>
+              {manualBusy ? "..." : (lang === "es" ? "Guardar hora de salida" : "Save Checkout Time")}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {openCheckin && (
+        <div style={{ padding: "10px 18px", background: "rgba(16,185,129,.12)", borderBottom: "1px solid rgba(16,185,129,.25)", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+          <div>
+            <span style={{ color: "var(--green)", fontWeight: 700, fontSize: 13 }}>● Clocked in</span>
+            <span className="muted" style={{ fontSize: 12, marginLeft: 6 }}>{openJobName} · {new Date(openCheckin.checkIn).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>
+          </div>
+          <button onClick={clockOut} disabled={clockingOut}
+            style={{ padding: "6px 14px", borderRadius: 8, border: "1px solid var(--green)", background: "rgba(16,185,129,.15)", color: "var(--green)", fontSize: 12, fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap" }}>
+            {clockingOut ? "..." : "Clock Out"}
+          </button>
+        </div>
+      )}
+
+      {/* ── Push Notification Banner ── */}
+      {pushBanner && (
+        <div style={{ padding: "10px 18px", background: "rgba(245,158,11,.15)", borderBottom: "1px solid rgba(245,158,11,.3)", display: "flex", alignItems: "center", gap: 10 }}>
+          <span style={{ fontSize: 20 }}>🔔</span>
+          <div style={{ flex: 1, fontSize: 12, color: "var(--text)" }}>
+            {pushBanner === "ios-install" && (lang === "es"
+              ? <><b>Activa notificaciones:</b> En Safari, toca Compartir (⬆) → "Agregar a pantalla de inicio" → abre la app desde el ícono</>
+              : <><b>Enable notifications:</b> In Safari tap Share (⬆) → "Add to Home Screen" → then open app from that icon</>
+            )}
+            {pushBanner === "ios-settings" && (lang === "es"
+              ? <><b>Notificaciones bloqueadas.</b> Ve a Ajustes de iPhone → Safari → este sitio → Notificaciones → Permitir</>
+              : <><b>Notifications blocked.</b> Go to iPhone Settings → Safari → this site → Notifications → Allow</>
+            )}
+            {pushBanner === "browser-denied" && (lang === "es"
+              ? <><b>Notificaciones bloqueadas.</b> Toca el candado en la barra de dirección → Notificaciones → Permitir</>
+              : <><b>Notifications blocked.</b> Tap the lock icon in your address bar → Notifications → Allow</>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* ── Quick Action Bar ── */}
+      <div style={{ display: "flex", gap: 0, borderBottom: "1px solid var(--border)" }}>
+        <button onClick={() => setTab("rec")}
+          style={{ flex: 1, padding: "13px 8px", border: "none", borderRight: "1px solid var(--border)",
+            background: ctab === "rec" ? "rgba(245,158,11,.18)" : "rgba(245,158,11,.08)", cursor: "pointer",
+            display: "flex", flexDirection: "column", alignItems: "center", gap: 4 }}>
+          <span style={{ fontSize: 22 }}>🧾</span>
+          <span style={{ fontSize: 11, fontWeight: 800, color: "var(--accent)", fontFamily: "'Barlow Condensed'", letterSpacing: .5 }}>
+            {lang === "es" ? "RECIBO" : "RECEIPT"}
+          </span>
+        </button>
+        <button onClick={() => setTab("cam")}
+          style={{ flex: 1, padding: "13px 8px", border: "none", borderRight: "1px solid var(--border)",
+            background: ctab === "cam" ? "rgba(59,130,246,.18)" : "rgba(59,130,246,.06)", cursor: "pointer",
+            display: "flex", flexDirection: "column", alignItems: "center", gap: 4 }}>
+          <span style={{ fontSize: 22 }}>📷</span>
+          <span style={{ fontSize: 11, fontWeight: 800, color: "var(--sky2)", fontFamily: "'Barlow Condensed'", letterSpacing: .5 }}>
+            {lang === "es" ? "FOTOS" : "PHOTOS"}
+          </span>
+        </button>
+        <button onClick={() => setTab("log")}
+          style={{ flex: 1, padding: "13px 8px", border: "none", borderRight: "1px solid var(--border)",
+            background: ctab === "log" ? "rgba(100,116,139,.25)" : "rgba(100,116,139,.08)", cursor: "pointer",
+            display: "flex", flexDirection: "column", alignItems: "center", gap: 4 }}>
+          <span style={{ fontSize: 22 }}>📋</span>
+          <span style={{ fontSize: 11, fontWeight: 800, color: "var(--silver)", fontFamily: "'Barlow Condensed'", letterSpacing: .5 }}>
+            {lang === "es" ? "REGISTRO" : "LOG DAY"}
+          </span>
+        </button>
+        <button onClick={() => setIssueModal(true)}
+          style={{ flex: 1, padding: "13px 8px", border: "none",
+            background: "rgba(239,68,68,.08)", cursor: "pointer",
+            display: "flex", flexDirection: "column", alignItems: "center", gap: 4 }}>
+          <span style={{ fontSize: 22 }}>🚩</span>
+          <span style={{ fontSize: 11, fontWeight: 800, color: "var(--red)", fontFamily: "'Barlow Condensed'", letterSpacing: .5 }}>
+            {lang === "es" ? "PROBLEMA" : "FLAG ISSUE"}
+          </span>
+        </button>
+      </div>
+
+      <div style={{ padding: 18, paddingBottom: 24 }}>
         {ctab === "tasks" && <CrewTasks {...props} />}
         {ctab === "cam" && <CrewPhotos {...props} />}
         {ctab === "rec" && <CrewReceipts {...props} />}
         {ctab === "log" && <CrewLog {...props} />}
       </div>
+
+      {/* Issue modal */}
+      {issueModal && (
+        <div className="modal-bg" onClick={() => setIssueModal(false)}>
+          <div className="modal" onClick={e => e.stopPropagation()}>
+            <div className="mt" style={{ color: "var(--red)" }}>🚩 Flag an Issue</div>
+            <p className="muted" style={{ fontSize: 13, marginBottom: 14 }}>Describe the problem. Greg gets a text immediately.</p>
+            <textarea className="fi" rows={4} value={issueText} onChange={e => setIssueText(e.target.value)}
+              placeholder="What's the problem? Be specific — location, what happened, what's needed..."
+              style={{ resize: "vertical", fontFamily: "inherit" }} />
+            <input ref={issueRef} type="file" accept="image/*" capture="environment" style={{ display: "none" }}
+              onChange={async e => { const f = e.target.files[0]; if (!f) return; try { const { dataUrl } = await compressImage(f); setIssuePhoto(dataUrl); } catch { alert("Could not process image. Try again."); } e.target.value = ""; }} />
+            {issuePhoto
+              ? <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 10 }}>
+                  <img src={issuePhoto} alt="issue" style={{ width: 60, height: 60, objectFit: "cover", borderRadius: 8 }} />
+                  <button onClick={() => setIssuePhoto(null)} style={{ background: "none", border: "none", color: "var(--red)", cursor: "pointer", fontSize: 12 }}>✕ Remove</button>
+                </div>
+              : <button className="btn btn-s btn-sm" style={{ marginTop: 10 }} onClick={() => issueRef.current?.click()}>
+                  <Icon n="camera" s={13} /> Add Photo
+                </button>
+            }
+            <div className="macts" style={{ marginTop: 16 }}>
+              <button className="btn btn-s" onClick={() => setIssueModal(false)}>Cancel</button>
+              <button className="btn" style={{ background: "linear-gradient(135deg,#dc2626,var(--red))", color: "#fff" }}
+                disabled={!issueText.trim() || issueBusy} onClick={submitIssue}>
+                {issueBusy ? "Sending..." : "Report Issue"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       <div className="cnav">{nav.map(n => <div key={n.k} className={`cnav-i ${ctab === n.k ? "on" : ""}`} onClick={() => setTab(n.k)}>
         <Icon n={n.i} s={22} /><span className="cnav-l">{n.l}</span></div>)}</div>
     </div>
@@ -3958,10 +5755,10 @@ function Crew(props) {
 }
 
 function CrewTasks(props) {
-  const { user, tasks, setTasks, jobs, lang, t, settings, photos, setPhotos, receipts, setReceipts, logs, setLogs, dispatches } = props;
+  const { user, tasks, setTasks, jobs, lang, t, settings, photos, setPhotos, receipts, setReceipts, logs, setLogs, dispatches, mats } = props;
   const closedJobIds = new Set(jobs.filter(j => j.status === "closed").map(j => j.id));
   const my = tasks.filter(t => (Array.isArray(t.assignedTo) ? t.assignedTo.includes(user.id) : t.assignedTo === user.id) && !closedJobIds.has(t.jobId));
-  const today = new Date().toISOString().split("T")[0];
+  const today = localDate();
   const [checkedJob, setCheckedJob] = useState(null);
   const [gps, setGps] = useState(null);
   const [matModal, setMatModal] = useState(null);
@@ -3988,8 +5785,10 @@ function CrewTasks(props) {
   const [photoNote, setPhotoNote] = useState("");
   const [savedCount, setSavedCount] = useState(0);
   const [crewLightbox, setCrewLightbox] = useState(null); // { dataUrl, note, type }
-  const taskPhotoRef  = useRef();
-  const taskRcPhotoRef = useRef();
+  const taskPhotoRef    = useRef();
+  const taskPhotoCamRef = useRef();
+  const taskRcPhotoRef  = useRef();
+  const photoCamRef     = useRef();
 
   const PHOTO_TYPES = [
     { k: "before",  l: t.before,  c: "var(--orange)" },
@@ -4009,11 +5808,13 @@ function CrewTasks(props) {
   const captureJobPhoto = async (e) => {
     const file = e.target.files[0]; if (!file || !activePanel) return;
     setPhotoBusy(true);
-    const { dataUrl, sizeKB } = await compressImage(file);
+    try {
+      const { dataUrl, sizeKB } = await compressImage(file);
+      setPendingJobPhoto({ dataUrl, sizeKB, jobId: activePanel.jobId, type: photoType });
+      setJobPhotoNote("");
+    } catch { alert("Could not process image. Try again."); }
     e.target.value = "";
     setPhotoBusy(false);
-    setPendingJobPhoto({ dataUrl, sizeKB, jobId: activePanel.jobId, type: photoType });
-    setJobPhotoNote("");
     setActivePanel(null); // close the type-picker panel, description modal takes over
   };
 
@@ -4023,9 +5824,11 @@ function CrewTasks(props) {
     const id = "p" + Date.now();
     const { dataUrl, sizeKB, jobId, type } = pendingJobPhoto;
     const dbType = type === "concern" ? "progress" : type;
+    let storagePath = null;
+    try { storagePath = await uploadToStorage(dataUrl, `${user.id}/${id}.jpg`); } catch {}
     const photo = { id, dataUrl, type, taskId: null, jobId, crewId: user.id, sizeKB, note: note || "", date: new Date().toISOString() };
     setPhotos(p => [...p, photo]);
-    const row = { id, data_url: dataUrl, photo_type: dbType, task_id: null, job_id: jobId, crew_id: user.id, size_kb: sizeKB, note: note || null };
+    const row = { id, data_url: storagePath ? null : dataUrl, storage_path: storagePath, photo_type: dbType, task_id: null, job_id: jobId, crew_id: user.id, size_kb: sizeKB, note: note || null };
     try { await sbPost("field_photos", row); } catch { enqueue({ table: "field_photos", payload: row }); }
     setPendingJobPhoto(null);
     setJobPhotoNote("");
@@ -4036,8 +5839,8 @@ function CrewTasks(props) {
 
   const captureRcPhoto = async (e) => {
     const file = e.target.files[0]; if (!file) return;
-    const { dataUrl } = await compressImage(file, 1000, 0.6);
-    setRcForm(p => ({ ...p, dataUrl }));
+    try { const { dataUrl } = await compressImage(file, 1000, 0.6); setRcForm(p => ({ ...p, dataUrl })); }
+    catch { alert("Could not process image. Try again."); }
     e.target.value = "";
   };
 
@@ -4045,9 +5848,11 @@ function CrewTasks(props) {
     if (!rcForm.store || !rcForm.amount) return;
     setRcBusy(true);
     const id = "r" + Date.now();
+    let storagePath = null;
+    if (rcForm.dataUrl) { try { storagePath = await uploadToStorage(rcForm.dataUrl, `${user.id}/${id}.jpg`); } catch {} }
     const receipt = { id, dataUrl: rcForm.dataUrl, taskId: null, jobId, crewId: user.id, store: rcForm.store, amount: rcForm.amount, note: rcForm.note, paidBy: rcForm.paidBy, reimbursementStatus: rcForm.paidBy === "crew" ? "pending" : "na", createdAt: today };
     setReceipts(p => [...p, receipt]);
-    const row = { id, data_url: rcForm.dataUrl, task_id: null, job_id: jobId, crew_id: user.id, store: rcForm.store, amount: parseFloat(rcForm.amount) || 0, note: rcForm.note, paid_by: rcForm.paidBy, reimbursement_status: rcForm.paidBy === "crew" ? "pending" : "na" };
+    const row = { id, data_url: storagePath ? null : rcForm.dataUrl, storage_path: storagePath, task_id: null, job_id: jobId, crew_id: user.id, store: rcForm.store, amount: parseFloat(rcForm.amount) || 0, note: rcForm.note, paid_by: rcForm.paidBy, reimbursement_status: rcForm.paidBy === "crew" ? "pending" : "na" };
     try { await sbPost("field_receipts", row); } catch { enqueue({ table: "field_receipts", payload: row }); }
     // GSM Builder sync
     const job = jobs.find(j => j.id === jobId);
@@ -4067,10 +5872,17 @@ function CrewTasks(props) {
     setActivePanel(null);
   };
 
+  const removePhoto = async (photo) => {
+    setPhotos(p => p.filter(x => x.id !== photo.id));
+    try { await sbDelete("field_photos", photo.id); } catch {}
+    if (photo.storagePath) { try { await deleteFromStorage(photo.storagePath); } catch {} }
+  };
+
   const captureIssuePhoto = async (e) => {
     const file = e.target.files[0]; if (!file) return;
-    const { dataUrl } = await compressImage(file, 1000, 0.6);
-    setIssueDataUrl(dataUrl); e.target.value = "";
+    try { const { dataUrl } = await compressImage(file, 1000, 0.6); setIssueDataUrl(dataUrl); }
+    catch { alert("Could not process image. Try again."); }
+    e.target.value = "";
   };
 
   const submitIssue = async (jobId) => {
@@ -4087,9 +5899,11 @@ function CrewTasks(props) {
     // Save photo if attached
     if (issueDataUrl) {
       const pid = "p" + Date.now();
+      let storagePath = null;
+      try { storagePath = await uploadToStorage(issueDataUrl, `${user.id}/${pid}.jpg`); } catch {}
       const photo = { id: pid, dataUrl: issueDataUrl, type: "concern", taskId: null, jobId, crewId: user.id, sizeKB: 0, date: new Date().toISOString() };
       setPhotos(p => [...p, photo]);
-      const prow = { id: pid, data_url: issueDataUrl, photo_type: "progress", task_id: null, job_id: jobId, crew_id: user.id, size_kb: 0 };
+      const prow = { id: pid, data_url: storagePath ? null : issueDataUrl, storage_path: storagePath, photo_type: "progress", task_id: null, job_id: jobId, crew_id: user.id, size_kb: 0 };
       try { await sbPost("field_photos", prow); } catch { enqueue({ table: "field_photos", payload: prow }); }
     }
     // Twilio alert admin
@@ -4102,6 +5916,12 @@ function CrewTasks(props) {
   const toggle = async (id) => {
     const task = tasks.find(tk => tk.id === id);
     const next = task.status === "done" ? "pending" : "done";
+    if (next === "done" && task.photoRequired && !photos.some(p => p.taskId === task.id)) {
+      alert(lang === "es"
+        ? "📷 Esta tarea requiere al menos una foto antes de marcarla como terminada."
+        : "📷 This task requires at least one photo before marking it done.");
+      return;
+    }
     setTasks(p => p.map(tk => tk.id === id ? { ...tk, status: next } : tk));
     try { await sbPatch("field_tasks", id, { status: next, completed_at: next === "done" ? new Date().toISOString() : null }); } catch {}
     if (next === "done") {
@@ -4138,11 +5958,13 @@ function CrewTasks(props) {
   const captureTaskPhoto = async (e) => {
     const file = e.target.files[0]; if (!file || !taskPanel) return;
     setTaskPhotoBusy(true);
-    const { dataUrl, sizeKB } = await compressImage(file);
+    try {
+      const { dataUrl, sizeKB } = await compressImage(file);
+      setPendingPhoto({ dataUrl, sizeKB });
+      setPhotoNote("");
+    } catch { alert("Could not process image. Try again."); }
     e.target.value = "";
     setTaskPhotoBusy(false);
-    setPendingPhoto({ dataUrl, sizeKB });
-    setPhotoNote("");
   };
 
   const saveTaskPhoto = async (andDone = false) => {
@@ -4150,9 +5972,11 @@ function CrewTasks(props) {
     setTaskPhotoBusy(true);
     const id = "p" + Date.now();
     const ptype = taskPanel.photoType || "before";
+    let storagePath = null;
+    try { storagePath = await uploadToStorage(pendingPhoto.dataUrl, `${user.id}/${id}.jpg`); } catch {}
     const photo = { id, dataUrl: pendingPhoto.dataUrl, type: ptype, taskId: taskPanel.taskId, jobId: taskPanel.jobId, crewId: user.id, sizeKB: pendingPhoto.sizeKB, note: photoNote, date: new Date().toISOString() };
     setPhotos(p => [...p, photo]);
-    const row = { id, data_url: pendingPhoto.dataUrl, photo_type: ptype, task_id: taskPanel.taskId, job_id: taskPanel.jobId, crew_id: user.id, size_kb: pendingPhoto.sizeKB, note: photoNote || null };
+    const row = { id, data_url: storagePath ? null : pendingPhoto.dataUrl, storage_path: storagePath, photo_type: ptype, task_id: taskPanel.taskId, job_id: taskPanel.jobId, crew_id: user.id, size_kb: pendingPhoto.sizeKB, note: photoNote || null };
     try { await sbPost("field_photos", row); } catch { enqueue({ table: "field_photos", payload: row }); }
     setSavedCount(n => n + 1);
     setPendingPhoto(null);
@@ -4168,8 +5992,8 @@ function CrewTasks(props) {
 
   const captureTaskRcPhoto = async (e) => {
     const file = e.target.files[0]; if (!file) return;
-    const { dataUrl } = await compressImage(file, 1000, 0.6);
-    setTaskRcForm(p => ({ ...p, dataUrl }));
+    try { const { dataUrl } = await compressImage(file, 1000, 0.6); setTaskRcForm(p => ({ ...p, dataUrl })); }
+    catch { alert("Could not process image. Try again."); }
     e.target.value = "";
   };
 
@@ -4177,9 +6001,11 @@ function CrewTasks(props) {
     if (!taskRcForm.store || !taskRcForm.amount || !taskPanel) return;
     setTaskRcBusy(true);
     const id = "r" + Date.now();
+    let storagePath = null;
+    if (taskRcForm.dataUrl) { try { storagePath = await uploadToStorage(taskRcForm.dataUrl, `${user.id}/${id}.jpg`); } catch {} }
     const receipt = { id, dataUrl: taskRcForm.dataUrl, taskId: taskPanel.taskId, jobId: taskPanel.jobId, crewId: user.id, store: taskRcForm.store, amount: taskRcForm.amount, note: taskRcForm.note, paidBy: taskRcForm.paidBy, reimbursementStatus: taskRcForm.paidBy === "crew" ? "pending" : "na", createdAt: today };
     setReceipts(p => [...p, receipt]);
-    const row = { id, data_url: taskRcForm.dataUrl, task_id: taskPanel.taskId, job_id: taskPanel.jobId, crew_id: user.id, store: taskRcForm.store, amount: parseFloat(taskRcForm.amount) || 0, note: taskRcForm.note, paid_by: taskRcForm.paidBy, reimbursement_status: taskRcForm.paidBy === "crew" ? "pending" : "na" };
+    const row = { id, data_url: storagePath ? null : taskRcForm.dataUrl, storage_path: storagePath, task_id: taskPanel.taskId, job_id: taskPanel.jobId, crew_id: user.id, store: taskRcForm.store, amount: parseFloat(taskRcForm.amount) || 0, note: taskRcForm.note, paid_by: taskRcForm.paidBy, reimbursement_status: taskRcForm.paidBy === "crew" ? "pending" : "na" };
     try { await sbPost("field_receipts", row); } catch { enqueue({ table: "field_receipts", payload: row }); }
     if (taskRcForm.paidBy === "crew") {
       const job = jobs.find(j => j.id === taskPanel.jobId);
@@ -4194,6 +6020,27 @@ function CrewTasks(props) {
   const st = task => task.status === "done" ? "done" : (task.dueDate && task.dueDate < today ? "overdue" : "pending");
 
   const [openCheckins, setOpenCheckins] = useState({}); // { jobId: checkinRecord }
+
+  // Load open check-ins from DB on mount so refresh doesn't lose state
+  useEffect(() => {
+    sbGet("field_checkins", `crew_id=eq.${user.id}&check_out=is.null`)
+      .then(rows => {
+        if (!rows?.length) return;
+        const now = new Date();
+        const map = {};
+        rows.forEach(r => {
+          // Auto-close stale check-ins from previous days
+          if (r.work_date && r.work_date < today) {
+            const hrs = Math.round((now - new Date(r.check_in)) / 36000) / 100;
+            sbFetch(`field_checkins?id=eq.${r.id}`, { method: "PATCH", body: JSON.stringify({ check_out: now.toISOString(), hours: hrs, auto_closed: true, method: "auto" }), prefer: "return=minimal" }).catch(() => {});
+          } else {
+            map[r.job_id] = { id: r.id, jobId: r.job_id, checkIn: r.check_in };
+          }
+        });
+        setOpenCheckins(map);
+      })
+      .catch(() => {});
+  }, [user.id]);
 
   const checkIn = async (job) => {
     const loc = await getLocation();
@@ -4222,17 +6069,99 @@ function CrewTasks(props) {
     setCheckedJob(null);
   };
 
-  const groups = [...new Set(my.map(t => t.jobId))];
+  const myRecurring = tasks.filter(t =>
+    t.recurring && !closedJobIds.has(t.jobId)
+  );
+  const toggleRecurring = async (task) => {
+    const doneToday = task.completedAt && localDateOf(task.completedAt) === today;
+    const next = doneToday ? null : new Date().toISOString();
+    setTasks(p => p.map(tk => tk.id === task.id ? { ...tk, completedAt: next } : tk));
+    try { await sbFetch(`field_tasks?id=eq.${task.id}`, { method: "PATCH", body: JSON.stringify({ completed_at: next }), prefer: "return=minimal" }); } catch {}
+    // Log completion to daily report
+    if (!doneToday) {
+      const logId = "l" + Date.now();
+      const enText = `✓ Recurring: ${task.title}`;
+      const esText = `✓ Recurrente: ${task.titleEs || task.title}`;
+      const log = { id: logId, en: enText, es: esText, taskId: task.id, jobId: task.jobId, crewId: user.id, date: today };
+      setLogs(p => [...p, log]);
+      try { await sbPost("field_logs", { id: logId, text_en: enText, text_es: esText, task_id: task.id, job_id: task.jobId, crew_id: user.id, log_date: today }); } catch {}
+    }
+  };
+
+  const crew24hCutoff = new Date(Date.now() - 24 * 3600000).toISOString();
+  const myRegularVisible = my.filter(t => !t.recurring && (t.status !== "done" || !t.completedAt || t.completedAt >= crew24hCutoff));
+  const groups = [...new Set(myRegularVisible.map(t => t.jobId))];
 
   return (
     <div>
-      {/* shared hidden file inputs */}
-      <input ref={photoRef}       type="file" accept="image/*" style={{ display: "none" }} onChange={captureJobPhoto} />
-      <input ref={rcPhotoRef}     type="file" accept="image/*" style={{ display: "none" }} onChange={captureRcPhoto} />
-      <input ref={issuePhotoRef}  type="file" accept="image/*" capture="environment" style={{ display: "none" }} onChange={captureIssuePhoto} />
+      {/* shared hidden file inputs — separate cam/gallery to avoid iOS capture attr bug */}
+      <input ref={photoRef}        type="file" accept="image/*" style={{ display: "none" }} onChange={captureJobPhoto} />
+      <input ref={photoCamRef}     type="file" accept="image/*" capture="environment" style={{ display: "none" }} onChange={captureJobPhoto} />
+      <input ref={rcPhotoRef}      type="file" accept="image/*" capture="environment" style={{ display: "none" }} onChange={captureRcPhoto} />
+      <input ref={issuePhotoRef}   type="file" accept="image/*" capture="environment" style={{ display: "none" }} onChange={captureIssuePhoto} />
       {/* task-specific file inputs */}
-      <input ref={taskPhotoRef}   type="file" accept="image/*" style={{ display: "none" }} onChange={captureTaskPhoto} />
-      <input ref={taskRcPhotoRef} type="file" accept="image/*" style={{ display: "none" }} onChange={captureTaskRcPhoto} />
+      <input ref={taskPhotoRef}    type="file" accept="image/*" style={{ display: "none" }} onChange={captureTaskPhoto} />
+      <input ref={taskPhotoCamRef} type="file" accept="image/*" capture="environment" style={{ display: "none" }} onChange={captureTaskPhoto} />
+      <input ref={taskRcPhotoRef}  type="file" accept="image/*" capture="environment" style={{ display: "none" }} onChange={captureTaskRcPhoto} />
+
+      {/* ── RECURRING TASKS — absolute top ─────────────────────── */}
+      {myRecurring.length > 0 && (() => {
+        const recurringGroups = [...new Set(myRecurring.map(t => t.jobId))];
+        const doneCount = myRecurring.filter(t => t.completedAt && localDateOf(t.completedAt) === today).length;
+        const allDone = doneCount === myRecurring.length;
+        return (
+          <div className="card" style={{ marginBottom: 20, border: allDone ? "1px solid rgba(16,185,129,.4)" : "1px solid rgba(245,158,11,.35)", background: allDone ? "rgba(16,185,129,.04)" : "rgba(245,158,11,.04)" }}>
+            <div className="flexb" style={{ marginBottom: 14 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <span style={{ fontSize: 18 }}>🔁</span>
+                <span style={{ fontWeight: 800, fontSize: 16, fontFamily: "'Barlow Condensed'" }}>
+                  {lang === "es" ? "Tareas Recurrentes" : "Recurring Tasks"}
+                </span>
+              </div>
+              <span style={{ fontSize: 12, fontWeight: 700, color: allDone ? "var(--green)" : "var(--accent)", fontFamily: "'Barlow Condensed'" }}>
+                {doneCount}/{myRecurring.length} {lang === "es" ? "hoy" : "today"}
+              </span>
+            </div>
+            {recurringGroups.map(jid => {
+              const jobR = jobs.find(j => j.id === jid);
+              const jtasks = myRecurring.filter(t => t.jobId === jid);
+              return (
+                <div key={jid} style={{ marginBottom: 14 }}>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: "var(--slate)", textTransform: "uppercase", letterSpacing: 1, marginBottom: 8 }}>
+                    {jobR?.name || jid}
+                  </div>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                    {jtasks.map(task => {
+                      const doneToday = task.completedAt && localDateOf(task.completedAt) === today;
+                      return (
+                        <div key={task.id} onClick={() => toggleRecurring(task)}
+                          style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 12px", borderRadius: 10, cursor: "pointer",
+                            background: doneToday ? "rgba(16,185,129,.1)" : "rgba(255,255,255,.04)",
+                            border: `1px solid ${doneToday ? "rgba(16,185,129,.3)" : "var(--border)"}`, transition: ".15s" }}>
+                          <div style={{ width: 26, height: 26, borderRadius: 6, flexShrink: 0,
+                            border: `2px solid ${doneToday ? "var(--green)" : "var(--accent)"}`,
+                            background: doneToday ? "var(--green)" : "transparent",
+                            display: "flex", alignItems: "center", justifyContent: "center" }}>
+                            {doneToday && <Icon n="check" s={14} c="#fff" />}
+                          </div>
+                          <div style={{ flex: 1 }}>
+                            <div style={{ fontSize: 14, fontWeight: 600, color: doneToday ? "var(--slate)" : "var(--white)", textDecoration: doneToday ? "line-through" : "none" }}>
+                              {lang === "es" && task.titleEs ? task.titleEs : task.title}
+                            </div>
+                          </div>
+                          <div style={{ fontSize: 11, fontWeight: 700, color: doneToday ? "var(--green)" : "var(--slate)", fontFamily: "'Barlow Condensed'", flexShrink: 0 }}>
+                            {doneToday ? (lang === "es" ? "HECHO" : "DONE") : (lang === "es" ? "PENDIENTE" : "PENDING")}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        );
+      })()}
 
       {/* ── WHERE TO GO TODAY (admin-dispatched) ── */}
       {(() => {
@@ -4294,12 +6223,11 @@ function CrewTasks(props) {
         <p className="muted">{t.yourTasks}</p>
       </div>
 
-      {my.length === 0
+      {groups.length === 0
         ? <div className="empty"><Icon n="check" s={48} c="var(--green)" /><p style={{ marginTop: 12 }}>{t.noTasks}</p></div>
         : groups.map(jid => {
           const job = jobs.find(j => j.id === jid);
-          const jt = my.filter(t => t.jobId === jid).sort((a, b) => {
-            if (a.recurring !== b.recurring) return a.recurring ? -1 : 1;
+          const jt = myRegularVisible.filter(t => t.jobId === jid).sort((a, b) => {
             if (a.priority === "urgent" && b.priority !== "urgent") return -1;
             if (a.priority !== "urgent" && b.priority === "urgent") return 1;
             return 0;
@@ -4386,11 +6314,11 @@ function CrewTasks(props) {
                 </div>
                 <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
                   <button className="btn btn-p" disabled={photoBusy}
-                    onClick={() => { photoRef.current?.setAttribute("capture","environment"); photoRef.current?.click(); }}>
+                    onClick={() => photoCamRef.current?.click()}>
                     {photoBusy ? <span className="spin" /> : <><Icon n="camera" s={15} /> {t.takePhoto}</>}
                   </button>
                   <button className="btn btn-s" disabled={photoBusy}
-                    onClick={() => { photoRef.current?.removeAttribute("capture"); photoRef.current?.click(); }}>
+                    onClick={() => openGallery(captureJobPhoto)}>
                     <Icon n="photo" s={15} /> {t.library}
                   </button>
                   <button onClick={() => setActivePanel(null)}
@@ -4502,12 +6430,12 @@ function CrewTasks(props) {
                         {task.recurring && <span style={{ fontSize: 11, marginRight: 4 }}>🔁</span>}
                         {tt(task)}
                       </div>
-                      {tts(task) && <div className="tes">{tts(task)}</div>}
                       <div className="tmeta">
                         {task.recurring && <span className="tag tag-recurring">{lang === "es" ? "Recurrente" : "Recurring"}</span>}
                         {task.priority === "urgent" && <span className="tag tag-urgent">⚡ {lang === "es" ? "Urgente" : "Urgent"}</span>}
                         <span className={`tag tag-${s}`}>{t[s]}</span>
                         {task.dueDate && <span className="tag" style={{ background: "rgba(255,255,255,.06)", color: "var(--silver)" }}>{task.dueDate}</span>}
+                        {task.photoRequired && !photos.some(p => p.taskId === task.id) && task.status !== "done" && <span className="tag" style={{ background: "rgba(249,115,22,.15)", color: "var(--orange)", border: "1px solid rgba(249,115,22,.35)" }}>📷 {lang === "es" ? "Foto requerida" : "Photo required"}</span>}
                       </div>
                     </div>
                     <div className="tact" style={{ gap: 5 }}>
@@ -4559,12 +6487,12 @@ function CrewTasks(props) {
                           <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10 }}>
                             <button className="btn btn-p" style={{ justifyContent:"center", padding:"14px 10px", fontSize:15 }}
                               disabled={taskPhotoBusy}
-                              onClick={() => { taskPhotoRef.current?.setAttribute("capture","environment"); taskPhotoRef.current?.click(); }}>
+                              onClick={() => taskPhotoCamRef.current?.click()}>
                               {taskPhotoBusy ? <span className="spin"/> : <><Icon n="camera" s={18}/><br/><span style={{ fontSize:11, marginTop:4, display:"block" }}>{t.takePhoto}<br/>{lang==="es"?"(Abrir Cámara)":"(Open Camera)"}</span></>}
                             </button>
                             <button className="btn btn-s" style={{ justifyContent:"center", padding:"14px 10px", fontSize:15 }}
                               disabled={taskPhotoBusy}
-                              onClick={() => { taskPhotoRef.current?.removeAttribute("capture"); taskPhotoRef.current?.click(); }}>
+                              onClick={() => openGallery(captureTaskPhoto)}>
                               <Icon n="photo" s={18}/><br/><span style={{ fontSize:11, marginTop:4, display:"block" }}>{t.library}<br/>{lang==="es"?"(Elegir Archivo)":"(Choose File)"}</span>
                             </button>
                           </div>
@@ -4613,15 +6541,18 @@ function CrewTasks(props) {
                       <div style={{ display:"flex", gap:10, flexWrap:"wrap", padding:"10px 14px", background:"rgba(0,0,0,.18)", borderBottom:"1px solid rgba(255,255,255,.04)" }}>
                         {taskPhotos.map((p, i) => (
                           <div key={i} style={{ display:"flex", flexDirection:"column", width:64, flexShrink:0 }}>
-                            <div onClick={() => setCrewLightbox(p)}
-                              style={{ position:"relative", width:64, height:64, borderRadius:8, overflow:"hidden", cursor:"zoom-in",
-                                border:`2px solid ${p.type==="before"?"var(--orange)":p.type==="after"?"var(--green)":"var(--red)"}` }}>
-                              {p.dataUrl
-                                ? <img src={p.dataUrl} alt={p.type} style={{ width:"100%", height:"100%", objectFit:"cover" }} />
-                                : <div style={{ width:"100%", height:"100%", display:"flex", alignItems:"center", justifyContent:"center" }}><Icon n="camera" s={20} c="var(--slate)" /></div>}
+                            <div style={{ position:"relative", width:64, height:64, borderRadius:8, overflow:"hidden",
+                              border:`2px solid ${p.type==="before"?"var(--orange)":p.type==="after"?"var(--green)":"var(--red)"}` }}>
+                              <div onClick={() => setCrewLightbox(p)} style={{ width:"100%", height:"100%", cursor:"zoom-in" }}>
+                                {p.dataUrl
+                                  ? <img src={p.dataUrl} alt={p.type} style={{ width:"100%", height:"100%", objectFit:"cover" }} />
+                                  : <div style={{ width:"100%", height:"100%", display:"flex", alignItems:"center", justifyContent:"center" }}><Icon n="camera" s={20} c="var(--slate)" /></div>}
+                              </div>
                               <div style={{ position:"absolute", bottom:0, left:0, right:0, background:"rgba(0,0,0,.65)", fontSize:8, textAlign:"center", color:"#fff", padding:"1px 0", fontWeight:700, textTransform:"uppercase" }}>
                                 {p.type}
                               </div>
+                              <button onClick={() => removePhoto(p)}
+                                style={{ position:"absolute",top:2,right:2,background:"rgba(239,68,68,.9)",border:"none",borderRadius:3,color:"#fff",cursor:"pointer",fontSize:9,padding:"1px 3px",lineHeight:1,zIndex:2 }}>✕</button>
                             </div>
                             {p.note && <div style={{ fontSize:9, color:"var(--silver)", marginTop:3, lineHeight:1.3, wordBreak:"break-word", maxHeight:28, overflow:"hidden" }}>{p.note}</div>}
                           </div>
@@ -4735,6 +6666,35 @@ function CrewTasks(props) {
             <textarea className="fi" value={mat} onChange={e => setMat(e.target.value)} placeholder={lang === "es" ? "ej. madera 2x4, tornillos..." : "e.g. 2x4 lumber, screws..."} /></div>
           <div className="macts"><button className="btn btn-s" onClick={() => setMatModal(null)}>{t.cancel}</button>
             <button className="btn btn-a" onClick={() => submitMat(matModal)}><Icon n="tools" s={14} /> {t.submit}</button></div></div></div>}
+
+      {/* ── My material requests ── */}
+      {(() => {
+        const myMats = (mats || []).filter(m => m.crewId === user.id);
+        if (!myMats.length) return null;
+        return (
+          <div className="card" style={{ marginTop: 20, border: "1px solid rgba(245,158,11,.25)" }}>
+            <div style={{ fontFamily: "'Barlow Condensed'", fontWeight: 800, fontSize: 14, letterSpacing: 1, color: "var(--accent)", marginBottom: 10 }}>
+              🔧 {lang === "es" ? "Mis solicitudes de materiales" : "My Material Requests"}
+            </div>
+            {myMats.map(m => {
+              const job = jobs.find(j => j.id === m.jobId);
+              const task = tasks.find(tk => tk.id === m.taskId);
+              return (
+                <div key={m.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 0", borderBottom: "1px solid var(--border)" }}>
+                  <span style={{ fontSize: 18 }}>{m.fulfilled ? "✅" : "⏳"}</span>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontSize: 13, fontWeight: 600, color: m.fulfilled ? "var(--green)" : "var(--white)" }}>{m.en}</div>
+                    <div style={{ fontSize: 11, color: "var(--slate)" }}>{job?.name}{task ? ` — ${task.title}` : ""}</div>
+                  </div>
+                  <span className={`tag tag-${m.fulfilled ? "done" : "pending"}`} style={{ fontSize: 10 }}>
+                    {m.fulfilled ? (lang === "es" ? "Cumplido" : "Fulfilled") : (lang === "es" ? "Pendiente" : "Pending")}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        );
+      })()}
     </div>
   );
 }
@@ -4745,6 +6705,7 @@ function CrewPhotos(props) {
   const my = tasks.filter(tk => Array.isArray(tk.assignedTo) ? tk.assignedTo.includes(user.id) : tk.assignedTo === user.id);
   const [task, setTask] = useState(""); const [type, setType] = useState("before"); const [busy, setBusy] = useState(false);
   const fileRef = useRef();
+  const camRef  = useRef();
   const TYPES = [
     { k: "before",  l: t.before,  c: "var(--orange)" },
     { k: "after",   l: t.after,   c: "var(--green)"  },
@@ -4752,16 +6713,26 @@ function CrewPhotos(props) {
   ];
   const typeLabel = k => TYPES.find(x => x.k === k)?.l || k;
   const typeColor = k => ({ before:"var(--orange)", after:"var(--green)", concern:"var(--red)", progress:"var(--sky2)" })[k] || "var(--sky2)";
+  const removePhoto = async (photo) => {
+    setPhotos(p => p.filter(x => x.id !== photo.id));
+    try { await sbDelete("field_photos", photo.id); } catch {}
+    if (photo.storagePath) { try { await deleteFromStorage(photo.storagePath); } catch {} }
+  };
   const upload = async e => {
     const file = e.target.files[0]; if (!file || !task) return;
     setBusy(true);
-    const { dataUrl, sizeKB } = await compressImage(file);
+    let compressed;
+    try { compressed = await compressImage(file); }
+    catch { setBusy(false); alert("Could not process image. Try again."); return; }
+    const { dataUrl, sizeKB } = compressed;
     const tk = tasks.find(x => x.id === task);
     const id = "p" + Date.now();
     const dbType = type === "concern" ? "progress" : type;
+    let storagePath = null;
+    try { storagePath = await uploadToStorage(dataUrl, `${user.id}/${id}.jpg`); } catch {}
     const photo = { id, dataUrl, type, taskId: task, jobId: tk?.jobId, crewId: user.id, sizeKB, date: new Date().toISOString() };
     setPhotos(p => [...p, photo]);
-    const row = { id, data_url: dataUrl, photo_type: dbType, task_id: task, job_id: tk?.jobId, crew_id: user.id, size_kb: sizeKB };
+    const row = { id, data_url: storagePath ? null : dataUrl, storage_path: storagePath, photo_type: dbType, task_id: task, job_id: tk?.jobId, crew_id: user.id, size_kb: sizeKB };
     try { await sbPost("field_photos", row); } catch { enqueue({ table: "field_photos", payload: row }); }
     e.target.value = ""; setBusy(false);
   };
@@ -4780,28 +6751,92 @@ function CrewPhotos(props) {
                 onClick={() => setType(x.k)} style={{ color: type === x.k ? "#fff" : x.c }}>{x.l}</button>
             ))}
           </div></div>
-        <input ref={fileRef} type="file" accept="image/*" capture="environment" style={{ display: "none" }} onChange={upload} />
+        <input ref={camRef}  type="file" accept="image/*" capture="environment" style={{ display: "none" }} onChange={upload} />
+        <input ref={fileRef} type="file" accept="image/*" style={{ display: "none" }} onChange={upload} />
         <div style={{ display: "flex", gap: 8 }}>
           <button className="btn btn-p" disabled={!task || busy}
-            onClick={() => { fileRef.current?.setAttribute("capture","environment"); fileRef.current?.click(); }}>
+            onClick={() => camRef.current?.click()}>
             {busy ? <span className="spin" /> : <><Icon n="camera" s={16} /> {t.takePhoto}</>}
           </button>
           <button className="btn btn-s" disabled={!task || busy}
-            onClick={() => { fileRef.current?.removeAttribute("capture"); fileRef.current?.click(); }}>
+            onClick={() => openGallery(upload)}>
             <Icon n="photo" s={16} /> {t.library}
           </button>
         </div>
         <p className="muted" style={{ fontSize: 11, marginTop: 8 }}>{t.photoNote}</p>
       </div>
       {[...new Set(photos.filter(p => p.crewId === user.id).map(p => p.taskId))].map(tid => {
-        const tk = tasks.find(x => x.id === tid), j = jobs.find(j => j.id === tk?.jobId), tp = photos.filter(p => p.taskId === tid);
+        const tk = tasks.find(x => x.id === tid), j = jobs.find(j => j.id === tk?.jobId), tp = photos.filter(p => p.taskId === tid && p.crewId === user.id);
         return <div key={tid} className="card"><div className="ct" style={{ fontSize: 15 }}>{j?.name} — {tk?.title}</div>
-          <div className="pgrid">{tp.map((p, i) => <div key={i} className="pthumb">
+          <div className="pgrid">{tp.map((p, i) => <div key={i} className="pthumb" style={{ position:"relative" }}>
             {p.dataUrl ? <img src={p.dataUrl} alt={p.type} /> : <Icon n="camera" s={28} c="var(--slate)" />}
             <div className="plabel" style={{ color: typeColor(p.type) }}>{typeLabel(p.type)} · {p.sizeKB}kb</div>
+            <button onClick={() => removePhoto(p)}
+              style={{ position:"absolute",top:3,right:3,background:"rgba(239,68,68,.85)",border:"none",borderRadius:4,color:"#fff",cursor:"pointer",fontSize:10,padding:"2px 4px",lineHeight:1,zIndex:2 }}>✕</button>
           </div>)}</div></div>;
       })}
     </div>
+  );
+}
+
+function ReceiptShortcutBanner({ lang }) {
+  const [open, setOpen] = useState(false);
+  const installed = isInStandalone();
+  const ios = isIOS();
+  const url = window.location.origin + "/?tab=rec";
+  const [copied, setCopied] = useState(false);
+  const copy = () => { navigator.clipboard?.writeText(url).then(() => { setCopied(true); setTimeout(() => setCopied(false), 2000); }); };
+  const es = lang === "es";
+  if (installed) return null;
+  return (
+    <>
+      <button onClick={() => setOpen(true)}
+        style={{ display:"flex", alignItems:"center", gap:8, width:"100%", padding:"10px 14px", background:"rgba(59,130,246,.1)", border:"1px solid rgba(59,130,246,.25)", borderRadius:10, color:"var(--sky2)", fontSize:13, fontWeight:700, cursor:"pointer", marginBottom:14 }}>
+        <span style={{ fontSize:18 }}>📲</span>
+        {es ? "Agregar acceso rápido a Recibos en tu pantalla" : "Add Receipt shortcut to your home screen"}
+        <span style={{ marginLeft:"auto", fontSize:16 }}>›</span>
+      </button>
+      {open && (
+        <div style={{ position:"fixed", inset:0, zIndex:600, background:"rgba(0,0,0,.7)", display:"flex", alignItems:"flex-end" }} onClick={() => setOpen(false)}>
+          <div style={{ background:"var(--navy)", borderRadius:"18px 18px 0 0", padding:24, width:"100%", maxWidth:480, margin:"0 auto", boxSizing:"border-box" }} onClick={e => e.stopPropagation()}>
+            <div style={{ fontFamily:"'Barlow Condensed'", fontSize:20, fontWeight:800, color:"var(--sky2)", marginBottom:16 }}>
+              {es ? "📲 Acceso rápido a Recibos" : "📲 Receipt Home Screen Shortcut"}
+            </div>
+            {ios ? (<>
+              <div style={{ fontSize:13, color:"var(--silver)", marginBottom:12 }}>
+                {es ? "Abre este enlace en Safari y añádelo a tu pantalla de inicio:" : "Open this link in Safari and add it to your home screen:"}
+              </div>
+              <div style={{ background:"rgba(255,255,255,.06)", borderRadius:8, padding:"10px 12px", fontSize:12, fontFamily:"monospace", color:"var(--white)", marginBottom:12, wordBreak:"break-all" }}>{url}</div>
+              <button onClick={copy} className="btn btn-p" style={{ width:"100%", justifyContent:"center", marginBottom:12 }}>
+                {copied ? (es ? "✓ Copiado" : "✓ Copied!") : (es ? "Copiar enlace" : "Copy Link")}
+              </button>
+              <div style={{ fontSize:12, color:"var(--slate)", lineHeight:1.6 }}>
+                {es
+                  ? "1. Pega el enlace en Safari\n2. Toca Compartir (⬆)\n3. Toca «Agregar a pantalla de inicio»\n4. Nómbralo «Recibos GSM» y toca Agregar"
+                  : "1. Paste the link in Safari\n2. Tap Share (⬆)\n3. Tap \"Add to Home Screen\"\n4. Name it \"GSM Receipts\" and tap Add"}
+                  .split("\n").map((l,i) => <div key={i}>{l}</div>)
+                </div>
+            </>) : (<>
+              <div style={{ fontSize:13, color:"var(--silver)", marginBottom:12 }}>
+                {es ? "En Chrome, abre el menú y agrega a pantalla de inicio:" : "In Chrome, open the menu and add to home screen:"}
+              </div>
+              <div style={{ fontSize:12, color:"var(--slate)", lineHeight:1.8, marginBottom:12 }}>
+                {(es
+                  ? ["1. Toca el menú de 3 puntos (⋮) en Chrome","2. Toca «Agregar a pantalla de inicio»","3. Nómbralo «Recibos GSM» y toca Agregar","4. Aparecerá un ícono de Recibos en tu pantalla"]
+                  : ["1. Tap the 3-dot menu (⋮) in Chrome","2. Tap \"Add to Home Screen\"","3. Name it \"GSM Receipts\" and tap Add","4. A Receipts icon appears on your home screen"]
+                ).map((l,i) => <div key={i}>{l}</div>)}
+              </div>
+              <button onClick={copy} className="btn btn-p" style={{ width:"100%", justifyContent:"center", marginBottom:8 }}>
+                {copied ? (es ? "✓ Copiado" : "✓ Copied!") : (es ? "Copiar enlace directo" : "Copy Direct Link")}
+              </button>
+            </>)}
+            <button onClick={() => setOpen(false)} className="btn btn-s" style={{ width:"100%", justifyContent:"center", marginTop:8 }}>
+              {es ? "Cerrar" : "Close"}
+            </button>
+          </div>
+        </div>
+      )}
+    </>
   );
 }
 
@@ -4810,10 +6845,11 @@ function CrewReceipts(props) {
   const my = tasks.filter(t => Array.isArray(t.assignedTo) ? t.assignedTo.includes(user.id) : t.assignedTo === user.id);
   const [task, setTask] = useState(""); const [store, setStore] = useState(""); const [amount, setAmount] = useState(""); const [note, setNote] = useState(""); const [paidBy, setPaidBy] = useState("crew"); const [dataUrl, setDataUrl] = useState(null); const [busy, setBusy] = useState(false); const [done, setDone] = useState(false);
   const fileRef = useRef();
+  const camRef  = useRef();
   const capturePhoto = async e => {
     const file = e.target.files[0]; if (!file) return;
-    const { dataUrl: url } = await compressImage(file, 1000, 0.6);
-    setDataUrl(url);
+    try { const { dataUrl: url } = await compressImage(file, 1000, 0.6); setDataUrl(url); }
+    catch { alert("Could not process image. Try again."); }
     e.target.value = "";
   };
   const submit = async () => {
@@ -4821,16 +6857,19 @@ function CrewReceipts(props) {
     setBusy(true);
     const tk = tasks.find(t => t.id === task);
     const id = "r" + Date.now();
-    const today = new Date().toISOString().split("T")[0];
+    const today = localDate();
+    let storagePath = null;
+    if (dataUrl) { try { storagePath = await uploadToStorage(dataUrl, `${user.id}/${id}.jpg`); } catch {} }
     const receipt = { id, dataUrl, taskId: task, jobId: tk?.jobId, crewId: user.id, store, amount, note, paidBy, reimbursementStatus: paidBy === "crew" ? "pending" : "na", createdAt: today };
     setReceipts(p => [...p, receipt]);
-    const row = { id, data_url: dataUrl, task_id: task, job_id: tk?.jobId, crew_id: user.id, store, amount: parseFloat(amount) || 0, note, paid_by: paidBy, reimbursement_status: paidBy === "crew" ? "pending" : "na" };
+    const row = { id, data_url: storagePath ? null : dataUrl, storage_path: storagePath, task_id: task, job_id: tk?.jobId, crew_id: user.id, store, amount: parseFloat(amount) || 0, note, paid_by: paidBy, reimbursement_status: paidBy === "crew" ? "pending" : "na" };
     try { await sbPost("field_receipts", row); } catch { enqueue({ table: "field_receipts", payload: row }); }
     setTask(""); setStore(""); setAmount(""); setNote(""); setPaidBy("crew"); setDataUrl(null); setBusy(false);
     setDone(true); setTimeout(() => setDone(false), 3000);
   };
   return (
-    <div><h2 className="h2" style={{ marginBottom: 18 }}>{t.receipts}</h2>
+    <div><h2 className="h2" style={{ marginBottom: 14 }}>{t.receipts}</h2>
+      <ReceiptShortcutBanner lang={lang} />
       {done && <div style={{ padding: "10px 14px", background: "rgba(16,185,129,.15)", border: "1px solid rgba(16,185,129,.3)", borderRadius: 10, marginBottom: 16, color: "var(--green)", fontWeight: 600 }}>✓ {t.receiptSubmitted}</div>}
       <div className="card">
         <p className="muted" style={{ marginBottom: 14, fontSize: 13 }}>{t.snapReceipt}</p>
@@ -4851,18 +6890,19 @@ function CrewReceipts(props) {
           {paidBy === "crew" && <p style={{ fontSize: 11, color: "var(--orange)", marginTop: 6 }}>{t.flaggedReimb}</p>}
         </div>
         <div className="fg"><label className="fl">{t.receiptPhoto}</label>
-          <input ref={fileRef} type="file" accept="image/*" capture="environment" style={{ display: "none" }} onChange={capturePhoto} />
+          <input ref={camRef}  type="file" accept="image/*" capture="environment" style={{ display: "none" }} onChange={capturePhoto} />
+          <input ref={fileRef} type="file" accept="image/*" style={{ display: "none" }} onChange={capturePhoto} />
           {dataUrl
             ? <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
                 <img src={dataUrl} alt="receipt" style={{ width: 64, height: 64, objectFit: "cover", borderRadius: 8, border: "2px solid var(--green)" }} />
                 <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
                   <span style={{ fontSize: 12, color: "var(--green)" }}>✓ {t.photoReady}</span>
-                  <button className="btn btn-s btn-sm" onClick={() => { setDataUrl(null); fileRef.current?.click(); }}><Icon n="camera" s={13} /> {t.retake}</button>
+                  <button className="btn btn-s btn-sm" onClick={() => { setDataUrl(null); openGallery(capturePhoto); }}><Icon n="camera" s={13} /> {t.retake}</button>
                 </div>
               </div>
             : <div style={{ display: "flex", gap: 8 }}>
-                <button className="btn btn-s btn-sm" onClick={() => { fileRef.current?.setAttribute("capture","environment"); fileRef.current?.click(); }}><Icon n="camera" s={14} /> {t.takePhoto}</button>
-                <button className="btn btn-s btn-sm" onClick={() => { fileRef.current?.removeAttribute("capture"); fileRef.current?.click(); }}><Icon n="photo" s={14} /> {t.library}</button>
+                <button className="btn btn-s btn-sm" onClick={() => camRef.current?.click()}><Icon n="camera" s={14} /> {t.takePhoto}</button>
+                <button className="btn btn-s btn-sm" onClick={() => openGallery(capturePhoto)}><Icon n="photo" s={14} /> {t.library}</button>
               </div>
           }
         </div>
@@ -4871,7 +6911,16 @@ function CrewReceipts(props) {
         </button>
         {(!task || !store || !amount) && <p style={{ fontSize: 11, color: "var(--slate)", marginTop: 8, textAlign: "center" }}>{t.requireFields}</p>}
       </div>
-      {receipts.filter(r => r.crewId === user.id).map(r => { const j = jobs.find(x => x.id === r.jobId);
+      {receipts.filter(r => r.crewId === user.id).map(r => {
+        const j = jobs.find(x => x.id === r.jobId);
+        const tk = tasks.find(t => t.id === r.taskId);
+        const reimb = r.paidBy === "crew" ? (r.reimbursementStatus === "paid" ? "Crew — Reimbursed ✓" : "Crew — Reimbursement Pending") : "Company";
+        const extras = [tk ? `Task: ${tk.title}` : "", r.note ? `Note: ${r.note}` : ""].filter(Boolean).join("  ·  ");
+        const printRc = () => {
+          const w = window.open("", "_blank", "width=850,height=1100");
+          w.document.write(`<!DOCTYPE html><html><head><title>Receipt — ${r.store||""}</title><style>@page{size:8.5in 11in;margin:.35in}*{box-sizing:border-box;margin:0;padding:0}html,body{width:100%;height:100%}body{font-family:'Helvetica Neue',Arial,sans-serif;color:#1a1a1a;background:#fff;display:flex;flex-direction:column;height:10.3in;overflow:hidden}.hdr{display:flex;align-items:center;gap:12px;padding-bottom:8px;border-bottom:2px solid #7c3f1e;flex-shrink:0}.logo{width:44px;height:44px;object-fit:contain;border-radius:6px;flex-shrink:0}.co-name{font-size:16px;font-weight:bold;color:#4a2c1a}.co-sub{font-size:9px;color:#888;margin-top:1px}.badge{margin-left:auto;background:#4a2c1a;color:#fff;font-size:9px;font-weight:bold;text-transform:uppercase;letter-spacing:1.5px;padding:4px 10px;border-radius:4px;white-space:nowrap}.info{display:flex;gap:0;border:1px solid #d4b896;border-radius:6px;overflow:hidden;margin:8px 0;flex-shrink:0}.cell{flex:1;padding:7px 10px;background:#fdf8f3;border-right:1px solid #d4b896}.cell:last-child{border-right:none}.cell.wide{flex:2}.cell .lbl{font-size:7px;font-weight:bold;color:#7c3f1e;text-transform:uppercase;letter-spacing:.8px;display:block;margin-bottom:2px}.cell .val{font-size:11px;font-weight:600;color:#1a1a1a;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.amt-row{display:flex;align-items:center;gap:10px;margin-bottom:8px;flex-shrink:0}.amt-box{background:#4a2c1a;color:#fff;padding:6px 18px;border-radius:6px;display:flex;align-items:baseline;gap:6px}.amt-lbl{font-size:8px;text-transform:uppercase;letter-spacing:1px;opacity:.75}.amt-val{font-size:26px;font-weight:bold;line-height:1}.extras{font-size:10px;color:#666;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.photo-wrap{flex:1;min-height:0;overflow:hidden;border-radius:6px;border:1px solid #ddd}.photo-wrap img{width:100%;height:100%;object-fit:cover;display:block}.no-photo{flex:1;display:flex;align-items:center;justify-content:center;color:#aaa;font-style:italic;font-size:13px;border:1px dashed #ddd;border-radius:6px}.foot{flex-shrink:0;margin-top:6px;font-size:7.5px;color:#bbb;text-align:center}@media print{body{-webkit-print-color-adjust:exact;print-color-adjust:exact}}</style></head><body><div class="hdr"><img class="logo" src="https://quiet-seahorse-2ba028.netlify.app/icon-admin.png" alt="GSM"/><div><div class="co-name">G.S. MASTERS, INC.</div><div class="co-sub">255 Grande View Pkwy, Maylene AL 35114 &nbsp;&middot;&nbsp; (205) 620-1698</div></div><div class="badge">Field Receipt</div></div><div class="info"><div class="cell"><span class="lbl">Date</span><span class="val">${r.createdAt}</span></div><div class="cell wide"><span class="lbl">Job</span><span class="val">${j?.name||"—"}</span></div><div class="cell wide"><span class="lbl">Vendor</span><span class="val">${r.store||"—"}</span></div><div class="cell"><span class="lbl">Submitted By</span><span class="val">${user.name}</span></div><div class="cell"><span class="lbl">Paid By</span><span class="val">${reimb}</span></div></div><div class="amt-row"><div class="amt-box"><span class="amt-lbl">Amount</span><span class="amt-val">$${(+r.amount||0).toFixed(2)}</span></div>${extras?`<div class="extras">${extras}</div>`:""}</div>${r.dataUrl?`<div class="photo-wrap"><img src="${r.dataUrl}" alt="Receipt"/></div>`:`<div class="no-photo">No photo attached</div>`}<div class="foot">GS Masters Field App &nbsp;&middot;&nbsp; Printed ${new Date().toLocaleString()} &nbsp;&middot;&nbsp; ID: ${r.id}</div><script>window.onload=function(){window.print();window.onafterprint=function(){window.close();}}</script></body></html>`);
+          w.document.close();
+        };
         return <div key={r.id} className="card" style={{ display: "flex", gap: 14, alignItems: "center" }}>
           {r.dataUrl && <img src={r.dataUrl} alt="receipt" style={{ width: 56, height: 56, borderRadius: 8, objectFit: "cover" }} />}
           <div style={{ flex: 1 }}>
@@ -4879,7 +6928,11 @@ function CrewReceipts(props) {
             <div className="muted">{j?.name} · {r.note}</div>
             {r.paidBy === "crew" && <span className={`tag ${r.reimbursementStatus === "paid" ? "tag-done" : "tag-overdue"}`} style={{ marginTop: 4, display: "inline-block" }}>{r.reimbursementStatus === "paid" ? t.reimbursed : t.awaitingReimb}</span>}
           </div>
-          <div style={{ fontSize: 18, fontWeight: 800, color: "var(--accent)" }}>${(+r.amount).toFixed(2)}</div></div>; })}
+          <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 6 }}>
+            <div style={{ fontSize: 18, fontWeight: 800, color: "var(--accent)" }}>${(+r.amount).toFixed(2)}</div>
+            <button onClick={printRc} style={{ background:"none",border:"none",cursor:"pointer",color:"var(--sky2)",fontSize:13,padding:0 }}>🖨 Print</button>
+          </div>
+        </div>; })}
     </div>
   );
 }
@@ -4888,20 +6941,24 @@ function CrewLog(props) {
   const { user, tasks, jobs, logs, setLogs, lang, t, settings } = props;
   const my = tasks.filter(t => Array.isArray(t.assignedTo) ? t.assignedTo.includes(user.id) : t.assignedTo === user.id);
   const [task, setTask] = useState(""); const [en, setEn] = useState(""); const [es, setEs] = useState(""); const [weather, setWeather] = useState(""); const [busy, setBusy] = useState(false); const [done, setDone] = useState(false);
-  const today = new Date().toISOString().split("T")[0];
+  const today = localDate();
   const loggedToday = logs.some(l => l.crewId === user.id && l.date === today);
   const submit = async () => {
     if (!en && !es) return; setBusy(true);
-    let e = en, s = es;
-    if (e && !s && settings.gtKey) s = await translateText(e, "es", settings.gtKey);
-    if (s && !e && settings.gtKey) e = await translateText(s, "en", settings.gtKey);
-    const tk = tasks.find(t => t.id === task);
-    const id = "l" + Date.now();
-    const log = { id, en: e, es: s, weather, taskId: task, jobId: tk?.jobId, crewId: user.id, date: today };
-    setLogs(p => [...p, log]);
-    const row = { id, text_en: e, text_es: s, weather, task_id: task || null, job_id: tk?.jobId || null, crew_id: user.id, log_date: today };
-    try { await sbPost("field_logs", row); } catch { enqueue({ table: "field_logs", payload: row }); }
-    setEn(""); setEs(""); setWeather(""); setBusy(false); setDone(true); setTimeout(() => setDone(false), 3000);
+    try {
+      let e = en, s = es;
+      try {
+        if (e && !s && settings.gtKey) s = await translateText(e, "es", settings.gtKey);
+        if (s && !e && settings.gtKey) e = await translateText(s, "en", settings.gtKey);
+      } catch {}
+      const tk = tasks.find(t => t.id === task);
+      const id = "l" + Date.now();
+      const log = { id, en: e, es: s, weather, taskId: task, jobId: tk?.jobId, crewId: user.id, date: today };
+      setLogs(p => [...p, log]);
+      const row = { id, text_en: e, text_es: s, weather, task_id: task || null, job_id: tk?.jobId || null, crew_id: user.id, log_date: today };
+      try { await sbPost("field_logs", row); } catch { enqueue({ table: "field_logs", payload: row }); }
+      setEn(""); setEs(""); setWeather(""); setDone(true); setTimeout(() => setDone(false), 3000);
+    } finally { setBusy(false); }
   };
   return (
     <div><h2 className="h2">{t.logYourDay}</h2>
@@ -4923,8 +6980,13 @@ function CrewLog(props) {
         <button className="btn btn-p btn-full" disabled={busy} onClick={submit}>{busy ? <span className="spin" /> : <><Icon n="check" s={16} /> {t.log}</>}</button>
       </div>
       {logs.filter(l => l.crewId === user.id).map(l => { const j = jobs.find(j => j.id === l.jobId);
-        return <div key={l.id} className="card"><div className="log"><div className="log-en">{l.en}</div><div className="log-es">{l.es}</div>
-          <div className="log-m">{j?.name && `${j.name} · `}{l.weather && `${l.weather} · `}{l.date}</div></div></div>; })}
+        const isIssue = (l.en || "").startsWith("🚩");
+        return <div key={l.id} className="card"><div className="log">
+          <div className="log-en" style={ isIssue ? { color: l.resolved ? "var(--green)" : "var(--red)" } : {} }>{l.en}</div>
+          <div className="log-es">{l.es}</div>
+          <div className="log-m">{j?.name && `${j.name} · `}{l.weather && `${l.weather} · `}{l.date}{l.resolved ? " · ✓ Resolved" : ""}</div>
+          {l.adminReply && <div style={{ marginTop: 5, fontSize: 12, color: "var(--sky2)", background: "rgba(59,130,246,.08)", borderRadius: 6, padding: "4px 8px", borderLeft: "2px solid var(--sky2)" }}><span style={{ fontWeight: 700 }}>Admin:</span> {l.adminReply}</div>}
+        </div></div>; })}
     </div>
   );
 }
