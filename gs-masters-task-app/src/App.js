@@ -115,7 +115,7 @@ const fromTask    = r => ({ id: r.id, jobId: r.job_id, title: r.title, titleEs: 
 const toPriority  = p => p === "urgent" ? 1 : 3;
 const fromLog     = r => ({ id: r.id, taskId: r.task_id, jobId: r.job_id, crewId: r.crew_id, en: r.text_en, es: r.text_es, weather: r.weather, date: r.log_date, adminReply: r.admin_reply || null, resolved: r.resolved || false });
 const fromPhoto   = r => ({ id: r.id, taskId: r.task_id, jobId: r.job_id, crewId: r.crew_id, dataUrl: r.storage_path ? `${SB_URL}/storage/v1/object/public/portal-uploads/${r.storage_path}` : (r.data_url || null), storagePath: r.storage_path || null, type: r.photo_type, sizeKB: r.size_kb, note: r.note || "", date: r.created_at });
-const fromReceipt = r => ({ id: r.id, taskId: r.task_id, jobId: r.job_id, crewId: r.crew_id, dataUrl: r.storage_path ? `${SB_URL}/storage/v1/object/public/portal-uploads/${r.storage_path}` : (r.data_url || null), storagePath: r.storage_path || null, store: r.store, amount: r.amount, note: r.note, paidBy: r.paid_by || "crew", reimbursementStatus: r.reimbursement_status || "pending", billStatus: r.bill_status || "pending_review", createdAt: (r.created_at || "").slice(0, 10), integrationSentAt: r.integration_sent_at || null });
+const fromReceipt = r => ({ id: r.id, taskId: r.task_id, jobId: r.job_id, crewId: r.crew_id, dataUrl: r.storage_path ? `${SB_URL}/storage/v1/object/public/portal-uploads/${r.storage_path}` : (r.data_url || null), storagePath: r.storage_path || null, store: r.store, amount: r.amount, note: r.note, paidBy: r.paid_by || "crew", reimbursementStatus: r.reimbursement_status || "pending", reimbursementDate: r.reimbursement_date || null, billStatus: r.bill_status || "pending_review", createdAt: (r.created_at || "").slice(0, 10), integrationSentAt: r.integration_sent_at || null });
 const fromMat     = r => ({ id: r.id, taskId: r.task_id, jobId: r.job_id, crewId: r.crew_id, en: r.text_en, es: r.text_es, fulfilled: r.fulfilled });
 const fromCheckin  = r => ({ id: r.id, crewId: r.crew_id, jobId: r.job_id, checkIn: r.check_in, checkOut: r.check_out, hours: r.hours, date: r.work_date, latIn: r.lat_in, lngIn: r.lng_in, method: r.method || "qr", autoClosed: r.auto_closed === true });
 const fromDispatch = r => ({ id: r.id, crewId: r.crew_id, date: r.date, jobIds: r.job_ids || [], customStops: r.custom_stops || [], createdBy: r.created_by });
@@ -368,6 +368,9 @@ const T = {
     flaggedReimb:"Will be flagged for reimbursement",
     requireFields:"Task, store, and amount required to submit",
     snapReceipt:"Fill out the form and submit your receipt.",
+    activeReceipts:"Active Receipts", archivedReceipts:"Archived (Paid)",
+    noActiveReceipts:"No active receipts.", noArchivedReceipts:"No archived receipts yet.",
+    paidByCheck:"Paid by check",
     // log
     logYourDay:"Log Your Day", tellUs:"Tell us what you did today.",
     whatEn:"What did you do? (English)", whatEs:"What did you do? (Spanish)",
@@ -417,6 +420,9 @@ const T = {
     flaggedReimb:"Se marcará para reembolso",
     requireFields:"Tarea, tienda y monto son requeridos",
     snapReceipt:"Llena el formulario y envía tu recibo.",
+    activeReceipts:"Recibos Activos", archivedReceipts:"Archivados (Pagados)",
+    noActiveReceipts:"No hay recibos activos.", noArchivedReceipts:"Aún no hay recibos archivados.",
+    paidByCheck:"Pagado con cheque",
     // log
     logYourDay:"Registro del Día", tellUs:"Cuéntanos qué hiciste hoy.",
     whatEn:"¿Qué hiciste? (Inglés)", whatEs:"¿Qué hiciste? (Español)",
@@ -6853,6 +6859,7 @@ function CrewReceipts(props) {
   const { user, tasks, jobs, receipts, setReceipts, t, lang } = props;
   const my = tasks.filter(t => Array.isArray(t.assignedTo) ? t.assignedTo.includes(user.id) : t.assignedTo === user.id);
   const [task, setTask] = useState(""); const [store, setStore] = useState(""); const [amount, setAmount] = useState(""); const [note, setNote] = useState(""); const [paidBy, setPaidBy] = useState("crew"); const [dataUrl, setDataUrl] = useState(null); const [busy, setBusy] = useState(false); const [done, setDone] = useState(false);
+  const [showArchive, setShowArchive] = useState(false);
   const fileRef = useRef();
   const camRef  = useRef();
   const capturePhoto = async e => {
@@ -6920,7 +6927,28 @@ function CrewReceipts(props) {
         </button>
         {(!task || !store || !amount) && <p style={{ fontSize: 11, color: "var(--slate)", marginTop: 8, textAlign: "center" }}>{t.requireFields}</p>}
       </div>
-      {receipts.filter(r => r.crewId === user.id).map(r => {
+      {(() => {
+        const mine = receipts.filter(r => r.crewId === user.id);
+        const active = mine.filter(r => r.reimbursementStatus !== "paid");
+        const archived = mine.filter(r => r.reimbursementStatus === "paid");
+        return <>
+          <h3 style={{ margin: "18px 0 8px", fontSize: 14, color: "var(--cream4)" }}>📂 {t.activeReceipts} ({active.length})</h3>
+          {!active.length && <div className="muted" style={{ padding: "8px 0" }}>{t.noActiveReceipts}</div>}
+          {active.map(r => <ReceiptCard key={r.id} r={r} jobs={jobs} tasks={tasks} user={user} t={t} />)}
+          <button className="btn btn-s btn-sm" style={{ marginTop: 16, marginBottom: 8 }} onClick={() => setShowArchive(v => !v)}>
+            {showArchive ? "📂" : "📁"} {t.archivedReceipts} ({archived.length})
+          </button>
+          {showArchive && <>
+            {!archived.length && <div className="muted" style={{ padding: "8px 0" }}>{t.noArchivedReceipts}</div>}
+            {archived.map(r => <ReceiptCard key={r.id} r={r} jobs={jobs} tasks={tasks} user={user} t={t} archived />)}
+          </>}
+        </>;
+      })()}
+    </div>
+  );
+}
+
+function ReceiptCard({ r, jobs, tasks, user, t, archived }) {
         const j = jobs.find(x => x.id === r.jobId);
         const tk = tasks.find(t => t.id === r.taskId);
         const reimb = r.paidBy === "crew" ? (r.reimbursementStatus === "paid" ? "Crew — Reimbursed ✓" : "Crew — Reimbursement Pending") : "Company";
@@ -6930,20 +6958,18 @@ function CrewReceipts(props) {
           w.document.write(`<!DOCTYPE html><html><head><title>Receipt — ${r.store||""}</title><style>@page{size:8.5in 11in;margin:.35in}*{box-sizing:border-box;margin:0;padding:0}html,body{width:100%;height:100%}body{font-family:'Helvetica Neue',Arial,sans-serif;color:#1a1a1a;background:#fff;display:flex;flex-direction:column;height:10.3in;overflow:hidden}.hdr{display:flex;align-items:center;gap:12px;padding-bottom:8px;border-bottom:2px solid #7c3f1e;flex-shrink:0}.logo{width:44px;height:44px;object-fit:contain;border-radius:6px;flex-shrink:0}.co-name{font-size:16px;font-weight:bold;color:#4a2c1a}.co-sub{font-size:9px;color:#888;margin-top:1px}.badge{margin-left:auto;background:#4a2c1a;color:#fff;font-size:9px;font-weight:bold;text-transform:uppercase;letter-spacing:1.5px;padding:4px 10px;border-radius:4px;white-space:nowrap}.info{display:flex;gap:0;border:1px solid #d4b896;border-radius:6px;overflow:hidden;margin:8px 0;flex-shrink:0}.cell{flex:1;padding:7px 10px;background:#fdf8f3;border-right:1px solid #d4b896}.cell:last-child{border-right:none}.cell.wide{flex:2}.cell .lbl{font-size:7px;font-weight:bold;color:#7c3f1e;text-transform:uppercase;letter-spacing:.8px;display:block;margin-bottom:2px}.cell .val{font-size:11px;font-weight:600;color:#1a1a1a;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.amt-row{display:flex;align-items:center;gap:10px;margin-bottom:8px;flex-shrink:0}.amt-box{background:#4a2c1a;color:#fff;padding:6px 18px;border-radius:6px;display:flex;align-items:baseline;gap:6px}.amt-lbl{font-size:8px;text-transform:uppercase;letter-spacing:1px;opacity:.75}.amt-val{font-size:26px;font-weight:bold;line-height:1}.extras{font-size:10px;color:#666;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.photo-wrap{flex:1;min-height:0;overflow:hidden;border-radius:6px;border:1px solid #ddd}.photo-wrap img{width:100%;height:100%;object-fit:cover;display:block}.no-photo{flex:1;display:flex;align-items:center;justify-content:center;color:#aaa;font-style:italic;font-size:13px;border:1px dashed #ddd;border-radius:6px}.foot{flex-shrink:0;margin-top:6px;font-size:7.5px;color:#bbb;text-align:center}@media print{body{-webkit-print-color-adjust:exact;print-color-adjust:exact}}</style></head><body><div class="hdr"><img class="logo" src="https://quiet-seahorse-2ba028.netlify.app/icon-admin.png" alt="GSM"/><div><div class="co-name">G.S. MASTERS, INC.</div><div class="co-sub">255 Grande View Pkwy, Maylene AL 35114 &nbsp;&middot;&nbsp; (205) 620-1698</div></div><div class="badge">Field Receipt</div></div><div class="info"><div class="cell"><span class="lbl">Date</span><span class="val">${r.createdAt}</span></div><div class="cell wide"><span class="lbl">Job</span><span class="val">${j?.name||"—"}</span></div><div class="cell wide"><span class="lbl">Vendor</span><span class="val">${r.store||"—"}</span></div><div class="cell"><span class="lbl">Submitted By</span><span class="val">${user.name}</span></div><div class="cell"><span class="lbl">Paid By</span><span class="val">${reimb}</span></div></div><div class="amt-row"><div class="amt-box"><span class="amt-lbl">Amount</span><span class="amt-val">$${(+r.amount||0).toFixed(2)}</span></div>${extras?`<div class="extras">${extras}</div>`:""}</div>${r.dataUrl?`<div class="photo-wrap"><img src="${r.dataUrl}" alt="Receipt"/></div>`:`<div class="no-photo">No photo attached</div>`}<div class="foot">GS Masters Field App &nbsp;&middot;&nbsp; Printed ${new Date().toLocaleString()} &nbsp;&middot;&nbsp; ID: ${r.id}</div><script>window.onload=function(){window.print();window.onafterprint=function(){window.close();}}</script></body></html>`);
           w.document.close();
         };
-        return <div key={r.id} className="card" style={{ display: "flex", gap: 14, alignItems: "center" }}>
+        return <div className="card" style={{ display: "flex", gap: 14, alignItems: "center", opacity: archived ? .75 : 1 }}>
           {r.dataUrl && <img src={r.dataUrl} alt="receipt" style={{ width: 56, height: 56, borderRadius: 8, objectFit: "cover" }} />}
           <div style={{ flex: 1 }}>
             <div style={{ fontWeight: 600 }}>{r.store}</div>
             <div className="muted">{j?.name} · {r.note}</div>
-            {r.paidBy === "crew" && <span className={`tag ${r.reimbursementStatus === "paid" ? "tag-done" : "tag-overdue"}`} style={{ marginTop: 4, display: "inline-block" }}>{r.reimbursementStatus === "paid" ? t.reimbursed : t.awaitingReimb}</span>}
+            {r.paidBy === "crew" && <span className={`tag ${r.reimbursementStatus === "paid" ? "tag-done" : "tag-overdue"}`} style={{ marginTop: 4, display: "inline-block" }}>{r.reimbursementStatus === "paid" ? `✓ ${t.paidByCheck}${r.reimbursementDate ? " · " + r.reimbursementDate : ""}` : t.awaitingReimb}</span>}
           </div>
           <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 6 }}>
             <div style={{ fontSize: 18, fontWeight: 800, color: "var(--accent)" }}>${(+r.amount).toFixed(2)}</div>
             <button onClick={printRc} style={{ background:"none",border:"none",cursor:"pointer",color:"var(--sky2)",fontSize:13,padding:0 }}>🖨 Print</button>
           </div>
-        </div>; })}
-    </div>
-  );
+        </div>;
 }
 
 function CrewLog(props) {
