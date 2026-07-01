@@ -4541,6 +4541,8 @@ function AdminFieldMode({ jobs, tasks, setTasks, photos, setPhotos, receipts, se
   const [rcForm, setRcForm] = useState({ store:"", amount:"", note:"", paidBy:"crew" });
   const [rcPhoto, setRcPhoto] = useState(null);
   const [rcBusy, setRcBusy] = useState(false);
+  const [rcDest, setRcDest] = useState("job"); // "job" | "office" | "auto" | "custom"
+  const [rcCustomCat, setRcCustomCat] = useState("");
   const rcPhotoRef = useRef();
 
   // Task state
@@ -4583,17 +4585,21 @@ function AdminFieldMode({ jobs, tasks, setTasks, photos, setPhotos, receipts, se
     e.target.value = "";
   };
   const saveReceipt = async () => {
-    if (!selJob || !rcForm.store || !rcForm.amount) return;
+    const usingJob = rcDest === "job";
+    if ((usingJob && !selJob) || !rcForm.store || !rcForm.amount) return;
+    if (rcDest === "custom" && !rcCustomCat.trim()) return;
+    const category = rcDest === "office" ? "Office" : rcDest === "auto" ? "Auto" : rcDest === "custom" ? rcCustomCat.trim() : null;
+    const jobIdVal = usingJob ? selJob : null;
     setRcBusy(true);
     const id = "r" + Date.now();
     let storagePath = null;
     if (rcPhoto) { try { storagePath = await uploadToStorage(rcPhoto, `${user.id}/${id}.jpg`); } catch {} }
-    const receipt = { id, dataUrl: rcPhoto, taskId: null, jobId: selJob, crewId: user.id, store: rcForm.store, amount: rcForm.amount, note: rcForm.note, paidBy: rcForm.paidBy, reimbursementStatus: rcForm.paidBy === "crew" ? "pending" : "na", createdAt: today };
+    const receipt = { id, dataUrl: rcPhoto, taskId: null, jobId: jobIdVal, category, crewId: user.id, store: rcForm.store, amount: rcForm.amount, note: rcForm.note, paidBy: rcForm.paidBy, reimbursementStatus: rcForm.paidBy === "crew" ? "pending" : "na", createdAt: today };
     setReceipts(p => [...p, receipt]);
-    const row = { id, data_url: storagePath ? null : rcPhoto, storage_path: storagePath, task_id: null, job_id: selJob, crew_id: user.id, store: rcForm.store, amount: parseFloat(rcForm.amount)||0, note: rcForm.note, paid_by: rcForm.paidBy, reimbursement_status: rcForm.paidBy==="crew"?"pending":"na" };
+    const row = { id, data_url: storagePath ? null : rcPhoto, storage_path: storagePath, task_id: null, job_id: jobIdVal, category, crew_id: user.id, store: rcForm.store, amount: parseFloat(rcForm.amount)||0, note: rcForm.note, paid_by: rcForm.paidBy, reimbursement_status: rcForm.paidBy==="crew"?"pending":"na" };
     try { await sbPost("field_receipts", row); } catch { enqueue({ table: "field_receipts", payload: row }); }
     pushReceiptToGSM(receipt, jobs, user.name);
-    setRcForm({ store:"", amount:"", note:"", paidBy:"crew" }); setRcPhoto(null); setRcBusy(false);
+    setRcForm({ store:"", amount:"", note:"", paidBy:"crew" }); setRcPhoto(null); setRcBusy(false); setRcDest("job"); setRcCustomCat("");
     alert("Receipt saved!");
   };
 
@@ -4676,9 +4682,9 @@ function AdminFieldMode({ jobs, tasks, setTasks, photos, setPhotos, receipts, se
         ))}
       </div>
 
-      {!selJob && <div style={{ padding:"16px", background:"rgba(245,158,11,.08)", borderRadius:10, border:"1px solid rgba(245,158,11,.3)", fontSize:13, color:"var(--accent)", textAlign:"center" }}>Select a job above to continue</div>}
+      {!selJob && mode !== "receipt" && <div style={{ padding:"16px", background:"rgba(245,158,11,.08)", borderRadius:10, border:"1px solid rgba(245,158,11,.3)", fontSize:13, color:"var(--accent)", textAlign:"center" }}>Select a job above to continue</div>}
 
-      {selJob && (
+      {(selJob || mode === "receipt") && (
         <div className="card">
 
           {/* STATUS MODE */}
@@ -4790,6 +4796,18 @@ function AdminFieldMode({ jobs, tasks, setTasks, photos, setPhotos, receipts, se
             <div>
               <div style={{ fontFamily:"'Barlow Condensed'", fontSize:16, fontWeight:700, marginBottom:12 }}>🧾 Log a Receipt</div>
               <input ref={rcPhotoRef} type="file" accept="image/*" style={{ display:"none" }} onChange={captureRcPhoto} />
+              <div className="fg">
+                <label className="fl">Charge this to</label>
+                <div style={{ display:"flex", gap:6, flexWrap:"wrap", marginBottom: rcDest==="custom" ? 8 : 12 }}>
+                  {[["job","🏗 Job"],["office","🏢 Office"],["auto","🚗 Auto"],["custom","📌 Custom"]].map(([k,label]) => (
+                    <button key={k} className={`btn btn-sm ${rcDest===k?"btn-a":"btn-s"}`} onClick={()=>setRcDest(k)}>{label}</button>
+                  ))}
+                </div>
+                {rcDest === "job" && !selJob && <div style={{ fontSize:12, color:"var(--accent)", marginBottom:12 }}>Select a job above to charge this receipt to a job.</div>}
+                {rcDest === "custom" && (
+                  <input className="fi" value={rcCustomCat} onChange={e=>setRcCustomCat(e.target.value)} placeholder="e.g. Marketing, Legal, Storage Unit" style={{ marginBottom:12 }} />
+                )}
+              </div>
               <div className="grid2" style={{ marginBottom:10 }}>
                 <div><label className="fl">Vendor / Store</label>
                   <input className="fi" value={rcForm.store} onChange={e => setRcForm(p=>({...p,store:e.target.value}))} placeholder="Home Depot" /></div>
@@ -4808,7 +4826,7 @@ function AdminFieldMode({ jobs, tasks, setTasks, photos, setPhotos, receipts, se
                   <Icon n="camera" s={14}/> {rcPhoto ? "Retake Receipt Photo" : "Snap Receipt Photo"}
                 </button>
               </div>
-              <button className="btn btn-p btn-full" disabled={rcBusy||!rcForm.store||!rcForm.amount} onClick={saveReceipt} style={{ justifyContent:"center" }}>
+              <button className="btn btn-p btn-full" disabled={rcBusy||!rcForm.store||!rcForm.amount||(rcDest==="job"&&!selJob)||(rcDest==="custom"&&!rcCustomCat.trim())} onClick={saveReceipt} style={{ justifyContent:"center" }}>
                 {rcBusy?<span className="spin"/>:"Save Receipt"}
               </button>
             </div>
