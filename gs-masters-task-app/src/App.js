@@ -115,10 +115,14 @@ const fromTask    = r => ({ id: r.id, jobId: r.job_id, title: r.title, titleEs: 
 const toPriority  = p => p === "urgent" ? 1 : 3;
 const fromLog     = r => ({ id: r.id, taskId: r.task_id, jobId: r.job_id, crewId: r.crew_id, en: r.text_en, es: r.text_es, weather: r.weather, date: r.log_date, adminReply: r.admin_reply || null, resolved: r.resolved || false });
 const fromPhoto   = r => ({ id: r.id, taskId: r.task_id, jobId: r.job_id, crewId: r.crew_id, dataUrl: r.storage_path ? `${SB_URL}/storage/v1/object/public/portal-uploads/${r.storage_path}` : (r.data_url || null), storagePath: r.storage_path || null, type: r.photo_type, sizeKB: r.size_kb, note: r.note || "", date: r.created_at });
-const fromReceipt = r => ({ id: r.id, taskId: r.task_id, jobId: r.job_id, crewId: r.crew_id, dataUrl: r.storage_path ? `${SB_URL}/storage/v1/object/public/portal-uploads/${r.storage_path}` : (r.data_url || null), storagePath: r.storage_path || null, store: r.store, amount: r.amount, note: r.note, paidBy: r.paid_by || "crew", reimbursementStatus: r.reimbursement_status || "pending", reimbursementDate: r.reimbursement_date || null, billStatus: r.bill_status || "pending_review", createdAt: (r.created_at || "").slice(0, 10), integrationSentAt: r.integration_sent_at || null });
+const fromReceipt = r => ({ id: r.id, taskId: r.task_id, jobId: r.job_id, category: r.category || null, crewId: r.crew_id, dataUrl: r.storage_path ? `${SB_URL}/storage/v1/object/public/portal-uploads/${r.storage_path}` : (r.data_url || null), storagePath: r.storage_path || null, store: r.store, amount: r.amount, note: r.note, paidBy: r.paid_by || "crew", reimbursementStatus: r.reimbursement_status || "pending", reimbursementDate: r.reimbursement_date || null, billStatus: r.bill_status || "pending_review", createdAt: (r.created_at || "").slice(0, 10), integrationSentAt: r.integration_sent_at || null });
 const fromMat     = r => ({ id: r.id, taskId: r.task_id, jobId: r.job_id, crewId: r.crew_id, en: r.text_en, es: r.text_es, fulfilled: r.fulfilled });
 const fromCheckin  = r => ({ id: r.id, crewId: r.crew_id, jobId: r.job_id, checkIn: r.check_in, checkOut: r.check_out, hours: r.hours, date: r.work_date, latIn: r.lat_in, lngIn: r.lng_in, method: r.method || "qr", autoClosed: r.auto_closed === true });
 const fromDispatch = r => ({ id: r.id, crewId: r.crew_id, date: r.date, jobIds: r.job_ids || [], customStops: r.custom_stops || [], createdBy: r.created_by });
+
+// Overhead receipt destinations — expenses not tied to a job: [key, button label, saved category]
+const RC_OVERHEAD = [["office","🏢 Office","Office"],["auto","🚗 Auto","Auto"],["tools","🔧 Tools","Tools"],["side","💼 Side Job","Side Job"]];
+const rcDestCategory = (dest, customCat) => dest === "job" ? null : dest === "custom" ? (customCat || "").trim() : (RC_OVERHEAD.find(([k]) => k === dest)?.[2] || null);
 
 // ─── LOCAL DATE HELPERS (device timezone, not UTC) ──────────────────────
 // Using UTC causes tasks to "reset" at 7 PM CDT because UTC midnight ≠ local midnight
@@ -900,9 +904,16 @@ export default function App() {
   // Restore session — ?login=1 forces fresh login (crew invite links use this)
   const [user, setUser] = useState(() => {
     try {
-      if (new URLSearchParams(window.location.search).get("login") === "1") {
+      const params = new URLSearchParams(window.location.search);
+      if (params.get("login") === "1") {
         localStorage.removeItem("gsm_session");
         localStorage.removeItem("gsm_quick");
+        // Strip ?login=1 from the address bar now — otherwise "Add to Home Screen"
+        // saves this exact URL, and every future tap of that icon wipes the
+        // session and forces a fresh login instead of staying signed in.
+        params.delete("login");
+        const clean = window.location.pathname + (params.toString() ? `?${params}` : "");
+        window.history.replaceState(null, "", clean);
         return null;
       }
       return JSON.parse(localStorage.getItem("gsm_session") || "null");
@@ -1072,8 +1083,9 @@ export default function App() {
   const reassignReceipt = async (id, patch) => {
     setReceipts(p => p.map(x => x.id === id ? { ...x, ...patch } : x));
     const dbPatch = {};
-    if (patch.jobId  !== undefined) dbPatch.job_id  = patch.jobId;
-    if (patch.taskId !== undefined) dbPatch.task_id = patch.taskId;
+    if (patch.jobId    !== undefined) dbPatch.job_id   = patch.jobId;
+    if (patch.taskId   !== undefined) dbPatch.task_id  = patch.taskId;
+    if (patch.category !== undefined) dbPatch.category = patch.category;
     try { await sbFetch(`field_receipts?id=eq.${id}`, { method: "PATCH", body: JSON.stringify(dbPatch), prefer: "return=minimal" }); } catch {}
   };
   const upsertDispatch = async (entry) => {
@@ -3228,7 +3240,7 @@ ${jobBlocks || '<p style="color:#888;text-align:center;padding:40px">No activity
 
 function AdminReceipts({ receipts, setReceipts, jobs, tasks, users, user, deleteReceipt, reassignReceipt }) {
   const [modal, setModal] = useState(false);
-  const [nr, setNr] = useState({ jobId: "", taskId: "", crewId: "", store: "", amount: "", note: "", paidBy: "company", dataUrl: null });
+  const [nr, setNr] = useState({ dest: "job", customCat: "", jobId: "", taskId: "", crewId: "", store: "", amount: "", note: "", paidBy: "company", dataUrl: null });
   const [busy, setBusy] = useState(false);
   const fileRef = useRef();
   const [lightbox, setLightbox] = useState(null);
@@ -3241,21 +3253,25 @@ function AdminReceipts({ receipts, setReceipts, jobs, tasks, users, user, delete
   const jobTasks = tasks.filter(t => t.jobId === nr.jobId);
 
   const addReceipt = async () => {
-    if (!nr.jobId || !nr.store || !nr.amount) return;
+    const usingJob = nr.dest === "job";
+    if ((usingJob && !nr.jobId) || !nr.store || !nr.amount) return;
+    if (nr.dest === "custom" && !nr.customCat.trim()) return;
+    const category = rcDestCategory(nr.dest, nr.customCat);
+    const jobIdVal = usingJob ? nr.jobId : null;
     setBusy(true);
     const id = "r" + Date.now();
     let storagePath = null;
     if (nr.dataUrl) { try { storagePath = await uploadToStorage(nr.dataUrl, `${nr.crewId||user.id}/${id}.jpg`); } catch {} }
-    const receipt = { id, jobId: nr.jobId, taskId: nr.taskId || null, crewId: nr.crewId || user.id,
+    const receipt = { id, jobId: jobIdVal, category, taskId: usingJob ? nr.taskId || null : null, crewId: nr.crewId || user.id,
       dataUrl: nr.dataUrl, store: nr.store, amount: nr.amount, note: nr.note,
       paidBy: nr.paidBy, reimbursementStatus: nr.paidBy === "crew" ? "pending" : "na", createdAt: today };
     setReceipts(p => [...p, receipt]);
-    const row = { id, job_id: nr.jobId, task_id: nr.taskId || null, crew_id: nr.crewId || user.id,
+    const row = { id, job_id: jobIdVal, category, task_id: usingJob ? nr.taskId || null : null, crew_id: nr.crewId || user.id,
       data_url: storagePath ? null : nr.dataUrl, storage_path: storagePath, store: nr.store, amount: parseFloat(nr.amount) || 0, note: nr.note,
       paid_by: nr.paidBy, reimbursement_status: nr.paidBy === "crew" ? "pending" : "na" };
     try { await sbPost("field_receipts", row); } catch { enqueue({ table: "field_receipts", payload: row }); }
     pushReceiptToGSM(receipt, jobs, users.find(u => u.id === receipt.crewId)?.name);
-    setNr({ jobId: "", taskId: "", crewId: "", store: "", amount: "", note: "", paidBy: "company", dataUrl: null });
+    setNr({ dest: "job", customCat: "", jobId: "", taskId: "", crewId: "", store: "", amount: "", note: "", paidBy: "company", dataUrl: null });
     setModal(false); setBusy(false);
   };
 
@@ -3279,7 +3295,7 @@ function AdminReceipts({ receipts, setReceipts, jobs, tasks, users, user, delete
   const exportBills = () => {
     const payload = receipts.map(r => ({
       receipt_id: r.id, vendor: r.store || "", amount: +r.amount || 0,
-      job_id: r.jobId, job_name: jobs.find(j => j.id === r.jobId)?.name || "",
+      job_id: r.jobId, job_name: jobs.find(j => j.id === r.jobId)?.name || "", category: r.category || null,
       memo: r.note || "", receipt_date: r.createdAt,
       submitted_by: users.find(u => u.id === r.crewId)?.name || "Admin",
       image: r.dataUrl ? "[base64 attached]" : null, status: "pending_review",
@@ -3301,8 +3317,8 @@ function AdminReceipts({ receipts, setReceipts, jobs, tasks, users, user, delete
 <style>
 @page{size:8.5in 11in;margin:.35in}
 *{box-sizing:border-box;margin:0;padding:0}
-html,body{width:100%;height:100%}
-body{font-family:'Helvetica Neue',Arial,sans-serif;color:#1a1a1a;background:#fff;display:flex;flex-direction:column;height:10.3in;overflow:hidden}
+html,body{width:100%;height:10.3in;max-height:10.3in;overflow:hidden}
+body{font-family:'Helvetica Neue',Arial,sans-serif;color:#1a1a1a;background:#fff;display:flex;flex-direction:column;overflow:hidden}
 .hdr{display:flex;align-items:center;gap:12px;padding-bottom:8px;border-bottom:2px solid #7c3f1e;flex-shrink:0}
 .logo{width:44px;height:44px;object-fit:contain;border-radius:6px;flex-shrink:0}
 .co-name{font-size:16px;font-weight:bold;color:#4a2c1a;letter-spacing:.3px}
@@ -3319,11 +3335,15 @@ body{font-family:'Helvetica Neue',Arial,sans-serif;color:#1a1a1a;background:#fff
 .amt-lbl{font-size:8px;text-transform:uppercase;letter-spacing:1px;opacity:.75}
 .amt-val{font-size:26px;font-weight:bold;line-height:1}
 .extras{font-size:10px;color:#666;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.photo-wrap{flex:1;min-height:0;overflow:hidden;border-radius:6px;border:1px solid #ddd}
-.photo-wrap img{width:100%;height:100%;object-fit:cover;display:block}
+.photo-wrap{flex:1 1 0;min-height:0;max-height:100%;overflow:hidden;border-radius:6px;border:1px solid #ddd;display:flex;align-items:center;justify-content:center;background:#f7f7f7}
+.photo-wrap img{max-width:100%;max-height:100%;width:auto;height:auto;object-fit:contain;display:block;margin:0 auto}
 .no-photo{flex:1;display:flex;align-items:center;justify-content:center;color:#aaa;font-style:italic;font-size:13px;border:1px dashed #ddd;border-radius:6px}
 .foot{flex-shrink:0;margin-top:6px;font-size:7.5px;color:#bbb;text-align:center}
-@media print{body{-webkit-print-color-adjust:exact;print-color-adjust:exact}}
+@media print{
+  html,body{height:10.3in!important;max-height:10.3in!important;overflow:hidden!important}
+  body{-webkit-print-color-adjust:exact;print-color-adjust:exact}
+  .photo-wrap,.hdr,.info,.amt-row,.foot{page-break-inside:avoid}
+}
 </style></head><body>
 <div class="hdr">
   <img class="logo" src="https://quiet-seahorse-2ba028.netlify.app/icon-admin.png" alt="GSM"/>
@@ -3335,7 +3355,7 @@ body{font-family:'Helvetica Neue',Arial,sans-serif;color:#1a1a1a;background:#fff
 </div>
 <div class="info">
   <div class="cell"><span class="lbl">Date</span><span class="val">${r.createdAt}</span></div>
-  <div class="cell wide"><span class="lbl">Job</span><span class="val">${j?.name || "—"}</span></div>
+  <div class="cell wide"><span class="lbl">${j ? "Job" : "Category"}</span><span class="val">${j?.name || r.category || "—"}</span></div>
   <div class="cell wide"><span class="lbl">Vendor</span><span class="val">${r.store || "—"}</span></div>
   <div class="cell"><span class="lbl">Submitted By</span><span class="val">${cr?.name || "Admin"}</span></div>
   <div class="cell"><span class="lbl">Paid By</span><span class="val">${reimb}</span></div>
@@ -3382,8 +3402,8 @@ ${r.dataUrl
           {(() => {
             const byJob = {}, byCrew = {};
             receipts.forEach(r => {
-              const jk = r.jobId || "unknown";
-              if (!byJob[jk]) byJob[jk] = { name: jobs.find(j=>j.id===jk)?.name||"Unknown Job", total:0 };
+              const jk = r.jobId || (r.category ? "cat:" + r.category : "unknown");
+              if (!byJob[jk]) byJob[jk] = { name: r.jobId ? (jobs.find(j=>j.id===r.jobId)?.name||"Unknown Job") : (r.category ? `📌 ${r.category}` : "Uncategorized"), total:0 };
               byJob[jk].total += +r.amount||0;
               const ck = r.crewId || "unknown";
               if (!byCrew[ck]) byCrew[ck] = { name: users.find(u=>u.id===ck)?.name||"Unknown", total:0 };
@@ -3431,7 +3451,7 @@ ${r.dataUrl
               <td data-l="Job">
                 <button onClick={() => { setReassign(r); setReassignJob(r.jobId||""); setReassignTask(r.taskId||""); setReassignConfirm(false); }}
                   style={{ background:"none",border:"none",cursor:"pointer",color:"var(--sky2)",fontSize:12,textDecoration:"underline",padding:0 }}>
-                  {j?.name || "—"}
+                  {j?.name || (r.category ? `📌 ${r.category}` : "—")}
                 </button>
               </td>
               <td data-l="Vendor">{r.store}</td>
@@ -3500,17 +3520,19 @@ ${r.dataUrl
           <div className="modal-bg" onClick={() => { setReassign(null); setReassignConfirm(false); }}>
             <div className="modal" onClick={e => e.stopPropagation()}>
               <div className="mt">Reassign Receipt</div>
-              <p className="muted" style={{ marginBottom: 14 }}>Currently: <strong>{jobs.find(j=>j.id===reassign.jobId)?.name || "—"}</strong></p>
+              <p className="muted" style={{ marginBottom: 14 }}>Currently: <strong>{jobs.find(j=>j.id===reassign.jobId)?.name || (reassign.category ? `📌 ${reassign.category}` : "—")}</strong></p>
               {!reassignConfirm ? (
                 <>
-                  <div className="fg"><label className="fl">New Job</label>
+                  <div className="fg"><label className="fl">Move to</label>
                     <select className="fi" value={reassignJob} onChange={e => { setReassignJob(e.target.value); setReassignTask(""); }}>
-                      <option value="">Select Job</option>{jobs.filter(j=>j.status!=="closed").map(j=><option key={j.id} value={j.id}>{j.name}</option>)}
+                      <option value="">Select Job or Category</option>
+                      <optgroup label="Jobs">{jobs.filter(j=>j.status!=="closed").map(j=><option key={j.id} value={j.id}>{j.name}</option>)}</optgroup>
+                      <optgroup label="Overhead (no job)">{RC_OVERHEAD.map(([k,label,cat])=><option key={k} value={"cat:"+cat}>{label}</option>)}</optgroup>
                     </select></div>
-                  <div className="fg"><label className="fl">Task (optional)</label>
+                  {!reassignJob.startsWith("cat:") && <div className="fg"><label className="fl">Task (optional)</label>
                     <select className="fi" value={reassignTask} onChange={e => setReassignTask(e.target.value)} disabled={!reassignJob}>
                       <option value="">No specific task</option>{jobTasks2.map(t=><option key={t.id} value={t.id}>{t.title}</option>)}
-                    </select></div>
+                    </select></div>}
                   <div className="macts">
                     <button className="btn btn-s" onClick={() => { setReassign(null); }}>Cancel</button>
                     <button className="btn btn-p" disabled={!reassignJob} onClick={() => setReassignConfirm(true)}>Apply Change</button>
@@ -3519,11 +3541,16 @@ ${r.dataUrl
               ) : (
                 <>
                   <p style={{ color: "var(--orange)", marginBottom: 14, fontWeight: 600 }}>
-                    ⚠ Move receipt to "{jobs.find(j=>j.id===reassignJob)?.name}"? This cannot be undone.
+                    ⚠ Move receipt to "{reassignJob.startsWith("cat:") ? reassignJob.slice(4) : jobs.find(j=>j.id===reassignJob)?.name}"? This cannot be undone.
                   </p>
                   <div className="macts">
                     <button className="btn btn-s" onClick={() => setReassignConfirm(false)}>No — Go Back</button>
-                    <button className="btn btn-g" onClick={() => { reassignReceipt(reassign.id, { jobId: reassignJob, taskId: reassignTask || null }); setReassign(null); setReassignConfirm(false); }}>Yes — Move It</button>
+                    <button className="btn btn-g" onClick={() => {
+                      const patch = reassignJob.startsWith("cat:")
+                        ? { jobId: null, taskId: null, category: reassignJob.slice(4) }
+                        : { jobId: reassignJob, taskId: reassignTask || null, category: null };
+                      reassignReceipt(reassign.id, patch); setReassign(null); setReassignConfirm(false);
+                    }}>Yes — Move It</button>
                   </div>
                 </>
               )}
@@ -3534,14 +3561,24 @@ ${r.dataUrl
 
       {modal && <div className="modal-bg" onClick={e=>e.target===e.currentTarget&&setModal(false)}>
         <div className="modal"><div className="mt">Add Receipt</div>
-          <div className="grid2">
+          <div className="fg"><label className="fl">Charge this to</label>
+            <div style={{ display:"flex", gap:6, flexWrap:"wrap" }}>
+              {[["job","🏗 Job"],...RC_OVERHEAD.map(([k,label])=>[k,label]),["custom","📌 Custom"]].map(([k,label]) => (
+                <button key={k} className={`btn btn-sm ${nr.dest===k?"btn-a":"btn-s"}`} onClick={()=>setNr(p=>({...p,dest:k}))}>{label}</button>
+              ))}
+            </div>
+            {nr.dest === "custom" && (
+              <input className="fi" value={nr.customCat} onChange={e=>setNr(p=>({...p,customCat:e.target.value}))} placeholder="e.g. Marketing, Legal, Storage Unit" style={{ marginTop:8 }} />
+            )}
+          </div>
+          {nr.dest === "job" && <div className="grid2">
             <div className="fg"><label className="fl">Job</label>
               <select className="fi" value={nr.jobId} onChange={e=>setNr(p=>({...p,jobId:e.target.value,taskId:""}))}>
                 <option value="">Select Job</option>{jobs.filter(j=>j.status!=="closed").map(j=><option key={j.id} value={j.id}>{j.name}</option>)}</select></div>
             <div className="fg"><label className="fl">Task (optional)</label>
               <select className="fi" value={nr.taskId} onChange={e=>setNr(p=>({...p,taskId:e.target.value}))} disabled={!nr.jobId}>
                 <option value="">General / No task</option>{jobTasks.map(t=><option key={t.id} value={t.id}>{t.title}</option>)}</select></div>
-          </div>
+          </div>}
           <div className="fg"><label className="fl">Submitted By</label>
             <select className="fi" value={nr.crewId} onChange={e=>setNr(p=>({...p,crewId:e.target.value}))}>
               <option value="">Admin (me)</option>
@@ -3574,7 +3611,7 @@ ${r.dataUrl
             }</div>
           <div className="macts">
             <button className="btn btn-s" onClick={()=>setModal(false)}>Cancel</button>
-            <button className="btn btn-p" onClick={addReceipt} disabled={busy||!nr.jobId||!nr.store||!nr.amount}>
+            <button className="btn btn-p" onClick={addReceipt} disabled={busy||!nr.store||!nr.amount||(nr.dest==="job"&&!nr.jobId)||(nr.dest==="custom"&&!nr.customCat.trim())}>
               {busy?<span className="spin" />:<><Icon n="check" s={14} /> Save Receipt</>}
             </button>
           </div>
@@ -4588,7 +4625,7 @@ function AdminFieldMode({ jobs, tasks, setTasks, photos, setPhotos, receipts, se
     const usingJob = rcDest === "job";
     if ((usingJob && !selJob) || !rcForm.store || !rcForm.amount) return;
     if (rcDest === "custom" && !rcCustomCat.trim()) return;
-    const category = rcDest === "office" ? "Office" : rcDest === "auto" ? "Auto" : rcDest === "custom" ? rcCustomCat.trim() : null;
+    const category = rcDestCategory(rcDest, rcCustomCat);
     const jobIdVal = usingJob ? selJob : null;
     setRcBusy(true);
     const id = "r" + Date.now();
@@ -4799,7 +4836,7 @@ function AdminFieldMode({ jobs, tasks, setTasks, photos, setPhotos, receipts, se
               <div className="fg">
                 <label className="fl">Charge this to</label>
                 <div style={{ display:"flex", gap:6, flexWrap:"wrap", marginBottom: rcDest==="custom" ? 8 : 12 }}>
-                  {[["job","🏗 Job"],["office","🏢 Office"],["auto","🚗 Auto"],["custom","📌 Custom"]].map(([k,label]) => (
+                  {[["job","🏗 Job"],...RC_OVERHEAD.map(([k,label])=>[k,label]),["custom","📌 Custom"]].map(([k,label]) => (
                     <button key={k} className={`btn btn-sm ${rcDest===k?"btn-a":"btn-s"}`} onClick={()=>setRcDest(k)}>{label}</button>
                   ))}
                 </div>

@@ -17,8 +17,12 @@ export default async (req) => {
   catch { return new Response("Bad JSON", { status: 400 }); }
   if (!to || !body) return new Response("Need 'to' and 'body'", { status: 400 });
 
+  // Normalize to E.164 — strip non-digits, add +1 for US 10-digit numbers
+  const digits = to.replace(/\D/g, "");
+  const normalized = digits.length === 10 ? `+1${digits}` : digits.length === 11 && digits[0] === "1" ? `+${digits}` : to;
+
   const creds = Buffer.from(`${TW_SID}:${TW_TOKEN}`).toString("base64");
-  const params = new URLSearchParams({ To: to, From: TW_FROM, Body: body });
+  const params = new URLSearchParams({ To: normalized, From: TW_FROM, Body: body });
 
   const res = await fetch(`https://api.twilio.com/2010-04-01/Accounts/${TW_SID}/Messages.json`, {
     method: "POST",

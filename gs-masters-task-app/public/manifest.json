@@ -1,13 +1,37 @@
 {
   "short_name": "GSM Field",
-  "name": "GS Masters Field App",
+  "name": "GSM Custom Building Task App",
   "description": "Task management for G.S. Masters construction crews",
   "icons": [
-    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable" },
-    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+    { "src": "icon-admin.png", "sizes": "1024x1024", "type": "image/png", "purpose": "any maskable" },
+    { "src": "icon-192.png",   "sizes": "192x192",   "type": "image/png", "purpose": "any maskable" },
+    { "src": "icon-512.png",   "sizes": "512x512",   "type": "image/png", "purpose": "any maskable" }
   ],
-  "start_url": ".",
-  "scope": ".",
+  "shortcuts": [
+    {
+      "name": "Add Receipt",
+      "short_name": "Receipt",
+      "description": "Quickly add an expense receipt",
+      "url": "/?tab=rec",
+      "icons": [{ "src": "icon-192.png", "sizes": "192x192", "type": "image/png" }]
+    },
+    {
+      "name": "Add Photo",
+      "short_name": "Photo",
+      "description": "Take or upload a job photo",
+      "url": "/?tab=cam",
+      "icons": [{ "src": "icon-192.png", "sizes": "192x192", "type": "image/png" }]
+    },
+    {
+      "name": "My Tasks",
+      "short_name": "Tasks",
+      "description": "View today's tasks and dispatch",
+      "url": "/?tab=tasks",
+      "icons": [{ "src": "icon-192.png", "sizes": "192x192", "type": "image/png" }]
+    }
+  ],
+  "start_url": "/",
+  "scope": "/",
   "display": "standalone",
   "orientation": "portrait-primary",
   "theme_color": "#0f1923",

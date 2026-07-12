@@ -1,0 +1,15 @@
+{
+  "name": "GSM Receipt Capture",
+  "short_name": "GSM Receipt",
+  "description": "Quick receipt capture for GS Masters field crew",
+  "start_url": "/receipt/",
+  "scope": "/receipt/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0f1923",
+  "theme_color": "#0f1923",
+  "icons": [
+    { "src": "/icon-crew.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable" },
+    { "src": "/icon-crew.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ]
+}
