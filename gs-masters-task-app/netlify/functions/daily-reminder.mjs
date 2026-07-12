@@ -1,10 +1,10 @@
 // ════════════════════════════════════════════════════════════════════════
-//  GS MASTERS FIELD APP — Daily Reminder + Auto Clock-Out
+//  GS MASTERS FIELD APP — Evening Reminder
 //  Scheduled Netlify Function — 22:30 UTC ≈ 5:30 PM Central (CDT)
 //  1. Texts crew who are still clocked in — "time to check out"
-//  2. Auto-closes all open check-ins (marks auto_closed = true)
-//  3. Texts crew who haven't logged today
-//  4. Sends admin daily summary
+//  2. Texts crew who haven't logged today
+//  3. Sends admin daily summary (incl. who is still on the clock)
+//  NO auto-close — stale check-in modal forces real checkout time next open.
 // ════════════════════════════════════════════════════════════════════════
 
 // Falls back to the anon key (RLS allows full anon access on all field_* tables)
@@ -40,8 +40,10 @@ async function sbPatch(path, body) {
 
 async function sendSMS(to, body) {
   if (!TW_SID || !TW_TOKEN || !TW_FROM) return;
+  const digits = to.replace(/\D/g, "");
+  const normalized = digits.length === 10 ? `+1${digits}` : `+${digits}`;
   const creds = Buffer.from(`${TW_SID}:${TW_TOKEN}`).toString("base64");
-  const params = new URLSearchParams({ To: to, From: TW_FROM, Body: body });
+  const params = new URLSearchParams({ To: normalized, From: TW_FROM, Body: body });
   const res = await fetch(`https://api.twilio.com/2010-04-01/Accounts/${TW_SID}/Messages.json`, {
     method: "POST",
     headers: { Authorization: `Basic ${creds}`, "Content-Type": "application/x-www-form-urlencoded" },
@@ -54,7 +56,8 @@ async function sendSMS(to, body) {
 export default async (req) => {
   const today = localDate();
   const now = new Date().toISOString();
-  const results = { date: today, checkoutReminders: [], autoClosed: [], logReminders: [], adminSummary: null };
+  const results = { date: today, checkoutReminders: [], logReminders: [], adminSummary: null };
+  let stillOpenNames = [];
 
   try {
     // ── 1. FIND CREW STILL CLOCKED IN ────────────────────────────────
@@ -71,6 +74,7 @@ export default async (req) => {
       const profileMap = Object.fromEntries((profiles || []).map(p => [p.id, p]));
       const jobMap     = Object.fromEntries((jobs || []).map(j => [j.id, j]));
 
+      stillOpenNames = [...new Set(openCheckins.map(c => profileMap[c.crew_id]?.name).filter(Boolean))];
       for (const ci of openCheckins) {
         const p = profileMap[ci.crew_id];
         const j = jobMap[ci.job_id];
@@ -89,18 +93,9 @@ export default async (req) => {
       }
     }
 
-    // ── 3. AUTO-CLOSE all open check-ins ─────────────────────────────
-    for (const ci of (openCheckins || [])) {
-      const hrs = Math.round((new Date(now) - new Date(ci.check_in)) / 36000) / 100;
-      try {
-        await sbPatch(`field_checkins?id=eq.${ci.id}`, {
-          check_out: now, hours: hrs, auto_closed: true, method: "auto",
-        });
-        results.autoClosed.push({ id: ci.id, closed: true });
-      } catch (e) {
-        results.autoClosed.push({ id: ci.id, closed: false, error: e.message });
-      }
-    }
+    // ── 3. NO AUTO-CLOSE — crew must enter real checkout time.
+    // If they ignore tonight's texts, the app blocks them with the stale
+    // check-in modal next morning until they enter when they actually left.
 
     // ── 4. LOG REMINDERS to crew who haven't logged today ─────────────
     if (TW_SID) {
@@ -140,6 +135,7 @@ export default async (req) => {
           const summary = [
             `📋 GSM Daily Summary — ${today}`,
             `👷 ${workedToday} crew worked · ${totalHours.toFixed(1)} hrs total`,
+            stillOpenNames.length ? `⏰ Still clocked in: ${stillOpenNames.join(", ")}` : "",
             receiptTotal > 0 ? `🧾 Receipts: $${receiptTotal.toFixed(2)}` : "",
             issues?.length ? `🚩 ${issues.length} issue(s) flagged` : "",
             mats?.length ? `🔧 ${mats.length} material request(s) pending` : "",
