@@ -10,9 +10,10 @@ const TW_SID  = process.env.TWILIO_ACCOUNT_SID;
 const TW_TOKEN = process.env.TWILIO_AUTH_TOKEN;
 const TW_FROM = process.env.TWILIO_FROM;
 const APP_URL = process.env.APP_URL || "https://quiet-seahorse-2ba028.netlify.app";
-const TZ_OFFSET = parseInt(process.env.REMINDER_TZ_OFFSET || "-5", 10);
 
-const localDate = () => new Date(Date.now() + TZ_OFFSET * 3600000).toISOString().split("T")[0];
+// DST-proof: real Central time, not a fixed offset
+const localDate  = () => new Intl.DateTimeFormat("en-CA", { timeZone: "America/Chicago" }).format(new Date());
+const centralHour = () => parseInt(new Intl.DateTimeFormat("en-US", { timeZone: "America/Chicago", hour: "numeric", hour12: false }).format(new Date()), 10);
 
 async function sbGet(path) {
   const r = await fetch(`${SB_URL}/rest/v1/${path}`, {
@@ -38,6 +39,8 @@ async function sendSMS(to, body) {
 
 export default async () => {
   if (!TW_SID || !TW_TOKEN || !TW_FROM) return new Response("Missing Twilio env", { status: 500 });
+  // Cron fires at both UTC hours; only the one that is 7am Central proceeds
+  if (centralHour() !== 7) return new Response(JSON.stringify({ skipped: "not 7am Central" }), { status: 200 });
   const today = localDate();
   const results = { date: today, sent: [], skipped: [] };
 
@@ -77,5 +80,5 @@ export default async () => {
   }
 };
 
-// 12:00 UTC = 7:00 AM CDT (Alabama summer). Winter CST: "0 13 * * 1-6". No Sunday texts.
-export const config = { schedule: "0 12 * * 1-6" };
+// Fires 12:00 + 13:00 UTC Mon-Sat; centralHour() guard picks whichever is 7am CT (CDT or CST). No Sunday texts.
+export const config = { schedule: "0 12,13 * * 1-6" };

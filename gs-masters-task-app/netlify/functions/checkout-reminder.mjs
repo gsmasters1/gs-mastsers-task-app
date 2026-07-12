@@ -30,13 +30,15 @@ async function sendSMS(to, body) {
   return r.json();
 }
 
+const centralHour = () => parseInt(new Intl.DateTimeFormat("en-US", { timeZone: "America/Chicago", hour: "numeric", hour12: false }).format(new Date()), 10);
+
 export default async () => {
   if (!TW_SID) return new Response("Missing Twilio env", { status: 500 });
+  // Cron fires at both UTC hours; only the one that is 6pm Central proceeds
+  if (centralHour() !== 18) return new Response(JSON.stringify({ skipped: "not 6pm Central" }), { status: 200 });
 
-  // Today in Central time (UTC-5 CDT)
-  const now = new Date();
-  const central = new Date(now.getTime() - 5 * 3600000);
-  const today = central.toISOString().split("T")[0];
+  // Today in Central time (DST-proof)
+  const today = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Chicago" }).format(new Date());
 
   const checkins = await sbFetch(`field_checkins?work_date=eq.${today}&check_out=is.null&select=id,crew_id,job_id,check_in`);
   if (!checkins?.length) return new Response(JSON.stringify({ sent: 0, note: "No open check-ins" }), { status: 200 });
@@ -68,4 +70,5 @@ export default async () => {
   return new Response(JSON.stringify({ sent, count: sent.length }), { status: 200, headers: { "Content-Type": "application/json" } });
 };
 
-export const config = { schedule: "0 23 * * *" };
+// Fires 23:00 + 00:00 UTC; centralHour() guard picks whichever is 6pm CT (CDT or CST).
+export const config = { schedule: "0 0,23 * * *" };

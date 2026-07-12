@@ -3376,11 +3376,35 @@ ${r.dataUrl
   const pendingReimb = receipts.filter(r => r.paidBy === "crew" && r.reimbursementStatus !== "paid");
   const total = receipts.reduce((s, r) => s + (+r.amount || 0), 0);
 
+  const gsmEligible = receipts.filter(r => {
+    const j = jobs.find(x => x.id === r.jobId);
+    return j?.gsmSync && j?.gsmJobId && r.billStatus !== "posted";
+  });
+  const [postingAll, setPostingAll] = useState(false);
+  const postAllToGSM = async () => {
+    if (!gsmEligible.length || postingAll) return;
+    setPostingAll(true);
+    let ok = 0;
+    for (const r of gsmEligible) {
+      const cr = users.find(u => u.id === r.crewId);
+      if (await pushReceiptToGSM(r, jobs, cr?.name)) {
+        ok++;
+        setReceipts(p => p.map(x => x.id === r.id ? { ...x, billStatus: "posted", integrationSentAt: new Date().toISOString() } : x));
+      }
+    }
+    setPostingAll(false);
+    alert(`Posted ${ok} of ${gsmEligible.length} receipt${gsmEligible.length !== 1 ? "s" : ""} to GSM Builder`);
+  };
+
   return (
     <div>
       <div className="flexb" style={{ marginBottom: 8 }}>
         <h2 className="h2">Receipts</h2>
         <div style={{ display: "flex", gap: 8 }}>
+          {gsmEligible.length > 0 && <button className="btn btn-s btn-sm" disabled={postingAll} onClick={postAllToGSM}
+            style={{ background:"rgba(59,130,246,.15)", color:"var(--sky2)", border:"1px solid rgba(59,130,246,.35)" }}>
+            {postingAll ? <span className="spin" /> : <>Post All → GSM ({gsmEligible.length})</>}
+          </button>}
           {receipts.length > 0 && <button className="btn btn-s btn-sm" onClick={exportBills}><Icon n="receipt" s={14} /> Export for Bills</button>}
           <button className="btn btn-p" onClick={() => setModal(true)}><Icon n="plus" s={16} /> Add Receipt</button>
         </div>
@@ -3883,17 +3907,35 @@ function Jobs({ jobs, setJobs, tasks }) {
   const [modal, setModal] = useState(false);
   const [confirm, setConfirm] = useState(null);
   const [syncConfirm, setSyncConfirm] = useState(null);
-  const [nj, setNj] = useState({ name: "", street: "", city: "", state: "AL", gsmSync: false });
+  const [nj, setNj] = useState({ name: "", street: "", city: "", state: "AL", gsmSync: false, gsmJobId: "" });
   const [showClosed, setShowClosed] = useState(false);
+  const [gsmJobs, setGsmJobs] = useState([]); // live list from GSM Builder for the link dropdown
+
+  useEffect(() => {
+    sbGet("gsm_jobs", "select=id,data").then(rows => {
+      setGsmJobs((rows || []).map(r => ({ id: r.id, name: r.data?.name || r.id, status: r.data?.status || "" }))
+        .filter(j => j.status !== "Complete").sort((a, b) => a.id.localeCompare(b.id)));
+    }).catch(() => {});
+  }, []);
+
+  const GsmJobSelect = ({ value, onChange, style }) => (
+    <select className="fi" style={style} value={value || ""} onChange={e => onChange(e.target.value)}>
+      <option value="">— Not linked —</option>
+      {gsmJobs.map(g => <option key={g.id} value={g.id}>{g.id} · {g.name}</option>)}
+      {value && !gsmJobs.some(g => g.id === value) && <option value={value}>{value}</option>}
+    </select>
+  );
 
   const add = async () => {
     if (!nj.name || !nj.street) return;
     const id = "j" + Date.now();
     const address = [nj.street, nj.city, nj.state].filter(Boolean).join(", ");
-    const job = { id, name: nj.name, address, status: "active", gsmSync: nj.gsmSync, gsmJobId: null };
-    setJobs(p => [...p, job]); setNj({ name: "", street: "", city: "", state: "AL", gsmSync: false }); setModal(false);
-    try { await sbPost("field_jobs", { id, name: nj.name, address, status: "active", gsm_sync: nj.gsmSync }); }
-    catch { enqueue({ table: "field_jobs", payload: { id, name: nj.name, address, status: "active", gsm_sync: nj.gsmSync } }); }
+    const gsmJobId = nj.gsmSync ? (nj.gsmJobId || null) : null;
+    const job = { id, name: nj.name, address, status: "active", gsmSync: nj.gsmSync, gsmJobId };
+    setJobs(p => [...p, job]); setNj({ name: "", street: "", city: "", state: "AL", gsmSync: false, gsmJobId: "" }); setModal(false);
+    const row = { id, name: nj.name, address, status: "active", gsm_sync: nj.gsmSync, gsm_job_id: gsmJobId };
+    try { await sbPost("field_jobs", row); }
+    catch { enqueue({ table: "field_jobs", payload: row }); }
   };
 
   const setStatus = async (id, status) => {
@@ -3948,17 +3990,16 @@ function Jobs({ jobs, setJobs, tasks }) {
             </div>
             {job.gsmSync && (
               <div style={{ marginBottom: 12, padding: "8px 10px", background: "rgba(16,185,129,.08)", borderRadius: 8, border: "1px solid rgba(16,185,129,.2)" }}>
-                <label style={{ fontSize: 10, color: "var(--green)", display: "block", marginBottom: 4, letterSpacing: 1, textTransform: "uppercase", fontWeight: 700 }}>GSM Builder Job ID</label>
-                <input className="fi" style={{ padding: "6px 10px", fontSize: 12 }}
-                  placeholder="JOB-001" defaultValue={job.gsmJobId || ""}
-                  onBlur={async e => {
-                    const val = e.target.value.trim().toUpperCase();
-                    if (val === (job.gsmJobId || "")) return;
-                    setJobs(p => p.map(j => j.id === job.id ? { ...j, gsmJobId: val } : j));
+                <label style={{ fontSize: 10, color: "var(--green)", display: "block", marginBottom: 4, letterSpacing: 1, textTransform: "uppercase", fontWeight: 700 }}>GSM Builder Job</label>
+                <GsmJobSelect value={job.gsmJobId} style={{ padding: "6px 10px", fontSize: 12 }}
+                  onChange={async val => {
+                    setJobs(p => p.map(j => j.id === job.id ? { ...j, gsmJobId: val || null } : j));
                     try { await sbPatch("field_jobs", job.id, { gsm_job_id: val || null }); } catch {}
                   }} />
-                <div style={{ fontSize: 10, color: job.gsmJobId ? "var(--green)" : "var(--silver)", marginTop: 4 }}>
-                  {job.gsmJobId ? "Linked to GSM Builder " + job.gsmJobId : "Enter the Job ID from GSM Builder (e.g. JOB-001)"}
+                <div style={{ fontSize: 10, color: job.gsmJobId ? "var(--green)" : "var(--orange)", marginTop: 4 }}>
+                  {job.gsmJobId
+                    ? "Linked to GSM Builder " + job.gsmJobId
+                    : "⚠ Not linked — hours, receipts & tasks will NOT appear in GSM Builder"}
                 </div>
               </div>
             )}
@@ -4013,7 +4054,17 @@ function Jobs({ jobs, setJobs, tasks }) {
                 <span style={{ position: "absolute", top: 3, left: nj.gsmSync ? 25 : 3, width: 20, height: 20, borderRadius: "50%", background: "#fff", transition: ".2s" }} />
               </button>
             </div>
-            {nj.gsmSync && <p style={{ fontSize: 11, color: "var(--green)", marginTop: 8 }}>✓ This job will sync tasks & receipts to GSM Builder</p>}
+            {nj.gsmSync && (
+              <div style={{ marginTop: 10 }}>
+                <label style={{ fontSize: 10, color: "var(--green)", display: "block", marginBottom: 4, letterSpacing: 1, textTransform: "uppercase", fontWeight: 700 }}>Link to GSM Builder Job</label>
+                <GsmJobSelect value={nj.gsmJobId} onChange={val => setNj(p => ({ ...p, gsmJobId: val }))} style={{ padding: "6px 10px", fontSize: 12 }} />
+                <p style={{ fontSize: 11, color: nj.gsmJobId ? "var(--green)" : "var(--orange)", marginTop: 6 }}>
+                  {nj.gsmJobId
+                    ? "✓ Hours, receipts & tasks will flow into " + nj.gsmJobId
+                    : "⚠ Pick the GSM Builder job now — without a link, nothing reaches accounting. Create the job in GSM Builder first if it's not in the list."}
+                </p>
+              </div>
+            )}
           </div>
           <div className="macts"><button className="btn btn-s" onClick={() => setModal(false)}>Cancel</button>
             <button className="btn btn-p" onClick={add}>Add Job</button></div></div></div>}
@@ -6915,6 +6966,8 @@ function CrewReceipts(props) {
   const my = tasks.filter(t => Array.isArray(t.assignedTo) ? t.assignedTo.includes(user.id) : t.assignedTo === user.id);
   const [task, setTask] = useState(""); const [store, setStore] = useState(""); const [amount, setAmount] = useState(""); const [note, setNote] = useState(""); const [paidBy, setPaidBy] = useState("crew"); const [dataUrl, setDataUrl] = useState(null); const [busy, setBusy] = useState(false); const [done, setDone] = useState(false);
   const [showArchive, setShowArchive] = useState(false);
+  const [dest, setDest] = useState("task"); // "task" | "office" | "auto" | "tools"
+  const es = lang === "es";
   const fileRef = useRef();
   const camRef  = useRef();
   const capturePhoto = async e => {
@@ -6924,18 +6977,20 @@ function CrewReceipts(props) {
     e.target.value = "";
   };
   const submit = async () => {
-    if (!task || !store || !amount) return;
+    const usingTask = dest === "task";
+    if ((usingTask && !task) || !store || !amount) return;
     setBusy(true);
-    const tk = tasks.find(t => t.id === task);
+    const tk = usingTask ? tasks.find(t => t.id === task) : null;
+    const category = usingTask ? null : rcDestCategory(dest);
     const id = "r" + Date.now();
     const today = localDate();
     let storagePath = null;
     if (dataUrl) { try { storagePath = await uploadToStorage(dataUrl, `${user.id}/${id}.jpg`); } catch {} }
-    const receipt = { id, dataUrl, taskId: task, jobId: tk?.jobId, crewId: user.id, store, amount, note, paidBy, reimbursementStatus: paidBy === "crew" ? "pending" : "na", createdAt: today };
+    const receipt = { id, dataUrl, taskId: usingTask ? task : null, jobId: tk?.jobId || null, category, crewId: user.id, store, amount, note, paidBy, reimbursementStatus: paidBy === "crew" ? "pending" : "na", createdAt: today };
     setReceipts(p => [...p, receipt]);
-    const row = { id, data_url: storagePath ? null : dataUrl, storage_path: storagePath, task_id: task, job_id: tk?.jobId, crew_id: user.id, store, amount: parseFloat(amount) || 0, note, paid_by: paidBy, reimbursement_status: paidBy === "crew" ? "pending" : "na" };
+    const row = { id, data_url: storagePath ? null : dataUrl, storage_path: storagePath, task_id: usingTask ? task : null, job_id: tk?.jobId || null, category, crew_id: user.id, store, amount: parseFloat(amount) || 0, note, paid_by: paidBy, reimbursement_status: paidBy === "crew" ? "pending" : "na" };
     try { await sbPost("field_receipts", row); } catch { enqueue({ table: "field_receipts", payload: row }); }
-    setTask(""); setStore(""); setAmount(""); setNote(""); setPaidBy("crew"); setDataUrl(null); setBusy(false);
+    setTask(""); setStore(""); setAmount(""); setNote(""); setPaidBy("crew"); setDataUrl(null); setBusy(false); setDest("task");
     setDone(true); setTimeout(() => setDone(false), 3000);
   };
   return (
@@ -6944,9 +6999,16 @@ function CrewReceipts(props) {
       {done && <div style={{ padding: "10px 14px", background: "rgba(16,185,129,.15)", border: "1px solid rgba(16,185,129,.3)", borderRadius: 10, marginBottom: 16, color: "var(--green)", fontWeight: 600 }}>✓ {t.receiptSubmitted}</div>}
       <div className="card">
         <p className="muted" style={{ marginBottom: 14, fontSize: 13 }}>{t.snapReceipt}</p>
-        <div className="fg"><label className="fl">{t.task}</label>
+        <div className="fg"><label className="fl">{es ? "Cobrar a" : "Charge to"}</label>
+          <div style={{ display:"flex", gap:6, flexWrap:"wrap" }}>
+            {[["task", es ? "🏗 Trabajo" : "🏗 Job Task"],["tools", es ? "🔧 Herramientas" : "🔧 Tools"],["auto", es ? "🚗 Auto" : "🚗 Auto"],["office", es ? "🏢 Oficina" : "🏢 Office"]].map(([k,label]) => (
+              <button key={k} className={`btn btn-sm ${dest===k?"btn-a":"btn-s"}`} onClick={()=>setDest(k)}>{label}</button>
+            ))}
+          </div>
+        </div>
+        {dest === "task" && <div className="fg"><label className="fl">{t.task}</label>
           <select className="fi" value={task} onChange={e => setTask(e.target.value)}><option value="">{t.choose}</option>
-            {my.map(tk => { const j = jobs.find(j => j.id === tk.jobId); return <option key={tk.id} value={tk.id}>{j?.name} — {tk.title}</option>; })}</select></div>
+            {my.map(tk => { const j = jobs.find(j => j.id === tk.jobId); return <option key={tk.id} value={tk.id}>{j?.name} — {tk.title}</option>; })}</select></div>}
         <div className="grid2"><div className="fg"><label className="fl">{t.store}</label>
           <input className="fi" value={store} onChange={e => setStore(e.target.value)} placeholder="Home Depot" /></div>
           <div className="fg"><label className="fl">{t.amount} ($)</label>
@@ -6977,7 +7039,7 @@ function CrewReceipts(props) {
               </div>
           }
         </div>
-        <button className="btn btn-p btn-full" disabled={!task || !store || !amount || busy} onClick={submit}>
+        <button className="btn btn-p btn-full" disabled={(dest === "task" && !task) || !store || !amount || busy} onClick={submit}>
           {busy ? <span className="spin" /> : <><Icon n="check" s={16} /> {t.submitReceipt}</>}
         </button>
         {(!task || !store || !amount) && <p style={{ fontSize: 11, color: "var(--slate)", marginTop: 8, textAlign: "center" }}>{t.requireFields}</p>}

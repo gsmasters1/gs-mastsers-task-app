@@ -14,12 +14,10 @@ const TW_SID   = process.env.TWILIO_ACCOUNT_SID;
 const TW_TOKEN = process.env.TWILIO_AUTH_TOKEN;
 const TW_FROM  = process.env.TWILIO_FROM;
 const APP_URL  = process.env.APP_URL || "https://quiet-seahorse-2ba028.netlify.app";
-const TZ_OFFSET = parseInt(process.env.REMINDER_TZ_OFFSET || "-5", 10);
 
-function localDate() {
-  const now = new Date();
-  return new Date(now.getTime() + TZ_OFFSET * 3600 * 1000).toISOString().split("T")[0];
-}
+// DST-proof: real Central time, not a fixed offset
+const localDate  = () => new Intl.DateTimeFormat("en-CA", { timeZone: "America/Chicago" }).format(new Date());
+const centralHour = () => parseInt(new Intl.DateTimeFormat("en-US", { timeZone: "America/Chicago", hour: "numeric", hour12: false }).format(new Date()), 10);
 
 async function sbGet(path) {
   const res = await fetch(`${SB_URL}/rest/v1/${path}`, {
@@ -54,6 +52,8 @@ async function sendSMS(to, body) {
 }
 
 export default async (req) => {
+  // Cron fires at both UTC hours; only the one that is 5:30pm Central proceeds
+  if (centralHour() !== 17) return new Response(JSON.stringify({ skipped: "not 5:30pm Central" }), { status: 200 });
   const today = localDate();
   const now = new Date().toISOString();
   const results = { date: today, checkoutReminders: [], logReminders: [], adminSummary: null };
@@ -157,7 +157,7 @@ export default async (req) => {
 };
 
 // ── SCHEDULE ──────────────────────────────────────────────────────────
-// 22:30 UTC = 5:30 PM CDT (UTC-5, Alabama summer). For CST (winter): "30 23 * * *"
+// Fires 22:30 + 23:30 UTC; centralHour() guard picks whichever is 5:30pm CT (CDT or CST).
 export const config = {
-  schedule: "30 22 * * *",
+  schedule: "30 22,23 * * *",
 };
