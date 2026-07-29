@@ -6572,8 +6572,16 @@ function CrewTasks(props) {
         : groups.map(jid => {
           const job = jobs.find(j => j.id === jid);
           const jt = myRegularVisible.filter(t => t.jobId === jid).sort((a, b) => {
-            if (a.priority === "urgent" && b.priority !== "urgent") return -1;
-            if (a.priority !== "urgent" && b.priority === "urgent") return 1;
+            // Unfinished tasks always float above ones already marked done.
+            const aDone = a.status === "done", bDone = b.status === "done";
+            if (aDone !== bDone) return aDone ? 1 : -1;
+            // Urgent next, regardless of due date.
+            const aUrgent = a.priority === "urgent", bUrgent = b.priority === "urgent";
+            if (aUrgent !== bUrgent) return aUrgent ? -1 : 1;
+            // Then soonest due date first — undated tasks sort last within their tier.
+            const aDate = a.dueDate || "9999-99-99";
+            const bDate = b.dueDate || "9999-99-99";
+            if (aDate !== bDate) return aDate < bDate ? -1 : 1;
             return 0;
           });
           const ci = checkedJob?.id === jid;
