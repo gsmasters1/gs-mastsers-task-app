@@ -314,9 +314,14 @@ async function translateText(text, target, key) {
   // Use es-419 (Latin American Spanish) for Mexican crew — NOT generic "es"
   const lang = target === "es" ? "es-419" : target;
   try {
-    const r = await fetch(`https://translation.googleapis.com/language/translate/v2?key=${key}`,
-      { method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ q: text, target: lang, format: "text" }) });
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 8000); // a hung fetch shouldn't hang the caller
+    let r;
+    try {
+      r = await fetch(`https://translation.googleapis.com/language/translate/v2?key=${key}`,
+        { method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ q: text, target: lang, format: "text" }), signal: ctrl.signal });
+    } finally { clearTimeout(timer); }
     const d = await r.json();
     return d?.data?.translations?.[0]?.translatedText || text;
   } catch { return text; }
@@ -388,6 +393,10 @@ const T = {
     taskCheckSub:"Tap any task you worked on or finished today. Didn't touch it? Leave it and continue.",
     completedTodayBtn:"✅ Completed", workedOnItBtn:"🔧 Worked On It", continueBtn:"Continue",
     needPhotoFirst:"This task needs a photo before it can be marked complete — go back and add one, or mark that you worked on it instead.",
+    otherWorkLabel:"Worked on something not on this list?",
+    otherWorkPlaceholder:"Type it in English or Spanish — we'll translate it for the office.",
+    logOtherBtn:"+ Log It",
+    needOneLogged:"Tag at least one task, or log what you worked on below, before you go.",
     // GPS
     onSite:"On site", fromSite:"from site",
     // net / greeting
@@ -446,6 +455,10 @@ const T = {
     taskCheckSub:"Marca cualquier tarea en la que trabajaste o que terminaste hoy. ¿No la tocaste? Déjala y continúa.",
     completedTodayBtn:"✅ Completada", workedOnItBtn:"🔧 Trabajé en Esto", continueBtn:"Continuar",
     needPhotoFirst:"Esta tarea necesita una foto antes de marcarla como completa — agrega una foto, o marca que trabajaste en ella.",
+    otherWorkLabel:"¿Trabajaste en algo que no está en esta lista?",
+    otherWorkPlaceholder:"Escríbelo en inglés o español — lo traduciremos para la oficina.",
+    logOtherBtn:"+ Registrarlo",
+    needOneLogged:"Marca al menos una tarea, o escribe abajo en qué trabajaste, antes de salir.",
     // GPS
     onSite:"En el sitio", fromSite:"del sitio",
     // net / greeting
@@ -1245,9 +1258,10 @@ export default function App() {
   // ── Logout task reminder — surfaces today's unlogged assigned tasks ──
   // Fixes crew constantly forgetting to log work: on logout we check the
   // job site(s) they clocked into today for any assigned pending task with
-  // no "worked on" or "completed" entry yet, and prompt for them. Purely
-  // opt-in — Continue always proceeds, nothing is assumed about tasks
-  // they don't tap.
+  // no "worked on" or "completed" entry yet, and prompt for them. Opt-in
+  // per task — nothing is assumed about tasks they don't tap — but they
+  // must account for at least one thing (a tagged task or an off-list
+  // note) before Continue unlocks.
   const requestLogout = async () => {
     if (user.role !== "crew") { logout(); return; }
     try {
@@ -1303,6 +1317,29 @@ export default function App() {
     try { await sbPost("field_logs", row); } catch { enqueue({ table: "field_logs", payload: row }); }
   };
 
+  // Off-list work — save the raw text immediately (never lose it to a
+  // slow/failed translate call), then backfill both language columns via
+  // Google Translate. Don't infer which language they typed — translate
+  // to both en and es independently so it's right either way.
+  const logOtherWorkGeneral = async (text) => {
+    const todayD = localDate();
+    const logId = "l" + Date.now();
+    const log = { id: logId, en: text, es: text, weather: "", taskId: null, jobId: null, crewId: user.id, date: todayD };
+    setLogs(p => [...p, log]);
+    const row = { id: logId, text_en: text, text_es: text, task_id: null, job_id: null, crew_id: user.id, log_date: todayD };
+    try { await sbPost("field_logs", row); } catch { enqueue({ table: "field_logs", payload: row }); return; }
+    if (settings?.gtKey) {
+      try {
+        const [en, es] = await Promise.all([
+          translateText(text, "en", settings.gtKey),
+          translateText(text, "es", settings.gtKey),
+        ]);
+        setLogs(p => p.map(l => l.id === logId ? { ...l, en, es } : l));
+        try { await sbPatch("field_logs", logId, { text_en: en, text_es: es }); } catch {}
+      } catch {}
+    }
+  };
+
   const shared = { user, lang, t, jobs, setJobs, tasks, setTasks, receipts, setReceipts,
                    logs, setLogs, photos, setPhotos, mats, setMats, settings, saveSettings, users,
                    online, setActive, setIs1099, addUser, updateUser, removeUser, archiveCrew, unarchiveCrew,
@@ -1322,7 +1359,7 @@ export default function App() {
       <InstallPrompt lang={lang} externalShow={showInstall} onExternalClose={() => setShowInstall(false)} />
       {logoutGateTasks && (
         <LogoutTaskGate tasks={logoutGateTasks} jobs={jobs} lang={lang} t={t}
-          onComplete={resolveTaskComplete} onWorkedOn={resolveTaskWorkedOn}
+          onComplete={resolveTaskComplete} onWorkedOn={resolveTaskWorkedOn} onLogOther={logOtherWorkGeneral}
           onDone={() => { setLogoutGateTasks(null); logout(); }} />
       )}
     </div>
@@ -1331,15 +1368,31 @@ export default function App() {
 
 // ─── TASK CHECK PROMPT ────────────────────────────────────────────────
 // Reminds crew to log today's tasks before they check out / log out.
-// Opt-in per task — only tag the ones actually worked on or finished.
-// Never forces a claim on a task nobody touched, and "Continue" always
-// works so it never traps anyone at the job site.
-function LogoutTaskGate({ tasks, jobs, lang, t, onComplete, onWorkedOn, onDone }) {
+// Opt-in per task — only tag the ones actually worked on or finished,
+// never a forced claim on a task nobody touched. But Continue needs at
+// least ONE thing logged (a tagged task, or a typed off-list note) —
+// someone who was on site did something, and that's what stops the
+// "everyone forgets to log" problem without lying about which task.
+function LogoutTaskGate({ tasks, jobs, lang, t, onComplete, onWorkedOn, onLogOther, onDone }) {
   const [resolved, setResolved] = useState({}); // { [taskId]: 'done' | 'worked' }
   const [busyId, setBusyId] = useState(null);
   const [warnId, setWarnId] = useState(null);
+  const [otherText, setOtherText] = useState("");
+  const [otherBusy, setOtherBusy] = useState(false);
+  const [otherSaved, setOtherSaved] = useState(false);
+  const [otherLogCount, setOtherLogCount] = useState(0);
   const tt = task => lang === "es" ? (task.titleEs || task.title) : task.title;
   const jobName = jid => jobs.find(j => j.id === jid)?.name || "";
+  const anyLogged = Object.keys(resolved).length > 0 || otherLogCount > 0;
+
+  const submitOther = async () => {
+    if (!otherText.trim()) return;
+    setOtherBusy(true);
+    try { await onLogOther(otherText.trim()); } catch {}
+    setOtherText(""); setOtherBusy(false); setOtherSaved(true);
+    setOtherLogCount(c => c + 1);
+    setTimeout(() => setOtherSaved(false), 3000);
+  };
 
   const handleComplete = async (task) => {
     setBusyId(task.id); setWarnId(null);
@@ -1407,12 +1460,34 @@ function LogoutTaskGate({ tasks, jobs, lang, t, onComplete, onWorkedOn, onDone }
               </div>
             );
           })}
+
+          {/* ── Off-list work — job they were sent to isn't always the task list ── */}
+          <div style={{ background: "rgba(255,255,255,.04)", border: "1px solid rgba(255,255,255,.08)",
+            borderRadius: 10, padding: "12px 14px", marginBottom: 10 }}>
+            <div style={{ fontSize: 13, fontWeight: 600, color: "#f8fafc", marginBottom: 6 }}>{t.otherWorkLabel}</div>
+            <textarea value={otherText} onChange={e => setOtherText(e.target.value)}
+              placeholder={t.otherWorkPlaceholder}
+              style={{ width: "100%", minHeight: 56, background: "rgba(255,255,255,.05)",
+                border: "1px solid rgba(255,255,255,.1)", borderRadius: 8, padding: 8,
+                color: "#f8fafc", fontSize: 13, fontFamily: "inherit", resize: "vertical", marginBottom: 8 }} />
+            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              <button className="btn btn-sm" style={{ background: "rgba(255,255,255,.07)", color: "#cbd5e1", border: "1px solid rgba(59,130,246,.15)" }}
+                disabled={!otherText.trim() || otherBusy} onClick={submitOther}>
+                {otherBusy ? <span className="spin" /> : t.logOtherBtn}
+              </button>
+              {otherSaved && <span style={{ fontSize: 12, color: "#10b981", fontWeight: 600 }}>✅ {t.loggedToday}</span>}
+            </div>
+          </div>
         </div>
 
         <div style={{ padding: "14px 20px 20px" }}>
+          {!anyLogged && (
+            <p style={{ fontSize: 12, color: "#f97316", marginBottom: 8, textAlign: "center" }}>{t.needOneLogged}</p>
+          )}
           <button className="btn btn-full" style={{ width: "100%", justifyContent: "center",
-              background: "linear-gradient(135deg,#059669,#10b981)", color: "#fff" }}
-            onClick={onDone}>
+              background: anyLogged ? "linear-gradient(135deg,#059669,#10b981)" : "rgba(255,255,255,.08)",
+              color: anyLogged ? "#fff" : "#64748b", cursor: anyLogged ? "pointer" : "not-allowed" }}
+            disabled={!anyLogged} onClick={onDone}>
             {t.continueBtn}
           </button>
         </div>
@@ -6412,6 +6487,24 @@ function CrewTasks(props) {
     return true;
   };
   const gateWorkedOn = async (task) => { await workedOnTask(task); };
+  const gateLogOther = async (text) => {
+    const jobId = checkoutGate?.job?.id || null;
+    const logId = "l" + Date.now();
+    const log = { id: logId, en: text, es: text, weather: "", taskId: null, jobId, crewId: user.id, date: today };
+    setLogs(p => [...p, log]);
+    const row = { id: logId, text_en: text, text_es: text, task_id: null, job_id: jobId, crew_id: user.id, log_date: today };
+    try { await sbPost("field_logs", row); } catch { enqueue({ table: "field_logs", payload: row }); return; }
+    if (settings?.gtKey) {
+      try {
+        const [en, es] = await Promise.all([
+          translateText(text, "en", settings.gtKey),
+          translateText(text, "es", settings.gtKey),
+        ]);
+        setLogs(p => p.map(l => l.id === logId ? { ...l, en, es } : l));
+        try { await sbPatch("field_logs", logId, { text_en: en, text_es: es }); } catch {}
+      } catch {}
+    }
+  };
 
   const myRecurring = tasks.filter(t =>
     t.recurring && !closedJobIds.has(t.jobId)
@@ -7024,7 +7117,7 @@ function CrewTasks(props) {
 
       {checkoutGate && (
         <LogoutTaskGate tasks={checkoutGate.tasks} jobs={jobs} lang={lang} t={t}
-          onComplete={gateComplete} onWorkedOn={gateWorkedOn}
+          onComplete={gateComplete} onWorkedOn={gateWorkedOn} onLogOther={gateLogOther}
           onDone={() => { const j = checkoutGate.job; setCheckoutGate(null); checkOut(j); }} />
       )}
 
