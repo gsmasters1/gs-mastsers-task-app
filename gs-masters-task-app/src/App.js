@@ -381,7 +381,12 @@ const T = {
     logSubmitted:"Log submitted!", notLogged:"You haven't logged today yet",
     generalLog:"General log", descWork:"Describe your work...", descWorkEs:"Describe tu trabajo...",
     // auto-log
-    completedTask:"Completed",
+    completedTask:"Completed", workedOnTask:"Worked on",
+    workedToday:"Worked On This Today", loggedToday:"Logged for Today",
+    // logout task gate
+    taskCheckTitle:"Quick Task Check", taskCheckSub:"Before you log out, tell us about today's tasks:",
+    completedTodayBtn:"✅ Completed", workedOnItBtn:"🔧 Worked On It",
+    needPhotoFirst:"This task needs a photo before it can be marked complete — go back and add one, or mark that you worked on it instead.",
     // GPS
     onSite:"On site", fromSite:"from site",
     // net / greeting
@@ -433,7 +438,12 @@ const T = {
     logSubmitted:"¡Registro enviado!", notLogged:"Aún no has registrado hoy",
     generalLog:"Registro general", descWork:"Describe tu trabajo...", descWorkEs:"Describe tu trabajo...",
     // auto-log
-    completedTask:"Completada",
+    completedTask:"Completada", workedOnTask:"Trabajó en",
+    workedToday:"Trabajé en Esto Hoy", loggedToday:"Registrado Hoy",
+    // logout task gate
+    taskCheckTitle:"Revisión Rápida de Tareas", taskCheckSub:"Antes de salir, cuéntanos sobre las tareas de hoy:",
+    completedTodayBtn:"✅ Completada", workedOnItBtn:"🔧 Trabajé en Esto",
+    needPhotoFirst:"Esta tarea necesita una foto antes de marcarla como completa — agrega una foto, o marca que trabajaste en ella.",
     // GPS
     onSite:"En el sitio", fromSite:"del sitio",
     // net / greeting
@@ -925,6 +935,7 @@ export default function App() {
   const [online, setOnline] = useState(navigator.onLine);
   const [tab, setTab] = useState("dash");
   const [showInstall, setShowInstall] = useState(false);
+  const [logoutGateTasks, setLogoutGateTasks] = useState(null); // tasks to resolve before logout is allowed
   const toggleTheme = () => setTheme(t => { const n = t === "dark" ? "light" : "dark"; localStorage.setItem("gsm_theme", n); return n; });
   const [menuOpen, setMenuOpen] = useState(false);
   const [jobs, setJobs] = useState([]);
@@ -1229,6 +1240,66 @@ export default function App() {
     </div>
   );
 
+  // ── Logout gate — crew must account for today's assigned tasks first ──
+  // Fixes crew constantly forgetting to log work: on logout we check the
+  // job site(s) they clocked into today for any assigned pending task with
+  // no "worked on" or "completed" entry yet, and block until each one is
+  // marked either worked-on or done.
+  const requestLogout = async () => {
+    if (user.role !== "crew") { logout(); return; }
+    try {
+      const todayD = localDate();
+      const checkins = await sbGet("field_checkins", `crew_id=eq.${user.id}&work_date=eq.${todayD}`);
+      const todayJobIds = new Set((checkins || []).map(c => c.job_id));
+      if (todayJobIds.size === 0) { logout(); return; }
+      const already = new Set(
+        logs.filter(l => l.crewId === user.id && l.date === todayD &&
+          (l.en?.startsWith(`${T.en.workedOnTask}:`) || l.en?.startsWith(`${T.en.completedTask}:`)))
+          .map(l => l.taskId)
+      );
+      const pend = tasks.filter(tk =>
+        tk.status === "pending" && !tk.recurring && todayJobIds.has(tk.jobId) &&
+        (Array.isArray(tk.assignedTo) ? tk.assignedTo.includes(user.id) : tk.assignedTo === user.id) &&
+        !already.has(tk.id)
+      );
+      if (pend.length === 0) { logout(); return; }
+      setLogoutGateTasks(pend);
+    } catch { logout(); } // offline/error — never trap someone from logging out
+  };
+
+  const resolveTaskComplete = async (task) => {
+    if (task.photoRequired && !photos.some(p => p.taskId === task.id)) return false;
+    const todayD = localDate();
+    setTasks(p => p.map(tk => tk.id === task.id ? { ...tk, status: "done" } : tk));
+    try { await sbPatch("field_tasks", task.id, { status: "done", completed_at: new Date().toISOString() }); } catch {}
+    const logId = "l" + Date.now();
+    const enText = `${T.en.completedTask}: ${task.title}`;
+    const esText = `${T.es.completedTask}: ${task.titleEs || task.title}`;
+    const log = { id: logId, en: enText, es: esText, weather: "", taskId: task.id, jobId: task.jobId, crewId: user.id, date: todayD };
+    setLogs(p => [...p, log]);
+    const row = { id: logId, text_en: enText, text_es: esText, task_id: task.id, job_id: task.jobId, crew_id: user.id, log_date: todayD };
+    try { await sbPost("field_logs", row); } catch { enqueue({ table: "field_logs", payload: row }); }
+    const job = jobs.find(j => j.id === task.jobId);
+    if (job?.gsmSync && job?.gsmJobId) {
+      fetch("/.netlify/functions/gsm-sync", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ type: "task_done", gsmJobId: job.gsmJobId, data: { id: logId, taskId: task.id, taskTitle: task.title, crewName: user.name, date: todayD } }),
+      }).catch(() => {});
+    }
+    return true;
+  };
+
+  const resolveTaskWorkedOn = async (task) => {
+    const todayD = localDate();
+    const logId = "l" + Date.now();
+    const enText = `${T.en.workedOnTask}: ${task.title}`;
+    const esText = `${T.es.workedOnTask}: ${task.titleEs || task.title}`;
+    const log = { id: logId, en: enText, es: esText, weather: "", taskId: task.id, jobId: task.jobId, crewId: user.id, date: todayD };
+    setLogs(p => [...p, log]);
+    const row = { id: logId, text_en: enText, text_es: esText, task_id: task.id, job_id: task.jobId, crew_id: user.id, log_date: todayD };
+    try { await sbPost("field_logs", row); } catch { enqueue({ table: "field_logs", payload: row }); }
+  };
+
   const shared = { user, lang, t, jobs, setJobs, tasks, setTasks, receipts, setReceipts,
                    logs, setLogs, photos, setPhotos, mats, setMats, settings, saveSettings, users,
                    online, setActive, setIs1099, addUser, updateUser, removeUser, archiveCrew, unarchiveCrew,
@@ -1238,7 +1309,7 @@ export default function App() {
   return (
     <div className={`app${theme === "light" ? " light" : ""}`}>
       <style>{CSS}</style>
-      <TopBar user={user} onLogout={logout} t={t} lang={lang} setLang={setLang} online={online}
+      <TopBar user={user} onLogout={requestLogout} t={t} lang={lang} setLang={setLang} online={online}
         theme={theme} toggleTheme={toggleTheme}
         showMenu={user.role === "admin"} menuOpen={menuOpen} setMenuOpen={setMenuOpen}
         onInstall={() => setShowInstall(true)} />
@@ -1246,6 +1317,87 @@ export default function App() {
         ? <Admin {...shared} tab={tab} setTab={setTab} menuOpen={menuOpen} setMenuOpen={setMenuOpen} />
         : <Crew {...shared} tab={tab} setTab={setTab} />}
       <InstallPrompt lang={lang} externalShow={showInstall} onExternalClose={() => setShowInstall(false)} />
+      {logoutGateTasks && (
+        <LogoutTaskGate tasks={logoutGateTasks} jobs={jobs} lang={lang} t={t}
+          onComplete={resolveTaskComplete} onWorkedOn={resolveTaskWorkedOn}
+          onDone={() => { setLogoutGateTasks(null); logout(); }} />
+      )}
+    </div>
+  );
+}
+
+// ─── LOGOUT TASK GATE ───────────────────────────────────────────────────
+// Blocks logout until every task assigned to the crew member at today's
+// job site(s) is marked either worked-on or completed. No skip, no
+// backdrop-dismiss — this exists because crew kept forgetting to log work.
+function LogoutTaskGate({ tasks, jobs, lang, t, onComplete, onWorkedOn, onDone }) {
+  const [remaining, setRemaining] = useState(tasks);
+  const [busyId, setBusyId] = useState(null);
+  const [warnId, setWarnId] = useState(null);
+  const tt = task => lang === "es" ? (task.titleEs || task.title) : task.title;
+  const jobName = jid => jobs.find(j => j.id === jid)?.name || "";
+
+  useEffect(() => { if (remaining.length === 0) onDone(); }, [remaining, onDone]);
+
+  const handleComplete = async (task) => {
+    setBusyId(task.id); setWarnId(null);
+    try {
+      const ok = await onComplete(task);
+      if (!ok) { setWarnId(task.id); return; }
+      setRemaining(r => r.filter(x => x.id !== task.id));
+    } catch {
+      // Save failed (offline/etc) — let them through rather than trap on a spinner.
+      setRemaining(r => r.filter(x => x.id !== task.id));
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  const handleWorkedOn = async (task) => {
+    setBusyId(task.id); setWarnId(null);
+    try {
+      await onWorkedOn(task);
+    } catch {
+      // Save failed (offline/etc) — let them through rather than trap on a spinner.
+    } finally {
+      setRemaining(r => r.filter(x => x.id !== task.id));
+      setBusyId(null);
+    }
+  };
+
+  return (
+    <div style={{ position: "fixed", inset: 0, zIndex: 999, background: "rgba(8,15,22,.92)",
+      display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}>
+      <div style={{ background: "#10202e", border: "1px solid rgba(255,255,255,.08)",
+        borderRadius: 14, maxWidth: 480, width: "100%", maxHeight: "88vh", overflowY: "auto", padding: "22px 20px" }}>
+        <div style={{ fontFamily: "'Barlow Condensed'", fontSize: 20, fontWeight: 800, color: "#f8fafc", marginBottom: 4 }}>
+          🔧 {t.taskCheckTitle}
+        </div>
+        <p style={{ fontSize: 13, color: "#94a3b8", marginBottom: 16 }}>{t.taskCheckSub}</p>
+
+        {remaining.map(task => (
+          <div key={task.id} style={{ background: "rgba(255,255,255,.04)", border: "1px solid rgba(255,255,255,.08)",
+            borderRadius: 10, padding: "12px 14px", marginBottom: 10 }}>
+            <div style={{ fontSize: 14, fontWeight: 600, color: "#f8fafc", marginBottom: 2 }}>{tt(task)}</div>
+            <div style={{ fontSize: 11, color: "#64748b", marginBottom: 10 }}>{jobName(task.jobId)}</div>
+            {warnId === task.id && (
+              <div style={{ fontSize: 12, color: "#f97316", marginBottom: 10 }}>📷 {t.needPhotoFirst}</div>
+            )}
+            <div style={{ display: "flex", gap: 8 }}>
+              <button className="btn btn-sm" style={{ flex: 1, justifyContent: "center",
+                  background: "linear-gradient(135deg,#1d4ed8,#3b82f6)", color: "#fff" }}
+                disabled={busyId === task.id} onClick={() => handleComplete(task)}>
+                {busyId === task.id ? <span className="spin" /> : t.completedTodayBtn}
+              </button>
+              <button className="btn btn-sm" style={{ flex: 1, justifyContent: "center",
+                  background: "rgba(255,255,255,.07)", color: "#cbd5e1", border: "1px solid rgba(59,130,246,.15)" }}
+                disabled={busyId === task.id} onClick={() => handleWorkedOn(task)}>
+                {busyId === task.id ? <span className="spin" /> : t.workedOnItBtn}
+              </button>
+            </div>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
@@ -5140,11 +5292,12 @@ function AdminActivity({ jobs, tasks, users, logs: initLogs, photos: initPhotos,
                 if (item.type === "log") {
                   const l = item.data;
                   const isCompletion = l.en?.startsWith("Completed:");
+                  const isWorkedOn = l.en?.startsWith("Worked on:");
                   return (
                     <div key={i} style={{ display: "flex", gap: 10, padding: "8px 0", borderBottom: "1px solid rgba(255,255,255,.04)" }}>
-                      <span style={{ fontSize: 16, flexShrink: 0 }}>{isCompletion ? "✅" : "📝"}</span>
+                      <span style={{ fontSize: 16, flexShrink: 0 }}>{isCompletion ? "✅" : isWorkedOn ? "🔧" : "📝"}</span>
                       <div style={{ flex: 1 }}>
-                        <div style={{ fontSize: 13, fontWeight: 600, color: isCompletion ? "var(--green)" : "var(--white)" }}>{l.en}</div>
+                        <div style={{ fontSize: 13, fontWeight: 600, color: isCompletion ? "var(--green)" : isWorkedOn ? "var(--orange)" : "var(--white)" }}>{l.en}</div>
                         {l.es && l.es !== l.en && <div style={{ fontSize: 12, color: "var(--sky2)", fontStyle: "italic" }}>{l.es}</div>}
                         <div style={{ fontSize: 11, color: "var(--slate)", marginTop: 2 }}>{crewName(l.crewId)} · {l.date}{l.weather ? ` · ${l.weather}` : ""}</div>
                       </div>
@@ -6063,6 +6216,24 @@ function CrewTasks(props) {
       }
     }
   };
+
+  // "Worked on this today" — logs progress without marking the task done.
+  // Lets crew show hours spent on a multi-day task; admin/crew still marks it
+  // complete separately via the checkbox above.
+  const loggedWorkToday = (taskId) =>
+    logs.some(l => l.taskId === taskId && l.crewId === user.id && l.date === today && l.en?.startsWith(`${T.en.workedOnTask}:`));
+
+  const workedOnTask = async (task) => {
+    if (loggedWorkToday(task.id) || task.status === "done") return;
+    const logId = "l" + Date.now();
+    const enText = `${T.en.workedOnTask}: ${task.title}`;
+    const esText = `${T.es.workedOnTask}: ${task.titleEs || task.title}`;
+    const log = { id: logId, en: enText, es: esText, weather: "", taskId: task.id, jobId: task.jobId, crewId: user.id, date: today };
+    setLogs(p => [...p, log]);
+    const row = { id: logId, text_en: enText, text_es: esText, task_id: task.id, job_id: task.jobId, crew_id: user.id, log_date: today };
+    try { await sbPost("field_logs", row); } catch { enqueue({ table: "field_logs", payload: row }); }
+  };
+
   const submitMat = async (taskId) => {
     if (!mat.trim()) return;
     const tk = tasks.find(t => t.id === taskId);
@@ -6557,9 +6728,19 @@ function CrewTasks(props) {
                         <span className={`tag tag-${s}`}>{t[s]}</span>
                         {task.dueDate && <span className="tag" style={{ background: "rgba(255,255,255,.06)", color: "var(--silver)" }}>{task.dueDate}</span>}
                         {task.photoRequired && !photos.some(p => p.taskId === task.id) && task.status !== "done" && <span className="tag" style={{ background: "rgba(249,115,22,.15)", color: "var(--orange)", border: "1px solid rgba(249,115,22,.35)" }}>📷 {lang === "es" ? "Foto requerida" : "Photo required"}</span>}
+                        {task.status !== "done" && loggedWorkToday(task.id) && <span className="tag" style={{ background: "rgba(16,185,129,.15)", color: "var(--green)", border: "1px solid rgba(16,185,129,.35)" }}>🔧 {t.loggedToday}</span>}
                       </div>
                     </div>
                     <div className="tact" style={{ gap: 5 }}>
+                      {task.status !== "done" && (
+                        <button title={t.workedToday} disabled={loggedWorkToday(task.id)}
+                          onClick={() => workedOnTask(task)}
+                          style={{ padding:"7px 9px", borderRadius:9, border:"none", cursor: loggedWorkToday(task.id) ? "default" : "pointer", fontSize:15,
+                            background: loggedWorkToday(task.id) ? "rgba(16,185,129,.15)" : "rgba(255,255,255,.07)",
+                            color: loggedWorkToday(task.id) ? "var(--green)" : "var(--slate)" }}>
+                          {loggedWorkToday(task.id) ? "✅" : "🔧"}
+                        </button>
+                      )}
                       <button title={t.photoFor + " " + tt(task)}
                         onClick={() => { const closing = taskPanel?.taskId === task.id && taskPanel?.type === "photo"; setTaskPanel(closing ? null : { taskId: task.id, jobId: task.jobId, type: "photo", photoType: "before" }); if (closing) { setPendingPhoto(null); setSavedCount(0); } }}
                         style={{ padding:"7px 9px", borderRadius:9, border:"none", cursor:"pointer", fontSize:15,
