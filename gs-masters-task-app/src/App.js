@@ -954,7 +954,7 @@ export default function App() {
     if (clearQuick) localStorage.removeItem("gsm_quick");
     setSession(null, null);
     if (_tokenRefreshTimer) clearTimeout(_tokenRefreshTimer);
-    setUser(null); setRevoked(false); setSessionChecked(false);
+    setUser(null); setRevoked(false);
   };
 
   // Validate cached session on every load — if no auth token, force fresh login
