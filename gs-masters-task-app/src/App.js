@@ -6459,15 +6459,11 @@ function CrewTasks(props) {
   // Prompt about unresolved tasks for THIS job on check-out — this is the
   // moment crew actually leave, so it's the real fix for forgotten task
   // logs (the account-level version in App() is a secondary safety net).
-  // Opt-in only: never forces a claim on a task they didn't touch.
+  // Opt-in only: never forces a claim on a task they didn't touch. Always
+  // runs regardless of how long they were checked in — crew are paid by
+  // the day, not the hour, so a quick in-then-out (e.g. fixing a forgotten
+  // morning check-in) still needs the same task accounting as any other.
   const requestCheckOut = (job) => {
-    const open = openCheckins[job.id];
-    // Checked in only to immediately check out (backfilling a forgotten
-    // morning check-in) — not a real end-of-day moment, skip the gate.
-    if (open && (Date.now() - new Date(open.checkIn).getTime()) < 5 * 60000) {
-      checkOut(job);
-      return;
-    }
     const already = new Set(
       logs.filter(l => l.crewId === user.id && l.date === today &&
         (l.en?.startsWith(`${T.en.workedOnTask}:`) || l.en?.startsWith(`${T.en.completedTask}:`)))
