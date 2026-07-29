@@ -6312,6 +6312,7 @@ function CrewTasks(props) {
   const st = task => task.status === "done" ? "done" : (task.dueDate && task.dueDate < today ? "overdue" : "pending");
 
   const [openCheckins, setOpenCheckins] = useState({}); // { jobId: checkinRecord }
+  const [checkoutGate, setCheckoutGate] = useState(null); // { job, tasks } pending resolution before checkout
 
   // Load open check-ins from DB on mount so refresh doesn't lose state
   useEffect(() => {
@@ -6360,6 +6361,37 @@ function CrewTasks(props) {
     setOpenCheckins(p => { const n = { ...p }; delete n[job.id]; return n; });
     setCheckedJob(null);
   };
+
+  // Gate check-out on unresolved tasks for THIS job — this is the moment
+  // crew actually leave, so it's the real fix for forgotten task logs
+  // (the account-level logout gate in App() is a secondary safety net).
+  const requestCheckOut = (job) => {
+    const open = openCheckins[job.id];
+    // Checked in only to immediately check out (backfilling a forgotten
+    // morning check-in) — not a real end-of-day moment, skip the gate.
+    if (open && (Date.now() - new Date(open.checkIn).getTime()) < 5 * 60000) {
+      checkOut(job);
+      return;
+    }
+    const already = new Set(
+      logs.filter(l => l.crewId === user.id && l.date === today &&
+        (l.en?.startsWith(`${T.en.workedOnTask}:`) || l.en?.startsWith(`${T.en.completedTask}:`)))
+        .map(l => l.taskId)
+    );
+    const pend = tasks.filter(tk =>
+      tk.status === "pending" && !tk.recurring && tk.jobId === job.id &&
+      (Array.isArray(tk.assignedTo) ? tk.assignedTo.includes(user.id) : tk.assignedTo === user.id) &&
+      !already.has(tk.id)
+    );
+    if (pend.length === 0) { checkOut(job); return; }
+    setCheckoutGate({ job, tasks: pend });
+  };
+  const gateComplete = async (task) => {
+    if (task.photoRequired && !photos.some(p => p.taskId === task.id)) return false;
+    await toggle(task.id);
+    return true;
+  };
+  const gateWorkedOn = async (task) => { await workedOnTask(task); };
 
   const myRecurring = tasks.filter(t =>
     t.recurring && !closedJobIds.has(t.jobId)
@@ -6542,7 +6574,7 @@ function CrewTasks(props) {
                 )}
               </div>
               {openCheckins[jid]
-                ? <button className="btn btn-sm btn-a" onClick={() => checkOut(job)}>
+                ? <button className="btn btn-sm btn-a" onClick={() => requestCheckOut(job)}>
                     <Icon n="power" s={13} /> {t.checkOut}
                   </button>
                 : <button className={`btn btn-sm ${ci ? "btn-g" : "btn-s"}`} onClick={() => checkIn(job)}>
@@ -6960,6 +6992,12 @@ function CrewTasks(props) {
             </div>
           </div>
         </div>
+      )}
+
+      {checkoutGate && (
+        <LogoutTaskGate tasks={checkoutGate.tasks} jobs={jobs} lang={lang} t={t}
+          onComplete={gateComplete} onWorkedOn={gateWorkedOn}
+          onDone={() => { const j = checkoutGate.job; setCheckoutGate(null); checkOut(j); }} />
       )}
 
       {matModal && <div className="modal-bg" onClick={e => e.target === e.currentTarget && setMatModal(null)}>
