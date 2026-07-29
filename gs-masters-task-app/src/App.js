@@ -384,8 +384,9 @@ const T = {
     completedTask:"Completed", workedOnTask:"Worked on",
     workedToday:"Worked On This Today", loggedToday:"Logged for Today",
     // logout task gate
-    taskCheckTitle:"Quick Task Check", taskCheckSub:"Before you log out, tell us about today's tasks:",
-    completedTodayBtn:"✅ Completed", workedOnItBtn:"🔧 Worked On It",
+    taskCheckTitle:"Quick Task Check",
+    taskCheckSub:"Tap any task you worked on or finished today. Didn't touch it? Leave it and continue.",
+    completedTodayBtn:"✅ Completed", workedOnItBtn:"🔧 Worked On It", continueBtn:"Continue",
     needPhotoFirst:"This task needs a photo before it can be marked complete — go back and add one, or mark that you worked on it instead.",
     // GPS
     onSite:"On site", fromSite:"from site",
@@ -441,8 +442,9 @@ const T = {
     completedTask:"Completada", workedOnTask:"Trabajó en",
     workedToday:"Trabajé en Esto Hoy", loggedToday:"Registrado Hoy",
     // logout task gate
-    taskCheckTitle:"Revisión Rápida de Tareas", taskCheckSub:"Antes de salir, cuéntanos sobre las tareas de hoy:",
-    completedTodayBtn:"✅ Completada", workedOnItBtn:"🔧 Trabajé en Esto",
+    taskCheckTitle:"Revisión Rápida de Tareas",
+    taskCheckSub:"Marca cualquier tarea en la que trabajaste o que terminaste hoy. ¿No la tocaste? Déjala y continúa.",
+    completedTodayBtn:"✅ Completada", workedOnItBtn:"🔧 Trabajé en Esto", continueBtn:"Continuar",
     needPhotoFirst:"Esta tarea necesita una foto antes de marcarla como completa — agrega una foto, o marca que trabajaste en ella.",
     // GPS
     onSite:"En el sitio", fromSite:"del sitio",
@@ -1240,11 +1242,12 @@ export default function App() {
     </div>
   );
 
-  // ── Logout gate — crew must account for today's assigned tasks first ──
+  // ── Logout task reminder — surfaces today's unlogged assigned tasks ──
   // Fixes crew constantly forgetting to log work: on logout we check the
   // job site(s) they clocked into today for any assigned pending task with
-  // no "worked on" or "completed" entry yet, and block until each one is
-  // marked either worked-on or done.
+  // no "worked on" or "completed" entry yet, and prompt for them. Purely
+  // opt-in — Continue always proceeds, nothing is assumed about tasks
+  // they don't tap.
   const requestLogout = async () => {
     if (user.role !== "crew") { logout(); return; }
     try {
@@ -1326,28 +1329,26 @@ export default function App() {
   );
 }
 
-// ─── LOGOUT TASK GATE ───────────────────────────────────────────────────
-// Blocks logout until every task assigned to the crew member at today's
-// job site(s) is marked either worked-on or completed. No skip, no
-// backdrop-dismiss — this exists because crew kept forgetting to log work.
+// ─── TASK CHECK PROMPT ────────────────────────────────────────────────
+// Reminds crew to log today's tasks before they check out / log out.
+// Opt-in per task — only tag the ones actually worked on or finished.
+// Never forces a claim on a task nobody touched, and "Continue" always
+// works so it never traps anyone at the job site.
 function LogoutTaskGate({ tasks, jobs, lang, t, onComplete, onWorkedOn, onDone }) {
-  const [remaining, setRemaining] = useState(tasks);
+  const [resolved, setResolved] = useState({}); // { [taskId]: 'done' | 'worked' }
   const [busyId, setBusyId] = useState(null);
   const [warnId, setWarnId] = useState(null);
   const tt = task => lang === "es" ? (task.titleEs || task.title) : task.title;
   const jobName = jid => jobs.find(j => j.id === jid)?.name || "";
-
-  useEffect(() => { if (remaining.length === 0) onDone(); }, [remaining, onDone]);
 
   const handleComplete = async (task) => {
     setBusyId(task.id); setWarnId(null);
     try {
       const ok = await onComplete(task);
       if (!ok) { setWarnId(task.id); return; }
-      setRemaining(r => r.filter(x => x.id !== task.id));
+      setResolved(r => ({ ...r, [task.id]: "done" }));
     } catch {
-      // Save failed (offline/etc) — let them through rather than trap on a spinner.
-      setRemaining(r => r.filter(x => x.id !== task.id));
+      setResolved(r => ({ ...r, [task.id]: "done" }));
     } finally {
       setBusyId(null);
     }
@@ -1357,46 +1358,64 @@ function LogoutTaskGate({ tasks, jobs, lang, t, onComplete, onWorkedOn, onDone }
     setBusyId(task.id); setWarnId(null);
     try {
       await onWorkedOn(task);
-    } catch {
-      // Save failed (offline/etc) — let them through rather than trap on a spinner.
-    } finally {
-      setRemaining(r => r.filter(x => x.id !== task.id));
-      setBusyId(null);
-    }
+    } catch { /* save failed offline — still mark it so they're not stuck */ }
+    setResolved(r => ({ ...r, [task.id]: "worked" }));
+    setBusyId(null);
   };
 
   return (
     <div style={{ position: "fixed", inset: 0, zIndex: 999, background: "rgba(8,15,22,.92)",
       display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}>
       <div style={{ background: "#10202e", border: "1px solid rgba(255,255,255,.08)",
-        borderRadius: 14, maxWidth: 480, width: "100%", maxHeight: "88vh", overflowY: "auto", padding: "22px 20px" }}>
-        <div style={{ fontFamily: "'Barlow Condensed'", fontSize: 20, fontWeight: 800, color: "#f8fafc", marginBottom: 4 }}>
-          🔧 {t.taskCheckTitle}
-        </div>
-        <p style={{ fontSize: 13, color: "#94a3b8", marginBottom: 16 }}>{t.taskCheckSub}</p>
-
-        {remaining.map(task => (
-          <div key={task.id} style={{ background: "rgba(255,255,255,.04)", border: "1px solid rgba(255,255,255,.08)",
-            borderRadius: 10, padding: "12px 14px", marginBottom: 10 }}>
-            <div style={{ fontSize: 14, fontWeight: 600, color: "#f8fafc", marginBottom: 2 }}>{tt(task)}</div>
-            <div style={{ fontSize: 11, color: "#64748b", marginBottom: 10 }}>{jobName(task.jobId)}</div>
-            {warnId === task.id && (
-              <div style={{ fontSize: 12, color: "#f97316", marginBottom: 10 }}>📷 {t.needPhotoFirst}</div>
-            )}
-            <div style={{ display: "flex", gap: 8 }}>
-              <button className="btn btn-sm" style={{ flex: 1, justifyContent: "center",
-                  background: "linear-gradient(135deg,#1d4ed8,#3b82f6)", color: "#fff" }}
-                disabled={busyId === task.id} onClick={() => handleComplete(task)}>
-                {busyId === task.id ? <span className="spin" /> : t.completedTodayBtn}
-              </button>
-              <button className="btn btn-sm" style={{ flex: 1, justifyContent: "center",
-                  background: "rgba(255,255,255,.07)", color: "#cbd5e1", border: "1px solid rgba(59,130,246,.15)" }}
-                disabled={busyId === task.id} onClick={() => handleWorkedOn(task)}>
-                {busyId === task.id ? <span className="spin" /> : t.workedOnItBtn}
-              </button>
-            </div>
+        borderRadius: 14, maxWidth: 480, width: "100%", maxHeight: "88vh", display: "flex", flexDirection: "column" }}>
+        <div style={{ padding: "22px 20px 0" }}>
+          <div style={{ fontFamily: "'Barlow Condensed'", fontSize: 20, fontWeight: 800, color: "#f8fafc", marginBottom: 4 }}>
+            🔧 {t.taskCheckTitle}
           </div>
-        ))}
+          <p style={{ fontSize: 13, color: "#94a3b8", marginBottom: 16 }}>{t.taskCheckSub}</p>
+        </div>
+
+        <div style={{ overflowY: "auto", padding: "0 20px" }}>
+          {tasks.map(task => {
+            const state = resolved[task.id];
+            return (
+              <div key={task.id} style={{ background: "rgba(255,255,255,.04)", border: "1px solid rgba(255,255,255,.08)",
+                borderRadius: 10, padding: "12px 14px", marginBottom: 10 }}>
+                <div style={{ fontSize: 14, fontWeight: 600, color: "#f8fafc", marginBottom: 2 }}>{tt(task)}</div>
+                <div style={{ fontSize: 11, color: "#64748b", marginBottom: state ? 0 : 10 }}>{jobName(task.jobId)}</div>
+                {warnId === task.id && (
+                  <div style={{ fontSize: 12, color: "#f97316", margin: "8px 0" }}>📷 {t.needPhotoFirst}</div>
+                )}
+                {state ? (
+                  <div style={{ fontSize: 12, color: "#10b981", fontWeight: 600, marginTop: 8 }}>
+                    ✅ {state === "done" ? t.completedTodayBtn : t.workedOnItBtn}
+                  </div>
+                ) : (
+                  <div style={{ display: "flex", gap: 8 }}>
+                    <button className="btn btn-sm" style={{ flex: 1, justifyContent: "center",
+                        background: "linear-gradient(135deg,#1d4ed8,#3b82f6)", color: "#fff" }}
+                      disabled={busyId === task.id} onClick={() => handleComplete(task)}>
+                      {busyId === task.id ? <span className="spin" /> : t.completedTodayBtn}
+                    </button>
+                    <button className="btn btn-sm" style={{ flex: 1, justifyContent: "center",
+                        background: "rgba(255,255,255,.07)", color: "#cbd5e1", border: "1px solid rgba(59,130,246,.15)" }}
+                      disabled={busyId === task.id} onClick={() => handleWorkedOn(task)}>
+                      {busyId === task.id ? <span className="spin" /> : t.workedOnItBtn}
+                    </button>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+
+        <div style={{ padding: "14px 20px 20px" }}>
+          <button className="btn btn-full" style={{ width: "100%", justifyContent: "center",
+              background: "linear-gradient(135deg,#059669,#10b981)", color: "#fff" }}
+            onClick={onDone}>
+            {t.continueBtn}
+          </button>
+        </div>
       </div>
     </div>
   );
@@ -6362,9 +6381,10 @@ function CrewTasks(props) {
     setCheckedJob(null);
   };
 
-  // Gate check-out on unresolved tasks for THIS job — this is the moment
-  // crew actually leave, so it's the real fix for forgotten task logs
-  // (the account-level logout gate in App() is a secondary safety net).
+  // Prompt about unresolved tasks for THIS job on check-out — this is the
+  // moment crew actually leave, so it's the real fix for forgotten task
+  // logs (the account-level version in App() is a secondary safety net).
+  // Opt-in only: never forces a claim on a task they didn't touch.
   const requestCheckOut = (job) => {
     const open = openCheckins[job.id];
     // Checked in only to immediately check out (backfilling a forgotten
