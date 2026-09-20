@@ -1608,16 +1608,20 @@ function LogoutTaskGate({ tasks, jobs, lang, t, onComplete, onWorkedOn, onLogOth
                     ✅ {state === "done" ? t.completedTodayBtn : t.workedOnItBtn}
                   </div>
                 ) : (
-                  <div style={{ display: "flex", gap: 8 }}>
-                    <button className="btn btn-sm" style={{ flex: 1, justifyContent: "center",
+                  // Single primary tap for the common case (finished it) --
+                  // "worked on it" demoted to a small secondary link instead
+                  // of an equal-weight button, so a 5-task day is 5 taps
+                  // instead of a wall of 10 buttons to read through first.
+                  <div>
+                    <button className="btn btn-sm btn-full" style={{ justifyContent: "center",
                         background: "linear-gradient(135deg,#1d4ed8,#3b82f6)", color: "#fff" }}
                       disabled={busyId === task.id} onClick={() => handleComplete(task)}>
                       {busyId === task.id ? <span className="spin" /> : t.completedTodayBtn}
                     </button>
-                    <button className="btn btn-sm" style={{ flex: 1, justifyContent: "center",
-                        background: "rgba(255,255,255,.07)", color: "#cbd5e1", border: "1px solid rgba(59,130,246,.15)" }}
+                    <button style={{ display: "block", margin: "8px auto 0", background: "none", border: "none",
+                        color: "#64748b", fontSize: 11, textDecoration: "underline", cursor: "pointer" }}
                       disabled={busyId === task.id} onClick={() => handleWorkedOn(task)}>
-                      {busyId === task.id ? <span className="spin" /> : t.workedOnItBtn}
+                      {t.workedOnItBtn}
                     </button>
                   </div>
                 )}
@@ -2119,7 +2123,39 @@ function QRClockIn({ jobId, theme, loggedInUser }) {
 
 // ─── LOGIN ────────────────────────────────────────────────────────────
 function Login({ onLogin, t, lang, setLang, theme, toggleTheme }) {
+  // Picker-first: tap your name, then just enter your PIN -- no need to
+  // remember which email/phone format you registered with. sbAuthSignIn
+  // already authenticates by profile id via a synthetic id@gsm.internal
+  // address (confirmed reading sbAuthSignIn's own implementation), so once a
+  // name is picked from this list we already have the id and can skip the
+  // email/phone lookup the old single-form version needed entirely.
+  // "Sign in a different way" keeps the original manual form as a fallback
+  // -- same function, same error handling, nothing removed.
+  const [people, setPeople] = useState(null); // null = loading, [] = failed/empty -> fallback to manual
+  const [picked, setPicked] = useState(null);
+  const [manualMode, setManualMode] = useState(false);
   const [login, setLogin] = useState(""), [pin, setPin] = useState(""), [err, setErr] = useState(""), [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    sbGet("field_profiles", "archived=eq.false&active=eq.true&select=id,name,role,email,phone,active,archived&order=name.asc")
+      .then(rows => setPeople(Array.isArray(rows) ? rows : []))
+      .catch(() => setPeople([]));
+  }, []);
+
+  const signInAs = async (u, enteredPin) => {
+    if (!enteredPin) return setErr(lang === "en" ? "Enter your PIN." : "Ingresa tu PIN.");
+    setBusy(true); setErr("");
+    try {
+      await sbAuthSignIn(u.id, enteredPin);
+      onLogin(fromProfile(u));
+    } catch (e) {
+      setErr(e.message === "auth_failed"
+        ? (lang === "en" ? "Wrong PIN. Try again." : "PIN incorrecto. Intenta de nuevo.")
+        : (lang === "en" ? "Connection error. Try again." : "Error de conexión."));
+      setBusy(false);
+    }
+  };
+
   const go = async () => {
     if (!login || !pin) return setErr(lang === "en" ? "Enter email or phone, and PIN." : "Ingresa email o teléfono, y PIN.");
     setBusy(true); setErr("");
@@ -2143,31 +2179,102 @@ function Login({ onLogin, t, lang, setLang, theme, toggleTheme }) {
     }
     setBusy(false);
   };
+
+  const langSwitch = (
+    <div style={{ display: "flex", gap: 8, justifyContent: "center", marginTop: 14 }}>
+      <button className="btn btn-s btn-sm" onClick={() => setLang(lang === "en" ? "es" : "en")}>
+        <Icon n="translate" s={14} /> {lang === "en" ? "Español" : "English"}</button>
+      <button className="btn btn-s btn-sm" onClick={toggleTheme}>{theme === "dark" ? "☀️ Light" : "🌙 Dark"}</button>
+    </div>
+  );
+
+  // Fallback: original single-form manual entry (unchanged), used when the
+  // picker has no one to show, or the person taps "sign in a different way."
+  if (manualMode || people?.length === 0) {
+    return (
+      <div className={`app${theme === "light" ? " light" : ""}`}><div className="login"><style>{CSS}</style>
+        <div className="login-card">
+          <div className="logo-mark"><Icon n="briefcase" s={32} c="#fff" /></div>
+          <div className="logo-title">GS MASTERS</div>
+          <div className="logo-sub">Field App</div>
+          <div style={{ marginTop: 32 }}>
+            <div className="fg"><label className="fl">Email or Phone Number</label>
+              <input className="fi" type="text" value={login} onChange={e => setLogin(e.target.value)} placeholder="email or (205) 555-1234" /></div>
+            <div className="fg"><label className="fl">PIN</label>
+              <input className="fi" type="password" value={pin} onChange={e => setPin(e.target.value)} placeholder="••••" maxLength={6}
+                onKeyDown={e => e.key === "Enter" && go()} />
+              <p style={{ fontSize: 11, color: "var(--slate)", marginTop: 4 }}>
+                {lang === "es" ? "Usa tu correo o número de teléfono" : "Use your email or phone number to sign in"}
+              </p></div>
+            {err && <p style={{ color: "var(--red)", fontSize: 13, marginBottom: 12 }}>{err}</p>}
+            <button className="btn btn-p btn-full" onClick={go} disabled={busy}>{busy ? <span className="spin" /> : t.login}</button>
+          </div>
+          {people?.length > 0 && (
+            <button className="btn btn-s btn-sm btn-full" style={{ marginTop: 10 }} onClick={() => { setManualMode(false); setErr(""); setPin(""); }}>
+              {lang === "es" ? "← Elegir mi nombre en su lugar" : "← Pick my name instead"}
+            </button>
+          )}
+          {langSwitch}
+        </div>
+      </div></div>
+    );
+  }
+
+  // PIN entry for whoever was tapped in the picker.
+  if (picked) {
+    return (
+      <div className={`app${theme === "light" ? " light" : ""}`}><div className="login"><style>{CSS}</style>
+        <div className="login-card">
+          <div className="logo-mark" style={{ fontFamily: "'Barlow Condensed'", fontWeight: 800, fontSize: 26 }}>{picked.name[0]}</div>
+          <div className="logo-title" style={{ fontSize: 22 }}>{picked.name}</div>
+          <div className="logo-sub">{lang === "es" ? "Ingresa tu PIN" : "Enter your PIN"}</div>
+          <div style={{ marginTop: 28 }}>
+            <input className="fi" type="password" autoFocus value={pin} onChange={e => setPin(e.target.value.replace(/\D/g, "").slice(0, 6))}
+              placeholder="••••" maxLength={6} style={{ textAlign: "center", fontSize: 26, letterSpacing: 8 }}
+              onKeyDown={e => e.key === "Enter" && signInAs(picked, pin)} />
+            {err && <p style={{ color: "var(--red)", fontSize: 13, margin: "12px 0 0", textAlign: "center" }}>{err}</p>}
+            <button className="btn btn-p btn-full" style={{ marginTop: 16 }} onClick={() => signInAs(picked, pin)} disabled={busy}>
+              {busy ? <span className="spin" /> : t.login}
+            </button>
+            <button className="btn btn-s btn-sm btn-full" style={{ marginTop: 10 }} onClick={() => { setPicked(null); setPin(""); setErr(""); }}>
+              {lang === "es" ? "← No soy yo" : "← Not me"}
+            </button>
+          </div>
+          {langSwitch}
+        </div>
+      </div></div>
+    );
+  }
+
+  // Default: name picker. people === null is the loading state.
   return (
     <div className={`app${theme === "light" ? " light" : ""}`}><div className="login"><style>{CSS}</style>
-      <div className="login-card">
+      <div className="login-card" style={{ maxWidth: 420 }}>
         <div className="logo-mark"><Icon n="briefcase" s={32} c="#fff" /></div>
         <div className="logo-title">GS MASTERS</div>
-        <div className="logo-sub">Field App</div>
-        <div style={{ marginTop: 32 }}>
-          <div className="fg"><label className="fl">Email or Phone Number</label>
-            <input className="fi" type="text" value={login} onChange={e => setLogin(e.target.value)} placeholder="email or (205) 555-1234" /></div>
-          <div className="fg"><label className="fl">PIN</label>
-            <input className="fi" type="password" value={pin} onChange={e => setPin(e.target.value)} placeholder="••••" maxLength={6}
-              onKeyDown={e => e.key === "Enter" && go()} />
-            <p style={{ fontSize: 11, color: "var(--slate)", marginTop: 4 }}>
-              {lang === "es" ? "Usa tu correo o número de teléfono" : "Use your email or phone number to sign in"}
-            </p></div>
-          {err && <p style={{ color: "var(--red)", fontSize: 13, marginBottom: 12 }}>{err}</p>}
-          <button className="btn btn-p btn-full" onClick={go} disabled={busy}>{busy ? <span className="spin" /> : t.login}</button>
-        </div>
-        <div style={{ display: "flex", gap: 8, justifyContent: "center", marginTop: 14 }}>
-          <button className="btn btn-s btn-sm" onClick={() => setLang(lang === "en" ? "es" : "en")}>
-            <Icon n="translate" s={14} /> {lang === "en" ? "Español" : "English"}</button>
-          <button className="btn btn-s btn-sm" onClick={toggleTheme}>
-            {theme === "dark" ? "☀️ Light" : "🌙 Dark"}
+        <div className="logo-sub">{lang === "es" ? "¿Quién eres?" : "Who's this?"}</div>
+        <div style={{ marginTop: 24 }}>
+          {people === null ? (
+            <div style={{ textAlign: "center", padding: "30px 0" }}><span className="spin" /></div>
+          ) : (
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(84px, 1fr))", gap: 12 }}>
+              {people.map(p => (
+                <button key={p.id} onClick={() => { setPicked(p); setPin(""); setErr(""); }}
+                  style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 6, background: "none", border: "none", cursor: "pointer", padding: 4 }}>
+                  <div style={{ width: 56, height: 56, borderRadius: "50%", background: "linear-gradient(135deg,var(--sky-dim),var(--sky))",
+                    display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "'Barlow Condensed'", fontWeight: 800, fontSize: 20, color: "#fff" }}>
+                    {p.name[0]}
+                  </div>
+                  <span style={{ fontSize: 11, color: "var(--slate)", textAlign: "center", lineHeight: 1.2 }}>{p.name.split(" ")[0]}</span>
+                </button>
+              ))}
+            </div>
+          )}
+          <button className="btn btn-s btn-sm btn-full" style={{ marginTop: 20 }} onClick={() => { setManualMode(true); setErr(""); }}>
+            {lang === "es" ? "Iniciar sesión de otra forma" : "Sign in a different way"}
           </button>
         </div>
+        {langSwitch}
       </div>
     </div></div>
   );
@@ -6405,45 +6512,18 @@ function Crew(props) {
         </div>
       )}
 
-      {/* ── Quick Action Bar ── */}
-      <div style={{ display: "flex", gap: 0, borderBottom: "1px solid var(--border)" }}>
-        <button onClick={() => setTab("rec")}
-          style={{ flex: 1, padding: "13px 8px", border: "none", borderRight: "1px solid var(--border)",
-            background: ctab === "rec" ? "rgba(245,158,11,.18)" : "rgba(245,158,11,.08)", cursor: "pointer",
-            display: "flex", flexDirection: "column", alignItems: "center", gap: 4 }}>
-          <span style={{ fontSize: 22 }}>🧾</span>
-          <span style={{ fontSize: 11, fontWeight: 800, color: "var(--accent)", fontFamily: "'Barlow Condensed'", letterSpacing: .5 }}>
-            {lang === "es" ? "RECIBO" : "RECEIPT"}
-          </span>
-        </button>
-        <button onClick={() => setTab("cam")}
-          style={{ flex: 1, padding: "13px 8px", border: "none", borderRight: "1px solid var(--border)",
-            background: ctab === "cam" ? "rgba(59,130,246,.18)" : "rgba(59,130,246,.06)", cursor: "pointer",
-            display: "flex", flexDirection: "column", alignItems: "center", gap: 4 }}>
-          <span style={{ fontSize: 22 }}>📷</span>
-          <span style={{ fontSize: 11, fontWeight: 800, color: "var(--sky2)", fontFamily: "'Barlow Condensed'", letterSpacing: .5 }}>
-            {lang === "es" ? "FOTOS" : "PHOTOS"}
-          </span>
-        </button>
-        <button onClick={() => setTab("log")}
-          style={{ flex: 1, padding: "13px 8px", border: "none", borderRight: "1px solid var(--border)",
-            background: ctab === "log" ? "rgba(100,116,139,.25)" : "rgba(100,116,139,.08)", cursor: "pointer",
-            display: "flex", flexDirection: "column", alignItems: "center", gap: 4 }}>
-          <span style={{ fontSize: 22 }}>📋</span>
-          <span style={{ fontSize: 11, fontWeight: 800, color: "var(--silver)", fontFamily: "'Barlow Condensed'", letterSpacing: .5 }}>
-            {lang === "es" ? "REGISTRO" : "LOG DAY"}
-          </span>
-        </button>
-        <button onClick={() => setIssueModal(true)}
-          style={{ flex: 1, padding: "13px 8px", border: "none",
-            background: "rgba(239,68,68,.08)", cursor: "pointer",
-            display: "flex", flexDirection: "column", alignItems: "center", gap: 4 }}>
-          <span style={{ fontSize: 22 }}>🚩</span>
-          <span style={{ fontSize: 11, fontWeight: 800, color: "var(--red)", fontFamily: "'Barlow Condensed'", letterSpacing: .5 }}>
-            {lang === "es" ? "PROBLEMA" : "FLAG ISSUE"}
-          </span>
-        </button>
-      </div>
+      {/* ── Flag Issue — the one action with no other way in (Receipt/
+          Photos/Log used to be duplicated here AND in the bottom nav below;
+          removed the duplicates, kept the one thing that isn't a tab) ── */}
+      <button onClick={() => setIssueModal(true)}
+        style={{ width: "100%", padding: "13px 8px", border: "none", borderBottom: "1px solid var(--border)",
+          background: "rgba(239,68,68,.08)", cursor: "pointer",
+          display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
+        <span style={{ fontSize: 20 }}>🚩</span>
+        <span style={{ fontSize: 12, fontWeight: 800, color: "var(--red)", fontFamily: "'Barlow Condensed'", letterSpacing: .5 }}>
+          {lang === "es" ? "REPORTAR PROBLEMA" : "FLAG AN ISSUE"}
+        </span>
+      </button>
 
       <div style={{ padding: 18, paddingBottom: 24 }}>
         {ctab === "tasks" && <CrewTasks {...props} />}
