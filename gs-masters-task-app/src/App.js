@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from "react";
+import { createClient } from "@supabase/supabase-js";
 
 /* ════════════════════════════════════════════════════════════════════
    GS MASTERS FIELD APP — v2 "SUPERCHARGED"
@@ -10,16 +11,21 @@ import { useState, useEffect, useRef, useCallback } from "react";
 const SB_URL = "https://mkibgjnzbgfqjkhowafr.supabase.co";
 const SB_KEY = "sb_publishable_zh5Soyi6iNGd8CLxPfD9Lg_dVdAwDe7";
 const SB_JWT = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im1raWJnam56YmdmcWpraG93YWZyIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzM1NDM3NDMsImV4cCI6MjA4OTExOTc0M30.dFNsD-3JkDCChaVlWlJY5Ff_HtkWvNU6m9nbkNWNkow";
+const realtime = createClient(SB_URL, SB_JWT, {
+  auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false }
+});
 
 // ─── AUTH TOKEN (set after Supabase Auth login) ────────────────────────
 let _authToken = null;
 let _refreshToken = null;
 let _tokenRefreshTimer = null;
+let _refreshPromise = null;
 
 function setSession(accessToken, refreshToken) {
   _authToken = accessToken;
   _refreshToken = refreshToken;
   if (accessToken) {
+    realtime.realtime.setAuth(accessToken);
     sessionStorage.setItem("gsm_tok", accessToken);
     sessionStorage.setItem("gsm_rtok", refreshToken || "");
   } else {
@@ -31,6 +37,15 @@ function setSession(accessToken, refreshToken) {
 function restoreSession() {
   _authToken   = sessionStorage.getItem("gsm_tok")  || null;
   _refreshToken = sessionStorage.getItem("gsm_rtok") || null;
+  // Fresh login (sbAuthSignIn -> setSession) re-arms the realtime client's
+  // auth; this path -- reload or PWA relaunch -- restores the token
+  // variables but was never re-arming it. The channel would still report
+  // "SUBSCRIBED" (that doesn't require auth), but RLS would silently reject
+  // every event since the client stayed authenticated as anon underneath --
+  // no error, just tasks/photos/receipts never updating until the 10-minute
+  // poll catches up. Same failure class already documented and fixed once
+  // in the sibling gsm-builder app; fixing it here before it repeats.
+  if (_authToken) realtime.realtime.setAuth(_authToken);
 }
 
 function scheduleTokenRefresh(expiresInSec) {
@@ -54,21 +69,26 @@ async function sbAuthSignIn(profileId, pin) {
 
 async function refreshSession() {
   if (!_refreshToken) return false;
-  try {
-    const res = await fetch(`${SB_URL}/auth/v1/token?grant_type=refresh_token`, {
-      method: "POST",
-      headers: { apikey: SB_JWT, "Content-Type": "application/json" },
-      body: JSON.stringify({ refresh_token: _refreshToken }),
-    });
-    if (!res.ok) return false;
-    const data = await res.json();
-    setSession(data.access_token, data.refresh_token);
-    scheduleTokenRefresh(data.expires_in || 3600);
-    return true;
-  } catch { return false; }
+  if (_refreshPromise) return _refreshPromise;
+  _refreshPromise = (async () => {
+    try {
+      const res = await fetch(`${SB_URL}/auth/v1/token?grant_type=refresh_token`, {
+        method: "POST",
+        headers: { apikey: SB_JWT, "Content-Type": "application/json" },
+        body: JSON.stringify({ refresh_token: _refreshToken }),
+      });
+      if (!res.ok) { setSession(null, null); return false; }
+      const data = await res.json();
+      setSession(data.access_token, data.refresh_token);
+      scheduleTokenRefresh(data.expires_in || 3600);
+      return true;
+    } catch { return false; }
+    finally { _refreshPromise = null; }
+  })();
+  return _refreshPromise;
 }
 
-async function sbFetch(path, opts = {}) {
+async function sbFetch(path, opts = {}, retried = false) {
   const token = _authToken || SB_JWT;
   const res = await fetch(`${SB_URL}/rest/v1/${path}`, {
     ...opts,
@@ -80,6 +100,10 @@ async function sbFetch(path, opts = {}) {
       ...opts.headers,
     },
   });
+  if (res.status === 401 && !retried && _refreshToken) {
+    await refreshSession();
+    return sbFetch(path, opts, true);
+  }
   if (!res.ok) throw new Error(await res.text());
   return res.status === 204 ? null : res.json();
 }
@@ -109,7 +133,7 @@ async function deleteFromStorage(path) {
 }
 
 // ─── SNAKE ↔ CAMEL TRANSFORMS ──────────────────────────────────────────
-const fromProfile = r => ({ id: r.id, name: r.name, role: r.role, email: r.email, phone: r.phone || "", pin: r.pin, active: r.active !== false, archived: r.archived === true, is1099: r.is_1099 === true });
+const fromProfile = r => ({ id: r.id, name: r.name, role: r.role, email: r.email, phone: r.phone || "", pin: r.pin, active: r.active !== false, archived: r.archived === true, is1099: r.is_1099 === true, isSupervisor: r.is_supervisor === true });
 const fromJob     = r => ({ id: r.id, name: r.name, address: r.address || "", lat: r.lat, lng: r.lng, budget: r.budget, status: r.status, closedAt: r.closed_at, gsmJobId: r.gsm_job_id, gsmSync: r.gsm_sync || false });
 const fromTask    = r => ({ id: r.id, jobId: r.job_id, title: r.title, titleEs: r.title_es || "", assignedTo: Array.isArray(r.assigned_to) ? r.assigned_to : (r.assigned_to ? [r.assigned_to] : []), status: r.status, dueDate: r.due_date || "", createdAt: (r.created_at || "").slice(0, 10), completedAt: r.completed_at || null, priority: r.priority === 1 ? "urgent" : "normal", recurring: r.recurring || false, photoRequired: r.photo_required === true });
 const toPriority  = p => p === "urgent" ? 1 : 3;
@@ -135,6 +159,26 @@ const localDateOf = iso => {
   const d = new Date(iso);
   return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
 };
+
+// ─── AI RECEIPT READ (Groq vision, via scan-receipt.mjs) ───────────────
+// Returns { ok: true, result: {vendor, amount, date, note, category} } or
+// { ok: false, error }. Callers treat this as a best-effort autofill — never
+// a blocker to saving — but surface the error string so a missing API key or
+// a rate limit doesn't look identical to "AI just couldn't read it".
+async function scanReceiptPhoto(dataUrl) {
+  try {
+    const res = await fetch("/.netlify/functions/scan-receipt", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ dataUrl }),
+    });
+    const data = await res.json();
+    if (!res.ok || data.error) return { ok: false, error: data.error || `HTTP ${res.status}` };
+    return { ok: true, result: data.result || null };
+  } catch (e) { return { ok: false, error: e.message || "network error" }; }
+}
+// Strips currency symbols/thousands separators so "$1,234.56" -> "1234.56"
+const cleanScanAmount = v => v == null ? "" : String(v).replace(/[^0-9.]/g, "");
 
 // ─── GSM BUILDER INTEGRATION ────────────────────────────────────────────
 async function pushReceiptToGSM(receipt, jobs, crewName) {
@@ -926,6 +970,7 @@ function InstallPrompt({ lang, externalShow, onExternalClose }) {
 
 // ════════════════════════════════════════════════════════════════════════
 export default function App() {
+  restoreSession();
   // Restore session — ?login=1 forces fresh login (crew invite links use this)
   const [user, setUser] = useState(() => {
     try {
@@ -966,8 +1011,6 @@ export default function App() {
   const [dispatches, setDispatches] = useState([]);
   const t = T[lang];
 
-  // Restore auth token from sessionStorage on mount
-  useEffect(() => { restoreSession(); }, []);
 
   const login = (u) => {
     localStorage.setItem("gsm_session", JSON.stringify(u));
@@ -1040,34 +1083,53 @@ export default function App() {
     load();
   }, [user?.id]);
 
-  // ── LIVE SYNC — 30s polling both directions ────────────────────────
+  // LIVE SYNC: row events replace 30-second full-table polling.
   useEffect(() => {
     if (!user) return;
-    const sync = async () => {
-      if (!navigator.onLine) return;
+    const merge = (setter, convert, payload) => setter(previous => {
+      const id = payload.old?.id || payload.new?.id;
+      if (payload.eventType === "DELETE") return previous.filter(item => item.id !== id);
+      const item = convert(payload.new);
+      const index = previous.findIndex(existing => existing.id === item.id);
+      if (index < 0) return [...previous, item];
+      const next = previous.slice();
+      next[index] = item;
+      return next;
+    });
+    const channel = realtime.channel("field-live-" + user.id)
+      .on("postgres_changes", { event:"*", schema:"public", table:"field_tasks" }, payload => merge(setTasks, fromTask, payload))
+      .on("postgres_changes", { event:"*", schema:"public", table:"field_logs" }, payload => merge(setLogs, fromLog, payload))
+      .on("postgres_changes", { event:"*", schema:"public", table:"field_photos" }, payload => merge(setPhotos, fromPhoto, payload))
+      .on("postgres_changes", { event:"*", schema:"public", table:"field_receipts" }, payload => merge(setReceipts, fromReceipt, payload))
+      .on("postgres_changes", { event:"*", schema:"public", table:"field_material_requests" }, payload => merge(setMats, fromMat, payload))
+      .on("postgres_changes", { event:"*", schema:"public", table:"field_dispatch" }, payload => merge(setDispatches, fromDispatch, payload))
+      .subscribe();
+
+    // Low-frequency recovery catches a missed websocket event without an IO storm.
+    const safetySync = async () => {
+      if (!navigator.onLine || document.visibilityState !== "visible") return;
       try {
         const [dbTasks, dbLogs, dbPhotos, dbReceipts, dbMats, dbDispatch] = await Promise.all([
-          sbGet("field_tasks",            "order=created_at"),
-          sbGet("field_logs",             "order=created_at.desc"),
-          sbGet("field_photos",           "order=created_at.desc"),
-          sbGet("field_receipts",         "order=created_at.desc"),
-          sbGet("field_material_requests","order=created_at.desc"),
-          sbGet("field_dispatch",         "order=date.desc"),
+          sbGet("field_tasks", "order=created_at"),
+          sbGet("field_logs", "order=created_at.desc"),
+          sbGet("field_photos", "order=created_at.desc"),
+          sbGet("field_receipts", "order=created_at.desc"),
+          sbGet("field_material_requests", "order=created_at.desc"),
+          sbGet("field_dispatch", "order=date.desc"),
         ]);
-        if (dbTasks)    setTasks(dbTasks.map(fromTask));
-        if (dbLogs)     setLogs(dbLogs.map(fromLog));
-        if (dbPhotos)   setPhotos(dbPhotos.map(fromPhoto));
+        if (dbTasks) setTasks(dbTasks.map(fromTask));
+        if (dbLogs) setLogs(dbLogs.map(fromLog));
+        if (dbPhotos) setPhotos(dbPhotos.map(fromPhoto));
         if (dbReceipts) setReceipts(dbReceipts.map(fromReceipt));
-        if (dbMats)     setMats(dbMats.map(fromMat));
+        if (dbMats) setMats(dbMats.map(fromMat));
         if (dbDispatch) setDispatches(dbDispatch.map(fromDispatch));
       } catch {}
     };
-    const iv = setInterval(sync, 30000); // 30s — crew needs to see new tasks quickly
-    window.addEventListener("focus", sync); // still instant on tab focus
-    return () => { clearInterval(iv); window.removeEventListener("focus", sync); };
+    const interval = setInterval(safetySync, 600000);
+    return () => { clearInterval(interval); realtime.removeChannel(channel); };
   }, [user?.id]);
 
-  // ── CREW MUTATIONS ────────────────────────────────────────────────
+  // CREW MUTATIONS
   const setActive = async (id, active) => {
     setUsers(u => u.map(x => x.id === id ? { ...x, active } : x));
     try { await sbPatch("field_profiles", id, { active }); } catch {}
@@ -1083,6 +1145,15 @@ export default function App() {
   const setIs1099 = async (id, val) => {
     setUsers(u => u.map(x => x.id === id ? { ...x, is1099: val } : x));
     try { await sbPatch("field_profiles", id, { is_1099: val }); } catch {}
+  };
+  // Supervisor is a permission FLAG a crew profile carries, not a separate
+  // role -- any number of crew can hold it, alongside admin (which already
+  // gets every supervisor-tier feature automatically, being the full
+  // dashboard). canSupervise (defined where `user` is read) is what actual
+  // feature gates check, never m.role directly.
+  const setIsSupervisor = async (id, val) => {
+    setUsers(u => u.map(x => x.id === id ? { ...x, isSupervisor: val } : x));
+    try { await sbPatch("field_profiles", id, { is_supervisor: val }); } catch {}
   };
 
   const deletePhoto = async (id) => {
@@ -1114,6 +1185,38 @@ export default function App() {
     if (patch.category !== undefined) dbPatch.category = patch.category;
     try { await sbFetch(`field_receipts?id=eq.${id}`, { method: "PATCH", body: JSON.stringify(dbPatch), prefer: "return=minimal" }); } catch {}
   };
+  // Full receipt edit (vendor/amount/note/paidBy/job-or-category/photo).
+  // newPhoto: undefined = leave photo as-is, null = remove photo, dataUrl string = replace photo.
+  const editReceipt = async (id, patch, newPhoto) => {
+    const existing = receipts.find(x => x.id === id);
+    let storagePath = existing?.storagePath || null;
+    let dataUrlOut = existing?.dataUrl || null;
+    if (newPhoto !== undefined) {
+      if (existing?.storagePath) { try { await deleteFromStorage(existing.storagePath); } catch {} }
+      if (newPhoto === null) { storagePath = null; dataUrlOut = null; }
+      else {
+        try {
+          storagePath = await uploadToStorage(newPhoto, `${existing?.crewId || id}/${id}-${Date.now()}.jpg`);
+          dataUrlOut = `${SB_URL}/storage/v1/object/public/portal-uploads/${storagePath}`;
+        } catch { storagePath = null; dataUrlOut = newPhoto; }
+      }
+    }
+    const reimbChanged = existing && patch.paidBy !== undefined && patch.paidBy !== existing.paidBy;
+    const merged = { ...patch };
+    if (newPhoto !== undefined) { merged.storagePath = storagePath; merged.dataUrl = dataUrlOut; }
+    if (reimbChanged) merged.reimbursementStatus = patch.paidBy === "crew" ? "pending" : "na";
+    setReceipts(p => p.map(x => x.id === id ? { ...x, ...merged } : x));
+    const dbPatch = {};
+    if (patch.store    !== undefined) dbPatch.store    = patch.store;
+    if (patch.amount   !== undefined) dbPatch.amount   = parseFloat(patch.amount) || 0;
+    if (patch.note     !== undefined) dbPatch.note     = patch.note;
+    if (patch.paidBy   !== undefined) { dbPatch.paid_by = patch.paidBy; if (reimbChanged) dbPatch.reimbursement_status = patch.paidBy === "crew" ? "pending" : "na"; }
+    if (patch.category !== undefined) dbPatch.category = patch.category;
+    if (patch.jobId    !== undefined) dbPatch.job_id   = patch.jobId;
+    if (patch.taskId   !== undefined) dbPatch.task_id  = patch.taskId;
+    if (newPhoto !== undefined) { dbPatch.storage_path = storagePath; dbPatch.data_url = storagePath ? null : dataUrlOut; }
+    try { await sbFetch(`field_receipts?id=eq.${id}`, { method: "PATCH", body: JSON.stringify(dbPatch), prefer: "return=minimal" }); } catch {}
+  };
   const upsertDispatch = async (entry) => {
     const id = "d_" + entry.crewId + "_" + entry.date;
     const row = { id, crew_id: entry.crewId, date: entry.date, job_ids: entry.jobIds, custom_stops: entry.customStops, created_by: user.id };
@@ -1141,8 +1244,8 @@ export default function App() {
     const id = "u" + Date.now();
     const email = member.email?.trim() || `crew_${id}@gsm.local`;
     const role = member.role || "crew";
-    const row = { id, name: member.name, role, email, phone: member.phone || "", pin: member.pin, active: true };
-    setUsers(u => [...u, { ...row }]);
+    const row = { id, name: member.name, role, email, phone: member.phone || "", pin: member.pin, active: true, is_supervisor: member.isSupervisor === true };
+    setUsers(u => [...u, { ...row, isSupervisor: row.is_supervisor }]);
     try { await sbPost("field_profiles", row); } catch { enqueue({ table: "field_profiles", payload: row }); }
     // Supabase trigger auto-creates auth.users entry on field_profiles INSERT
   };
@@ -1154,6 +1257,7 @@ export default function App() {
     if (patch.phone) dbPatch.phone = patch.phone;
     if (patch.pin)   dbPatch.pin   = patch.pin;
     if (patch.role)  dbPatch.role  = patch.role;
+    if (patch.isSupervisor !== undefined) dbPatch.is_supervisor = patch.isSupervisor;
     try { await sbPatch("field_profiles", id, dbPatch); } catch {}
   };
   const removeUser = async (id) => {
@@ -1279,7 +1383,13 @@ export default function App() {
         (Array.isArray(tk.assignedTo) ? tk.assignedTo.includes(user.id) : tk.assignedTo === user.id) &&
         !already.has(tk.id)
       );
-      if (pend.length === 0) { logout(); return; }
+      // Always show the gate if they checked into a job today, even with an
+      // empty pend list -- clocking into a job with no assigned tasks (now
+      // allowed) must still require accounting for the day via the gate's
+      // off-list note field, not skip the prompt entirely. LogoutTaskGate
+      // already handles tasks=[] correctly (off-list note becomes the only
+      // way to unlock Continue); the bug was here, short-circuiting before
+      // the gate ever rendered.
       setLogoutGateTasks(pend);
     } catch { logout(); } // offline/error — never trap someone from logging out
   };
@@ -1340,11 +1450,15 @@ export default function App() {
     }
   };
 
-  const shared = { user, lang, t, jobs, setJobs, tasks, setTasks, receipts, setReceipts,
+  // Admin always gets every supervisor-tier feature (full dashboard already
+  // shows everything) -- canSupervise is the one flag any actual
+  // supervisor-only UI in <Crew> should check, never user.role directly.
+  const canSupervise = user.role === "admin" || user.isSupervisor === true;
+  const shared = { user, canSupervise, lang, t, jobs, setJobs, tasks, setTasks, receipts, setReceipts,
                    logs, setLogs, photos, setPhotos, mats, setMats, settings, saveSettings, users,
-                   online, setActive, setIs1099, addUser, updateUser, removeUser, archiveCrew, unarchiveCrew,
+                   online, setActive, setIs1099, setIsSupervisor, addUser, updateUser, removeUser, archiveCrew, unarchiveCrew,
                    dispatches, setDispatches, upsertDispatch, deleteDispatch,
-                   deletePhoto, deleteReceipt, deleteLog, reassignPhoto, reassignReceipt };
+                   deletePhoto, deleteReceipt, deleteLog, reassignPhoto, reassignReceipt, editReceipt };
 
   return (
     <div className={`app${theme === "light" ? " light" : ""}`}>
@@ -1723,9 +1837,12 @@ function QRClockIn({ jobId, theme, loggedInUser }) {
   const verifyPin = async (code) => {
     setBusy(true);
     try {
-      const rows = await sbGet("field_profiles", `id=eq.${selected.id}&select=pin,active`);
+      // Authenticate QR PIN through Supabase Auth, same path as normal login.
+      // Never depend on exposing plaintext PIN through anonymous profile reads.
+      await sbAuthSignIn(selected.id, code);
+      const rows = await sbGet("field_profiles", `id=eq.${selected.id}&select=active`);
       const u = rows?.[0];
-      if (!u || u.pin !== code) { setPinErr("Wrong PIN. / PIN incorrecto."); setPin(""); setBusy(false); return; }
+      if (!u) { setPinErr("Account not found."); setPin(""); setBusy(false); return; }
       if (u.active === false) { setPinErr("Account deactivated."); setBusy(false); return; }
 
       // Check all open check-ins for this user
@@ -1753,7 +1870,11 @@ function QRClockIn({ jobId, theme, loggedInUser }) {
 
       // Not clocked in at this job — proceed with clock-in (handles job switch internally)
       await doClockIn(selected);
-    } catch { setPinErr("Connection error."); setBusy(false); }
+    } catch (e) {
+      setPinErr(e.message === "auth_failed" ? "Wrong PIN. / PIN incorrecto." : "Connection error.");
+      setPin("");
+      setBusy(false);
+    }
   };
 
   const KEYS = ["1","2","3","4","5","6","7","8","9","","0","⌫"];
@@ -3020,18 +3141,22 @@ function Calendar({ tasks, setTasks, jobs, users, receipts }) {
     return true;
   });
 
-  // Events per day: issued (createdAt) + due (dueDate)
+  // Events per day: assigned, due, and actual completion date.
+  // completedAt already exists on historical tasks, so completion events are retroactive.
   const eventsForDay = (day) => {
     const date = ds(day);
     const evs = [];
     ft.forEach(task => {
-      if (task.dueDate === date)   evs.push({ task, kind: "due" });
-      else if (task.createdAt === date) evs.push({ task, kind: "issued" });
+      const completedDate = task.completedAt ? localDateOf(task.completedAt) : "";
+      if (completedDate === date) evs.push({ task, kind: "completed" });
+      if (task.dueDate === date && completedDate !== date) evs.push({ task, kind: "due" });
+      else if (task.createdAt === date && completedDate !== date && task.dueDate !== date) evs.push({ task, kind: "issued" });
     });
     return evs;
   };
 
   const chipColor = (ev) => {
+    if (ev.kind === "completed") return "#10b981"; // green = completed that day
     if (ev.kind === "issued") return "#64748b"; // grey = issued/assigned
     return statusColor(ev.task);               // status color on due date
   };
@@ -3041,7 +3166,8 @@ function Calendar({ tasks, setTasks, jobs, users, receipts }) {
     const suffix = view === "job"
       ? (ev.task.assignedTo?.[0] ? " · " + (users.find(u=>u.id===ev.task.assignedTo[0])?.name?.split(" ")[0]||"") : "")
       : (" · " + (jobs.find(j=>j.id===ev.task.jobId)?.name?.slice(0,10)||""));
-    return (ev.kind === "issued" ? "📋 " : "") + base + suffix;
+    const prefix = ev.kind === "completed" ? "✓ " : ev.kind === "issued" ? "📋 " : "";
+    return prefix + base + suffix;
   };
 
   return (
@@ -3122,7 +3248,7 @@ function Calendar({ tasks, setTasks, jobs, users, receipts }) {
 
       {/* ── Day Detail Panel ── */}
       {selectedDay && (() => {
-        const dayTasks = ft.filter(t => t.dueDate === selectedDay || t.createdAt === selectedDay);
+        const dayTasks = ft.filter(t => t.dueDate === selectedDay || t.createdAt === selectedDay || (t.completedAt && localDateOf(t.completedAt) === selectedDay));
         const dn2 = new Date(selectedDay + "T12:00:00").toLocaleDateString([], { weekday:"long", month:"long", day:"numeric" });
         return (
           <div className="card" style={{ marginBottom: 16, borderLeft:"4px solid var(--accent)" }}>
@@ -3484,19 +3610,84 @@ ${jobBlocks || '<p style="color:#888;text-align:center;padding:40px">No activity
   );
 }
 
-function AdminReceipts({ receipts, setReceipts, jobs, tasks, users, user, deleteReceipt, reassignReceipt }) {
+function AdminReceipts({ receipts, setReceipts, jobs, tasks, users, user, deleteReceipt, reassignReceipt, editReceipt }) {
   const [modal, setModal] = useState(false);
   const [nr, setNr] = useState({ dest: "job", customCat: "", jobId: "", taskId: "", crewId: "", store: "", amount: "", note: "", paidBy: "company", dataUrl: null });
   const [busy, setBusy] = useState(false);
   const fileRef = useRef();
+  const [scanning, setScanning] = useState(false);
+  const [scanMsg, setScanMsg] = useState("");
   const [lightbox, setLightbox] = useState(null);
   const [confirmDel, setConfirmDel] = useState(null);
   const [reassign, setReassign] = useState(null); // receipt object
   const [reassignJob, setReassignJob] = useState("");
   const [reassignTask, setReassignTask] = useState("");
   const [reassignConfirm, setReassignConfirm] = useState(false);
+  const [editing, setEditing] = useState(null); // receipt object being edited
+  const [ef, setEf] = useState(null); // edit form state
+  const [efNewPhoto, setEfNewPhoto] = useState(undefined); // undefined=no change, null=removed, dataUrl=replaced
+  const [efScanning, setEfScanning] = useState(false);
+  const [efScanMsg, setEfScanMsg] = useState("");
+  const [efBusy, setEfBusy] = useState(false);
+  const efFileRef = useRef();
   const today = localDate();
   const jobTasks = tasks.filter(t => t.jobId === nr.jobId);
+  const efJobTasks = tasks.filter(t => t.jobId === ef?.jobId);
+
+  const CAT_TO_DEST = { Office: "office", Auto: "auto", Tools: "tools", "Side Job": "side" };
+
+  const openEdit = (r) => {
+    // Map the saved category back to a dest button key: known overhead category
+    // -> its key, a job -> "job", anything else custom-typed -> "custom"
+    const destKey = r.jobId ? "job" : r.category === "Office" ? "office" : r.category === "Auto" ? "auto"
+      : r.category === "Tools" ? "tools" : r.category === "Side Job" ? "side" : r.category ? "custom" : "job";
+    setEditing(r);
+    setEf({
+      dest: destKey, jobId: r.jobId || "", taskId: r.taskId || "",
+      customCat: destKey === "custom" ? (r.category || "") : "",
+      store: r.store || "", amount: r.amount != null ? String(r.amount) : "", note: r.note || "", paidBy: r.paidBy || "company",
+    });
+    setEfNewPhoto(undefined);
+    setEfScanMsg(""); setEfScanning(false);
+  };
+  const closeEdit = () => { setEditing(null); setEf(null); setEfNewPhoto(undefined); };
+
+  const efPhotoCapture = async e => {
+    const file = e.target.files[0]; if (!file) return;
+    try {
+      const { dataUrl } = await compressImage(file, 1000, 0.6);
+      setEfNewPhoto(dataUrl);
+      setEfScanning(true); setEfScanMsg("");
+      const scan = await scanReceiptPhoto(dataUrl);
+      setEfScanning(false);
+      if (scan.ok && scan.result) {
+        const r = scan.result;
+        setEf(p => ({ ...p,
+          store: r.vendor || p.store,
+          amount: r.amount ? cleanScanAmount(r.amount) : p.amount,
+          note: r.note || p.note,
+          dest: CAT_TO_DEST[r.category] || p.dest,
+        }));
+        setEfScanMsg(`✓ AI filled ${r.vendor || "vendor"}${r.amount ? " · $" + Number(cleanScanAmount(r.amount)).toFixed(2) : ""} — review before saving`);
+      } else { console.error("scan-receipt failed:", scan.error); setEfScanMsg(`AI read failed: ${scan.error || "unknown error"} — fill in manually`); }
+    } catch { alert("Could not process image. Try again."); }
+  };
+
+  const saveEdit = async () => {
+    if (!ef || !editing) return;
+    const usingJob = ef.dest === "job";
+    if ((usingJob && !ef.jobId) || !ef.store || !ef.amount) return;
+    if (ef.dest === "custom" && !ef.customCat.trim()) return;
+    setEfBusy(true);
+    const category = rcDestCategory(ef.dest, ef.customCat);
+    const patch = {
+      store: ef.store, amount: ef.amount, note: ef.note, paidBy: ef.paidBy,
+      category, jobId: usingJob ? ef.jobId : null, taskId: usingJob ? (ef.taskId || null) : null,
+    };
+    await editReceipt(editing.id, patch, efNewPhoto);
+    setEfBusy(false);
+    closeEdit();
+  };
 
   const addReceipt = async () => {
     const usingJob = nr.dest === "job";
@@ -3518,12 +3709,28 @@ function AdminReceipts({ receipts, setReceipts, jobs, tasks, users, user, delete
     try { await sbPost("field_receipts", row); } catch { enqueue({ table: "field_receipts", payload: row }); }
     pushReceiptToGSM(receipt, jobs, users.find(u => u.id === receipt.crewId)?.name);
     setNr({ dest: "job", customCat: "", jobId: "", taskId: "", crewId: "", store: "", amount: "", note: "", paidBy: "company", dataUrl: null });
-    setModal(false); setBusy(false);
+    setScanMsg(""); setModal(false); setBusy(false);
   };
 
   const photoCapture = async e => {
     const file = e.target.files[0]; if (!file) return;
-    try { const { dataUrl } = await compressImage(file, 1000, 0.6); setNr(p => ({ ...p, dataUrl })); }
+    try {
+      const { dataUrl } = await compressImage(file, 1000, 0.6);
+      setNr(p => ({ ...p, dataUrl }));
+      setScanning(true); setScanMsg("");
+      const scan = await scanReceiptPhoto(dataUrl);
+      setScanning(false);
+      if (scan.ok && scan.result) {
+        const r = scan.result;
+        setNr(p => ({ ...p,
+          store: r.vendor || p.store,
+          amount: r.amount ? cleanScanAmount(r.amount) : p.amount,
+          note: r.note || p.note,
+          dest: CAT_TO_DEST[r.category] || p.dest,
+        }));
+        setScanMsg(`✓ AI filled ${r.vendor || "vendor"}${r.amount ? " · $" + Number(cleanScanAmount(r.amount)).toFixed(2) : ""} — review before saving`);
+      } else { console.error("scan-receipt failed:", scan.error); setScanMsg(`AI read failed: ${scan.error || "unknown error"} — fill in manually`); }
+    }
     catch { alert("Could not process image. Try again."); }
   };
 
@@ -3652,7 +3859,7 @@ ${r.dataUrl
             {postingAll ? <span className="spin" /> : <>Post All → GSM ({gsmEligible.length})</>}
           </button>}
           {receipts.length > 0 && <button className="btn btn-s btn-sm" onClick={exportBills}><Icon n="receipt" s={14} /> Export for Bills</button>}
-          <button className="btn btn-p" onClick={() => setModal(true)}><Icon n="plus" s={16} /> Add Receipt</button>
+          <button className="btn btn-p" onClick={() => { setScanMsg(""); setModal(true); }}><Icon n="plus" s={16} /> Add Receipt</button>
         </div>
       </div>
 
@@ -3748,6 +3955,7 @@ ${r.dataUrl
               </td>
               <td data-l="Amount" style={{ textAlign:"right",fontWeight:700,color:needsReimb?"var(--orange)":"var(--accent)" }}>${(+r.amount).toFixed(2)}</td>
               <td style={{ whiteSpace:"nowrap" }}>
+                <button onClick={() => openEdit(r)} title="Edit receipt" style={{ background:"none",border:"none",cursor:"pointer",color:"var(--accent)",fontSize:14,padding:"2px 5px" }}>✏️</button>
                 <button onClick={() => printReceipt(r)} title="Print receipt" style={{ background:"none",border:"none",cursor:"pointer",color:"var(--sky2)",fontSize:15,padding:"2px 5px" }}>🖨</button>
                 <button onClick={() => setConfirmDel(r.id)} style={{ background:"none",border:"none",cursor:"pointer",color:"var(--red)",fontSize:16,padding:"2px 5px" }}>✕</button>
               </td>
@@ -3829,6 +4037,76 @@ ${r.dataUrl
         );
       })()}
 
+      {/* Edit receipt */}
+      {editing && ef && <div className="modal-bg" onClick={e=>e.target===e.currentTarget&&closeEdit()}>
+        <div className="modal"><div className="mt">Edit Receipt</div>
+          {(editing.billStatus === "posted" || editing.reimbursementStatus === "paid") && (
+            <p style={{ background:"rgba(249,115,22,.12)", border:"1px solid rgba(249,115,22,.35)", borderRadius:8, padding:"8px 12px", fontSize:12, color:"var(--orange)", marginBottom:14 }}>
+              ⚠ {editing.billStatus === "posted" && "Already posted to GSM Builder. "}
+              {editing.reimbursementStatus === "paid" && "Already marked reimbursed. "}
+              Changes here do NOT update GSM Builder or the paid check — fix those separately if needed.
+            </p>
+          )}
+          <div className="fg"><label className="fl">Charge this to</label>
+            <div style={{ display:"flex", gap:6, flexWrap:"wrap" }}>
+              {[["job","🏗 Job"],...RC_OVERHEAD.map(([k,label])=>[k,label]),["custom","📌 Custom"]].map(([k,label]) => (
+                <button key={k} className={`btn btn-sm ${ef.dest===k?"btn-a":"btn-s"}`} onClick={()=>setEf(p=>({...p,dest:k}))}>{label}</button>
+              ))}
+            </div>
+            {ef.dest === "custom" && (
+              <input className="fi" value={ef.customCat} onChange={e=>setEf(p=>({...p,customCat:e.target.value}))} placeholder="e.g. Marketing, Legal, Storage Unit" style={{ marginTop:8 }} />
+            )}
+          </div>
+          {ef.dest === "job" && <div className="grid2">
+            <div className="fg"><label className="fl">Job</label>
+              <select className="fi" value={ef.jobId} onChange={e=>setEf(p=>({...p,jobId:e.target.value,taskId:""}))}>
+                <option value="">Select Job</option>{jobs.map(j=><option key={j.id} value={j.id}>{j.name}</option>)}</select></div>
+            <div className="fg"><label className="fl">Task (optional)</label>
+              <select className="fi" value={ef.taskId} onChange={e=>setEf(p=>({...p,taskId:e.target.value}))} disabled={!ef.jobId}>
+                <option value="">General / No task</option>{efJobTasks.map(t=><option key={t.id} value={t.id}>{t.title}</option>)}</select></div>
+          </div>}
+          <div className="grid2">
+            <div className="fg"><label className="fl">Vendor / Store</label>
+              <input className="fi" value={ef.store} onChange={e=>setEf(p=>({...p,store:e.target.value}))} placeholder="Home Depot" /></div>
+            <div className="fg"><label className="fl">Amount ($)</label>
+              <input className="fi" type="number" value={ef.amount} onChange={e=>setEf(p=>({...p,amount:e.target.value}))} placeholder="0.00" /></div>
+          </div>
+          <div className="fg"><label className="fl">Notes / Memo</label>
+            <input className="fi" value={ef.note} onChange={e=>setEf(p=>({...p,note:e.target.value}))} placeholder="What was purchased" /></div>
+          <div className="fg"><label className="fl">Who Paid?</label>
+            <div style={{ display:"flex",gap:8,flexWrap:"wrap" }}>
+              <button className={"btn btn-sm " + (ef.paidBy==="company"?"btn-p":"btn-s")} onClick={()=>setEf(p=>({...p,paidBy:"company"}))}>Company Card</button>
+              <button className={"btn btn-sm " + (ef.paidBy==="crew"?"btn-a":"btn-s")} onClick={()=>setEf(p=>({...p,paidBy:"crew"}))}>Crew Paid — Needs Reimbursement</button>
+            </div></div>
+          <div className="fg"><label className="fl">Receipt Photo</label>
+            <input ref={efFileRef} type="file" accept="image/*" capture="environment" style={{ display:"none" }} onChange={efPhotoCapture} />
+            {(() => {
+              const shown = efNewPhoto === null ? null : (efNewPhoto || editing.dataUrl);
+              return shown
+                ? <div style={{ display:"flex",gap:10,alignItems:"center" }}>
+                    <img src={shown} alt="receipt" style={{ width:64,height:64,objectFit:"cover",borderRadius:8 }} />
+                    <button className="btn btn-s btn-sm" onClick={()=>{setEfNewPhoto(null);setEfScanMsg("");}}>Remove</button>
+                    <button className="btn btn-s btn-sm" onClick={()=>efFileRef.current?.click()}><Icon n="camera" s={14} /> Retake</button>
+                  </div>
+                : <div style={{ display:"flex",gap:8 }}>
+                    <button className="btn btn-s btn-sm" onClick={()=>efFileRef.current?.click()}><Icon n="camera" s={14} /> Take Photo</button>
+                    <button className="btn btn-s btn-sm" onClick={() => openGallery(efPhotoCapture)}><Icon n="photo" s={14} /> From Library</button>
+                  </div>;
+            })()}
+            {(efScanning || efScanMsg) && <div style={{ marginTop:8, fontSize:12, display:"flex", alignItems:"center", gap:8,
+              color: efScanning ? "var(--sky2)" : efScanMsg.startsWith("✓") ? "var(--green)" : "var(--orange)" }}>
+              {efScanning ? <><span className="spin" /> Reading receipt…</> : efScanMsg}
+            </div>}
+          </div>
+          <div className="macts">
+            <button className="btn btn-s" onClick={closeEdit}>Cancel</button>
+            <button className="btn btn-p" onClick={saveEdit} disabled={efBusy||!ef.store||!ef.amount||(ef.dest==="job"&&!ef.jobId)||(ef.dest==="custom"&&!ef.customCat.trim())}>
+              {efBusy?<span className="spin" />:<><Icon n="check" s={14} /> Save Changes</>}
+            </button>
+          </div>
+        </div>
+      </div>}
+
       {modal && <div className="modal-bg" onClick={e=>e.target===e.currentTarget&&setModal(false)}>
         <div className="modal"><div className="mt">Add Receipt</div>
           <div className="fg"><label className="fl">Charge this to</label>
@@ -3872,13 +4150,18 @@ ${r.dataUrl
             {nr.dataUrl
               ?<div style={{ display:"flex",gap:10,alignItems:"center" }}>
                   <img src={nr.dataUrl} alt="receipt" style={{ width:64,height:64,objectFit:"cover",borderRadius:8 }} />
-                  <button className="btn btn-s btn-sm" onClick={()=>setNr(p=>({...p,dataUrl:null}))}>Remove</button>
+                  <button className="btn btn-s btn-sm" onClick={()=>{setNr(p=>({...p,dataUrl:null}));setScanMsg("");}}>Remove</button>
                 </div>
               :<div style={{ display:"flex",gap:8 }}>
                   <button className="btn btn-s btn-sm" onClick={()=>fileRef.current?.click()}><Icon n="camera" s={14} /> Take Photo</button>
                   <button className="btn btn-s btn-sm" onClick={() => openGallery(photoCapture)}><Icon n="photo" s={14} /> From Library</button>
                 </div>
-            }</div>
+            }
+            {(scanning || scanMsg) && <div style={{ marginTop:8, fontSize:12, display:"flex", alignItems:"center", gap:8,
+              color: scanning ? "var(--sky2)" : scanMsg.startsWith("✓") ? "var(--green)" : "var(--orange)" }}>
+              {scanning ? <><span className="spin" /> Reading receipt…</> : scanMsg}
+            </div>}
+          </div>
           <div className="macts">
             <button className="btn btn-s" onClick={()=>setModal(false)}>Cancel</button>
             <button className="btn btn-p" onClick={addReceipt} disabled={busy||!nr.store||!nr.amount||(nr.dest==="job"&&!nr.jobId)||(nr.dest==="custom"&&!nr.customCat.trim())}>
@@ -4338,7 +4621,7 @@ function Jobs({ jobs, setJobs, tasks }) {
   );
 }
 
-function CrewMgmt({ users, tasks, setActive, setIs1099, addUser, updateUser, removeUser, archiveCrew, unarchiveCrew, settings }) {
+function CrewMgmt({ users, tasks, setActive, setIs1099, setIsSupervisor, addUser, updateUser, removeUser, archiveCrew, unarchiveCrew, settings }) {
   const [modal, setModal] = useState(null); // 'add' | user object (edit)
   const [invite, setInvite] = useState(null);
   const [confirm, setConfirm] = useState(null);
@@ -4346,8 +4629,8 @@ function CrewMgmt({ users, tasks, setActive, setIs1099, addUser, updateUser, rem
   const isActive = m => m.active !== false;
   const appUrl = settings?.appUrl || (typeof window !== "undefined" ? window.location.origin : "https://your-app.netlify.app");
 
-  const openAdd = () => { setForm({ name: "", email: "", phone: "", pin: String(Math.floor(1000 + Math.random() * 9000)), role: "crew" }); setModal("add"); };
-  const openEdit = m => { setForm({ name: m.name, email: m.email, phone: m.phone || "", pin: m.pin, role: m.role || "crew" }); setModal(m); };
+  const openAdd = () => { setForm({ name: "", email: "", phone: "", pin: String(Math.floor(1000 + Math.random() * 9000)), role: "crew", isSupervisor: false }); setModal("add"); };
+  const openEdit = m => { setForm({ name: m.name, email: m.email, phone: m.phone || "", pin: m.pin, role: m.role || "crew", isSupervisor: m.isSupervisor === true }); setModal(m); };
   const save = () => {
     if (!form.name || !form.pin) return;
     if (modal === "add") { addUser(form); setInvite({ ...form }); }
@@ -4378,7 +4661,7 @@ function CrewMgmt({ users, tasks, setActive, setIs1099, addUser, updateUser, rem
           return <div key={m.id} className="card" style={{ borderTop: `4px solid ${isAdmin ? "var(--accent)" : active ? "var(--sky)" : "var(--red)"}`, opacity: active ? 1 : .75 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 14 }}>
               <div style={{ width: 46, height: 46, borderRadius: "50%", background: isAdmin ? "linear-gradient(135deg,#b45309,var(--accent))" : active ? "linear-gradient(135deg,var(--sky-dim),var(--sky))" : "linear-gradient(135deg,#7f1d1d,var(--red))", display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "'Barlow Condensed'", fontWeight: 800, fontSize: 19 }}>{m.name[0]}</div>
-              <div style={{ flex: 1 }}><div style={{ fontWeight: 700, fontSize: 16, display:"flex", alignItems:"center", gap:6 }}>{m.name}{isAdmin && <span style={{ fontSize:10, fontWeight:800, color:"var(--accent)", background:"rgba(245,158,11,.15)", border:"1px solid rgba(245,158,11,.3)", borderRadius:4, padding:"1px 5px" }}>ADMIN</span>}</div><div className="muted" style={{ fontSize: 12 }}>{m.email}</div></div></div>
+              <div style={{ flex: 1 }}><div style={{ fontWeight: 700, fontSize: 16, display:"flex", alignItems:"center", gap:6 }}>{m.name}{isAdmin && <span style={{ fontSize:10, fontWeight:800, color:"var(--accent)", background:"rgba(245,158,11,.15)", border:"1px solid rgba(245,158,11,.3)", borderRadius:4, padding:"1px 5px" }}>ADMIN</span>}{!isAdmin && m.isSupervisor && <span style={{ fontSize:10, fontWeight:800, color:"var(--sky2)", background:"rgba(56,189,248,.15)", border:"1px solid rgba(56,189,248,.3)", borderRadius:4, padding:"1px 5px" }}>SUPERVISOR</span>}</div><div className="muted" style={{ fontSize: 12 }}>{m.email}</div></div></div>
             <div className="grid2" style={{ marginBottom: 12 }}><div style={{ textAlign: "center", padding: 10, background: "rgba(0,0,0,.2)", borderRadius: 8 }}>
               <div style={{ fontSize: 22, fontWeight: 800, color: "var(--sky2)" }}>{mt.length}</div><div className="muted" style={{ fontSize: 11 }}>Tasks</div></div>
               <div style={{ textAlign: "center", padding: 10, background: "rgba(0,0,0,.2)", borderRadius: 8 }}>
@@ -4400,6 +4683,10 @@ function CrewMgmt({ users, tasks, setActive, setIs1099, addUser, updateUser, rem
               onClick={() => setIs1099(m.id, !m.is1099)}>
               {m.is1099 ? "✓ 1099 Crew — shows in GSM Crew Pay" : "○ Not 1099 — hidden from GSM Crew Pay"}
             </button>
+            {!isAdmin && <button className={`btn btn-sm btn-full`} style={{ marginTop: 6, fontSize: 11, color: m.isSupervisor ? "var(--sky2)" : "var(--slate)", borderColor: m.isSupervisor ? "rgba(56,189,248,.5)" : "var(--border)", background: m.isSupervisor ? "rgba(56,189,248,.08)" : "transparent" }}
+              onClick={() => setIsSupervisor(m.id, !m.isSupervisor)}>
+              {m.isSupervisor ? "✓ Supervisor — receipts, tasks, photos, job contacts" : "○ Not a Supervisor — crew-level access only"}
+            </button>}
           </div>; })}</div>
 
       {/* ── Archived crew ── */}
@@ -4451,6 +4738,12 @@ function CrewMgmt({ users, tasks, setActive, setIs1099, addUser, updateUser, rem
               {form.role === "crew" ? "Crew sees their task dashboard (mobile-first)" : "Admin sees full management dashboard"}
             </p>
           </div>
+          {form.role === "crew" && (
+            <label style={{ display: "flex", alignItems: "center", gap: 9, background: "rgba(56,189,248,.06)", border: "1px solid rgba(56,189,248,.25)", borderRadius: 8, padding: "10px 12px", marginTop: 4, fontSize: 12, cursor: "pointer" }}>
+              <input type="checkbox" checked={form.isSupervisor === true} onChange={e => setForm(p => ({ ...p, isSupervisor: e.target.checked }))} style={{ width: 17, height: 17 }} />
+              Supervisor — adds receipts, task assignment, client/job photo uploads, and the job contact book on top of regular crew access
+            </label>
+          )}
           <div className="macts">
             {modal !== "add" && <button className="btn btn-s" style={{ marginRight: "auto", color: "var(--red)" }} onClick={() => { setConfirm(modal); setModal(null); }}>Remove</button>}
             <button className="btn btn-s" onClick={() => setModal(null)}>Cancel</button>
@@ -4877,6 +5170,8 @@ function AdminFieldMode({ jobs, tasks, setTasks, photos, setPhotos, receipts, se
   const [rcBusy, setRcBusy] = useState(false);
   const [rcDest, setRcDest] = useState("job"); // "job" | "office" | "auto" | "custom"
   const [rcCustomCat, setRcCustomCat] = useState("");
+  const [rcScanning, setRcScanning] = useState(false);
+  const [rcScanMsg, setRcScanMsg] = useState("");
   const rcPhotoRef = useRef();
 
   // Task state
@@ -4912,9 +5207,22 @@ function AdminFieldMode({ jobs, tasks, setTasks, photos, setPhotos, receipts, se
     if (done) setPhotoSaved(0);
   };
 
+  const RC_CAT_TO_DEST = { Office: "office", Auto: "auto", Tools: "tools", "Side Job": "side" };
   const captureRcPhoto = async (e) => {
     const file = e.target.files[0]; if (!file) return;
-    try { const { dataUrl } = await compressImage(file, 1000, 0.6); setRcPhoto(dataUrl); }
+    try {
+      const { dataUrl } = await compressImage(file, 1000, 0.6);
+      setRcPhoto(dataUrl);
+      setRcScanning(true); setRcScanMsg("");
+      const scan = await scanReceiptPhoto(dataUrl);
+      setRcScanning(false);
+      if (scan.ok && scan.result) {
+        const r = scan.result;
+        setRcForm(p => ({ ...p, store: r.vendor || p.store, amount: r.amount ? cleanScanAmount(r.amount) : p.amount, note: r.note || p.note }));
+        if (RC_CAT_TO_DEST[r.category]) setRcDest(RC_CAT_TO_DEST[r.category]);
+        setRcScanMsg(`✓ AI filled ${r.vendor || "vendor"}${r.amount ? " · $" + Number(cleanScanAmount(r.amount)).toFixed(2) : ""} — review before saving`);
+      } else { console.error("scan-receipt failed:", scan.error); setRcScanMsg(`AI read failed: ${scan.error || "unknown error"} — fill in manually`); }
+    }
     catch { alert("Could not process image. Try again."); }
     e.target.value = "";
   };
@@ -4933,7 +5241,7 @@ function AdminFieldMode({ jobs, tasks, setTasks, photos, setPhotos, receipts, se
     const row = { id, data_url: storagePath ? null : rcPhoto, storage_path: storagePath, task_id: null, job_id: jobIdVal, category, crew_id: user.id, store: rcForm.store, amount: parseFloat(rcForm.amount)||0, note: rcForm.note, paid_by: rcForm.paidBy, reimbursement_status: rcForm.paidBy==="crew"?"pending":"na" };
     try { await sbPost("field_receipts", row); } catch { enqueue({ table: "field_receipts", payload: row }); }
     pushReceiptToGSM(receipt, jobs, user.name);
-    setRcForm({ store:"", amount:"", note:"", paidBy:"crew" }); setRcPhoto(null); setRcBusy(false); setRcDest("job"); setRcCustomCat("");
+    setRcForm({ store:"", amount:"", note:"", paidBy:"crew" }); setRcPhoto(null); setRcBusy(false); setRcDest("job"); setRcCustomCat(""); setRcScanMsg("");
     alert("Receipt saved!");
   };
 
@@ -5154,12 +5462,16 @@ function AdminFieldMode({ jobs, tasks, setTasks, photos, setPhotos, receipts, se
                 <button className={`btn btn-sm ${rcForm.paidBy==="crew"?"btn-a":"btn-s"}`} onClick={()=>setRcForm(p=>({...p,paidBy:"crew"}))}>I Paid — Need Reimbursement</button>
                 <button className={`btn btn-sm ${rcForm.paidBy==="company"?"btn-p":"btn-s"}`} onClick={()=>setRcForm(p=>({...p,paidBy:"company"}))}>Company Card</button>
               </div>
-              <div style={{ display:"flex", gap:8, marginBottom:12, alignItems:"center" }}>
+              <div style={{ display:"flex", gap:8, marginBottom:8, alignItems:"center" }}>
                 {rcPhoto && <img src={rcPhoto} alt="rcpt" style={{ width:48, height:48, objectFit:"cover", borderRadius:6, border:"2px solid var(--green)" }} />}
                 <button className="btn btn-s btn-sm" onClick={()=>{rcPhotoRef.current?.setAttribute("capture","environment");rcPhotoRef.current?.click();}}>
                   <Icon n="camera" s={14}/> {rcPhoto ? "Retake Receipt Photo" : "Snap Receipt Photo"}
                 </button>
               </div>
+              {(rcScanning || rcScanMsg) && <div style={{ marginBottom:12, fontSize:12, display:"flex", alignItems:"center", gap:8,
+                color: rcScanning ? "var(--sky2)" : rcScanMsg.startsWith("✓") ? "var(--green)" : "var(--orange)" }}>
+                {rcScanning ? <><span className="spin" /> Reading receipt…</> : rcScanMsg}
+              </div>}
               <button className="btn btn-p btn-full" disabled={rcBusy||!rcForm.store||!rcForm.amount||(rcDest==="job"&&!selJob)||(rcDest==="custom"&&!rcCustomCat.trim())} onClick={saveReceipt} style={{ justifyContent:"center" }}>
                 {rcBusy?<span className="spin"/>:"Save Receipt"}
               </button>
@@ -6464,17 +6776,20 @@ function CrewTasks(props) {
   // the day, not the hour, so a quick in-then-out (e.g. fixing a forgotten
   // morning check-in) still needs the same task accounting as any other.
   const requestCheckOut = (job) => {
+    const assignedJobTasks = tasks.filter(tk =>
+      !tk.recurring && tk.jobId === job.id &&
+      (Array.isArray(tk.assignedTo) ? tk.assignedTo.includes(user.id) : tk.assignedTo === user.id)
+    );
     const already = new Set(
       logs.filter(l => l.crewId === user.id && l.date === today &&
         (l.en?.startsWith(`${T.en.workedOnTask}:`) || l.en?.startsWith(`${T.en.completedTask}:`)))
         .map(l => l.taskId)
     );
-    const pend = tasks.filter(tk =>
-      tk.status === "pending" && !tk.recurring && tk.jobId === job.id &&
-      (Array.isArray(tk.assignedTo) ? tk.assignedTo.includes(user.id) : tk.assignedTo === user.id) &&
+    const pend = assignedJobTasks.filter(tk =>
+      tk.status === "pending" &&
       !already.has(tk.id)
     );
-    if (pend.length === 0) { checkOut(job); return; }
+    if (pend.length === 0 && assignedJobTasks.length > 0) { checkOut(job); return; }
     setCheckoutGate({ job, tasks: pend });
   };
   const gateComplete = async (task) => {
@@ -6523,7 +6838,8 @@ function CrewTasks(props) {
 
   const crew24hCutoff = new Date(Date.now() - 24 * 3600000).toISOString();
   const myRegularVisible = my.filter(t => !t.recurring && (t.status !== "done" || !t.completedAt || t.completedAt >= crew24hCutoff));
-  const groups = [...new Set(myRegularVisible.map(t => t.jobId))];
+  // Every active job is a valid clock-in destination, even with no assigned task.
+  const groups = jobs.filter(j => j.status !== "closed").map(j => j.id);
 
   return (
     <div>
