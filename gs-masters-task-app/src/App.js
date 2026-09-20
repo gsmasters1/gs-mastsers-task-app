@@ -1828,13 +1828,18 @@ function QRClockIn({ jobId, theme, loggedInUser }) {
     try {
       const now = new Date();
       const today = localDate();
-      // Auto-close any open check-ins at OTHER jobs (job switch)
+      // Auto-close any open check-ins at OTHER jobs (job switch). If they
+      // forgot to check out days ago, "now minus check_in" is a multi-day
+      // span, not a shift (seen as high as 146h in prod) -- cap it so a
+      // stale row at least stores a plausible number, and mark auto_closed
+      // so crew-pay excludes it from payroll pending a manual correction
+      // instead of quietly counting bogus hours.
       const openRows = await sbGet("field_checkins", `crew_id=eq.${u.id}&check_out=is.null`);
       for (const other of (openRows || []).filter(r => r.job_id !== jobId)) {
-        const hrs = Math.round((now - new Date(other.check_in)) / 36000) / 100;
+        const hrs = Math.min(14, Math.round((now - new Date(other.check_in)) / 36000) / 100);
         await sbFetch(`field_checkins?id=eq.${other.id}`, {
           method: "PATCH",
-          body: JSON.stringify({ check_out: now.toISOString(), hours: hrs, method: "auto" }),
+          body: JSON.stringify({ check_out: now.toISOString(), hours: hrs, auto_closed: true, method: "auto" }),
           prefer: "return=minimal",
         });
       }
@@ -6781,9 +6786,11 @@ function CrewTasks(props) {
         const now = new Date();
         const map = {};
         rows.forEach(r => {
-          // Auto-close stale check-ins from previous days
+          // Auto-close stale check-ins from previous days. Capped the same
+          // way as the job-switch auto-close above -- a multi-day-old
+          // check-in shouldn't store a multi-day "shift" (seen up to 146h).
           if (r.work_date && r.work_date < today) {
-            const hrs = Math.round((now - new Date(r.check_in)) / 36000) / 100;
+            const hrs = Math.min(14, Math.round((now - new Date(r.check_in)) / 36000) / 100);
             sbFetch(`field_checkins?id=eq.${r.id}`, { method: "PATCH", body: JSON.stringify({ check_out: now.toISOString(), hours: hrs, auto_closed: true, method: "auto" }), prefer: "return=minimal" }).catch(() => {});
           } else {
             map[r.job_id] = { id: r.id, jobId: r.job_id, checkIn: r.check_in };
