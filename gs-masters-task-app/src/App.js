@@ -996,6 +996,7 @@ export default function App() {
   const [tab, setTab] = useState("dash");
   const [showInstall, setShowInstall] = useState(false);
   const [logoutGateTasks, setLogoutGateTasks] = useState(null); // tasks to resolve before logout is allowed
+  const [logoutGateJobId, setLogoutGateJobId] = useState(null); // the one job they were on today, if unambiguous -- ties the off-list note to it automatically
   const toggleTheme = () => setTheme(t => { const n = t === "dark" ? "light" : "dark"; localStorage.setItem("gsm_theme", n); return n; });
   const [menuOpen, setMenuOpen] = useState(false);
   const [jobs, setJobs] = useState([]);
@@ -1366,13 +1367,20 @@ export default function App() {
   // per task — nothing is assumed about tasks they don't tap — but they
   // must account for at least one thing (a tagged task or an off-list
   // note) before Continue unlocks.
+  // Every crew workday must be accounted for, not just days with a formal
+  // job check-in -- a small errand or an emergency call-out is still a day
+  // of work. Gate only skips once there's genuinely nothing left to
+  // account for: no unresolved pending task AND at least one general
+  // (task-less) note already logged today. First logout attempt of a
+  // no-checkin day still forces the gate, since hasGeneralLogToday starts
+  // false -- the off-list note becomes the only way through, same as
+  // LogoutTaskGate already handles an empty task list.
   const requestLogout = async () => {
     if (user.role !== "crew") { logout(); return; }
     try {
       const todayD = localDate();
       const checkins = await sbGet("field_checkins", `crew_id=eq.${user.id}&work_date=eq.${todayD}`);
       const todayJobIds = new Set((checkins || []).map(c => c.job_id));
-      if (todayJobIds.size === 0) { logout(); return; }
       const already = new Set(
         logs.filter(l => l.crewId === user.id && l.date === todayD &&
           (l.en?.startsWith(`${T.en.workedOnTask}:`) || l.en?.startsWith(`${T.en.completedTask}:`)))
@@ -1383,13 +1391,13 @@ export default function App() {
         (Array.isArray(tk.assignedTo) ? tk.assignedTo.includes(user.id) : tk.assignedTo === user.id) &&
         !already.has(tk.id)
       );
-      // Always show the gate if they checked into a job today, even with an
-      // empty pend list -- clocking into a job with no assigned tasks (now
-      // allowed) must still require accounting for the day via the gate's
-      // off-list note field, not skip the prompt entirely. LogoutTaskGate
-      // already handles tasks=[] correctly (off-list note becomes the only
-      // way to unlock Continue); the bug was here, short-circuiting before
-      // the gate ever rendered.
+      const hasGeneralLogToday = logs.some(l => l.crewId === user.id && l.date === todayD && !l.taskId);
+      if (pend.length === 0 && hasGeneralLogToday) { logout(); return; }
+      // Only auto-tie the off-list note to a job when it's unambiguous --
+      // exactly one job checked into today. Multiple jobs or none at all
+      // leaves it job-less, which is exactly the case office needs to see
+      // and classify (see logOtherWorkGeneral below).
+      setLogoutGateJobId(todayJobIds.size === 1 ? [...todayJobIds][0] : null);
       setLogoutGateTasks(pend);
     } catch { logout(); } // offline/error — never trap someone from logging out
   };
@@ -1431,12 +1439,19 @@ export default function App() {
   // slow/failed translate call), then backfill both language columns via
   // Google Translate. Don't infer which language they typed — translate
   // to both en and es independently so it's right either way.
-  const logOtherWorkGeneral = async (text) => {
+  // jobId ties this to whatever single job they were on today (set by
+  // requestLogout when unambiguous). When there's no job -- an emergency
+  // call-out, a small errand, anything outside the normal check-in flow --
+  // job_id stays null and resolved stays false on purpose: that's exactly
+  // what the office-side classification queue in app.gsmastersinc.com
+  // (field-app.html) reads to find entries that still need a job assigned
+  // and a pay decision made. Never invent a job or silently drop it.
+  const logOtherWorkGeneral = async (text, jobId = null) => {
     const todayD = localDate();
     const logId = "l" + Date.now();
-    const log = { id: logId, en: text, es: text, weather: "", taskId: null, jobId: null, crewId: user.id, date: todayD };
+    const log = { id: logId, en: text, es: text, weather: "", taskId: null, jobId, crewId: user.id, date: todayD, resolved: Boolean(jobId) };
     setLogs(p => [...p, log]);
-    const row = { id: logId, text_en: text, text_es: text, task_id: null, job_id: null, crew_id: user.id, log_date: todayD };
+    const row = { id: logId, text_en: text, text_es: text, task_id: null, job_id: jobId, crew_id: user.id, log_date: todayD, resolved: Boolean(jobId) };
     try { await sbPost("field_logs", row); } catch { enqueue({ table: "field_logs", payload: row }); return; }
     if (settings?.gtKey) {
       try {
@@ -1473,8 +1488,8 @@ export default function App() {
       <InstallPrompt lang={lang} externalShow={showInstall} onExternalClose={() => setShowInstall(false)} />
       {logoutGateTasks && (
         <LogoutTaskGate tasks={logoutGateTasks} jobs={jobs} lang={lang} t={t}
-          onComplete={resolveTaskComplete} onWorkedOn={resolveTaskWorkedOn} onLogOther={logOtherWorkGeneral}
-          onDone={() => { setLogoutGateTasks(null); logout(); }} />
+          onComplete={resolveTaskComplete} onWorkedOn={resolveTaskWorkedOn} onLogOther={text => logOtherWorkGeneral(text, logoutGateJobId)}
+          onDone={() => { setLogoutGateTasks(null); setLogoutGateJobId(null); logout(); }} />
       )}
     </div>
   );
