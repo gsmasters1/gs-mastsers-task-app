@@ -1339,7 +1339,7 @@ export default function App() {
     try {
       await sbFetch("field_integration_settings?id=eq.1", {
         method: "PATCH",
-        body: JSON.stringify({ gt_key: s.gtKey || null, app_url: s.appUrl || null, reminder_time: s.reminder || null, admin_phone: s.adminPhone || null }),
+        body: JSON.stringify({ gt_key: s.gtKey || null, app_url: s.appUrl || null, reminder_time: s.reminder || null, admin_phone: s.adminPhone || null, crew_photo_sharing: s.crewPhotoSharing === true }),
         prefer: "return=minimal",
       });
     } catch {}
@@ -1356,6 +1356,7 @@ export default function App() {
         appUrl: r.app_url || "",
         reminder: r.reminder_time || "17:00",
         adminPhone: r.admin_phone || "",
+        crewPhotoSharing: r.crew_photo_sharing === true,
       };
       setSettings(merged);
       localStorage.setItem("gsm_set", JSON.stringify(merged));
@@ -4969,7 +4970,7 @@ function TestReminder({ f }) {
 }
 
 function Settings({ settings, saveSettings }) {
-  const [f, setF] = useState({ gtKey: settings.gtKey || "", reminder: settings.reminder || "17:00", appUrl: settings.appUrl || "https://quiet-seahorse-2ba028.netlify.app" });
+  const [f, setF] = useState({ gtKey: settings.gtKey || "", reminder: settings.reminder || "17:00", appUrl: settings.appUrl || "https://quiet-seahorse-2ba028.netlify.app", crewPhotoSharing: settings.crewPhotoSharing === true });
   const [saved, setSaved] = useState(false);
 
   const save = async () => {
@@ -5012,6 +5013,10 @@ function Settings({ settings, saveSettings }) {
           <input className="fi" type="password" value={f.gtKey} onChange={e => setF(p => ({ ...p, gtKey: e.target.value }))} placeholder="AIzaSy... (optional)" />
           <p className="muted" style={{ fontSize: 11, marginTop: 4 }}>Without this, Spanish translations must be typed manually. Get free key at console.cloud.google.com → Translate API.</p>
         </div>
+        <label style={{ display: "flex", alignItems: "center", gap: 9, background: "rgba(255,255,255,.04)", border: "1px solid var(--border)", borderRadius: 8, padding: "12px 14px", marginBottom: 14, cursor: "pointer" }}>
+          <input type="checkbox" checked={f.crewPhotoSharing} onChange={e => setF(p => ({ ...p, crewPhotoSharing: e.target.checked }))} style={{ width: 17, height: 17 }} />
+          <span style={{ fontSize: 13 }}>Let crew see each other's photos <span className="muted" style={{ fontSize: 11 }}>— off by default. Supervisors and admin always see every crew member's photos regardless of this setting; this only controls whether regular crew can see photos beyond their own.</span></span>
+        </label>
         <button className="btn btn-p" onClick={save} style={{ minWidth: 140 }}>{saved ? <><Icon n="check" s={16} /> Saved!</> : "Save Settings"}</button>
       </div>
     </div>
@@ -7615,8 +7620,15 @@ function CrewTasks(props) {
 
 
 function CrewPhotos(props) {
-  const { user, tasks, jobs, photos, setPhotos, t } = props;
+  const { user, tasks, jobs, photos, setPhotos, settings, users, t } = props;
   const my = tasks.filter(tk => Array.isArray(tk.assignedTo) ? tk.assignedTo.includes(user.id) : tk.assignedTo === user.id);
+  // Regular crew only ever see their own photos here by default -- a
+  // supervisor stuck on the same view would otherwise be just as blind to
+  // the crew they're supposed to be overseeing. Supervisors always see
+  // everyone's; regular crew only do too if office explicitly turns on
+  // crew photo sharing in Settings (off by default).
+  const canSeeAllPhotos = user.isSupervisor === true || settings?.crewPhotoSharing === true;
+  const visiblePhotos = canSeeAllPhotos ? photos : photos.filter(p => p.crewId === user.id);
   const [task, setTask] = useState(""); const [type, setType] = useState("before"); const [busy, setBusy] = useState(false);
   const fileRef = useRef();
   const camRef  = useRef();
@@ -7679,14 +7691,14 @@ function CrewPhotos(props) {
         </div>
         <p className="muted" style={{ fontSize: 11, marginTop: 8 }}>{t.photoNote}</p>
       </div>
-      {[...new Set(photos.filter(p => p.crewId === user.id).map(p => p.taskId))].map(tid => {
-        const tk = tasks.find(x => x.id === tid), j = jobs.find(j => j.id === tk?.jobId), tp = photos.filter(p => p.taskId === tid && p.crewId === user.id);
+      {[...new Set(visiblePhotos.map(p => p.taskId))].map(tid => {
+        const tk = tasks.find(x => x.id === tid), j = jobs.find(j => j.id === tk?.jobId), tp = visiblePhotos.filter(p => p.taskId === tid);
         return <div key={tid} className="card"><div className="ct" style={{ fontSize: 15 }}>{j?.name} — {tk?.title}</div>
           <div className="pgrid">{tp.map((p, i) => <div key={i} className="pthumb" style={{ position:"relative" }}>
             {p.dataUrl ? <img src={p.dataUrl} alt={p.type} /> : <Icon n="camera" s={28} c="var(--slate)" />}
-            <div className="plabel" style={{ color: typeColor(p.type) }}>{typeLabel(p.type)} · {p.sizeKB}kb</div>
-            <button onClick={() => removePhoto(p)}
-              style={{ position:"absolute",top:3,right:3,background:"rgba(239,68,68,.85)",border:"none",borderRadius:4,color:"#fff",cursor:"pointer",fontSize:10,padding:"2px 4px",lineHeight:1,zIndex:2 }}>✕</button>
+            <div className="plabel" style={{ color: typeColor(p.type) }}>{typeLabel(p.type)} · {p.sizeKB}kb{p.crewId !== user.id ? ` · ${users?.find(u => u.id === p.crewId)?.name?.split(" ")[0] || "crew"}` : ""}</div>
+            {p.crewId === user.id && <button onClick={() => removePhoto(p)}
+              style={{ position:"absolute",top:3,right:3,background:"rgba(239,68,68,.85)",border:"none",borderRadius:4,color:"#fff",cursor:"pointer",fontSize:10,padding:"2px 4px",lineHeight:1,zIndex:2 }}>✕</button>}
           </div>)}</div></div>;
       })}
     </div>
