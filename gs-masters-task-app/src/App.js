@@ -142,6 +142,38 @@ const fromPhoto   = r => ({ id: r.id, taskId: r.task_id, jobId: r.job_id, crewId
 const fromReceipt = r => ({ id: r.id, taskId: r.task_id, jobId: r.job_id, category: r.category || null, crewId: r.crew_id, dataUrl: r.storage_path ? `${SB_URL}/storage/v1/object/public/portal-uploads/${r.storage_path}` : (r.data_url || null), storagePath: r.storage_path || null, store: r.store, amount: r.amount, note: r.note, paidBy: r.paid_by || "crew", reimbursementStatus: r.reimbursement_status || "pending", reimbursementDate: r.reimbursement_date || null, billStatus: r.bill_status || "pending_review", createdAt: (r.created_at || "").slice(0, 10), integrationSentAt: r.integration_sent_at || null });
 const fromMat     = r => ({ id: r.id, taskId: r.task_id, jobId: r.job_id, crewId: r.crew_id, en: r.text_en, es: r.text_es, fulfilled: r.fulfilled });
 const fromCheckin  = r => ({ id: r.id, crewId: r.crew_id, jobId: r.job_id, checkIn: r.check_in, checkOut: r.check_out, hours: r.hours, date: r.work_date, latIn: r.lat_in, lngIn: r.lng_in, method: r.method || "qr", autoClosed: r.auto_closed === true });
+
+// ─── WEATHER AUTO-TAG ────────────────────────────────────────────────────
+// field_jobs already stores lat/lng (no geocoding needed). Open-Meteo needs
+// no API key/signup -- fits the "free infra always preferred" rule. Best
+// effort only: a log must never fail or block on this, and it's cached per
+// job+day so multiple logs at the same job don't refetch. Feeds the delay-
+// reason data the phase-schedule design (earlier this session) wanted for
+// its wait-time buffers, and gives office a passive "was it raining that
+// day" record with zero extra crew effort.
+const _weatherCache = {};
+function weatherCodeToCategory(code, tempF) {
+  if (tempF != null && tempF >= 90) return "hot";
+  if ([0, 1].includes(code)) return "sunny";
+  if ([2, 3, 45, 48].includes(code)) return "cloudy";
+  return "rainy"; // drizzle/rain/showers/snow/thunderstorm all bucket here -- only 4 categories exist today
+}
+async function getTodaysWeather(job) {
+  if (!job?.lat || !job?.lng) return "";
+  const cacheKey = job.id + ":" + localDate();
+  if (_weatherCache[cacheKey] !== undefined) return _weatherCache[cacheKey];
+  try {
+    const res = await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${job.lat}&longitude=${job.lng}&current=temperature_2m,weather_code&temperature_unit=fahrenheit&timezone=auto`);
+    if (!res.ok) throw new Error("weather fetch failed");
+    const data = await res.json();
+    const category = weatherCodeToCategory(data?.current?.weather_code, data?.current?.temperature_2m);
+    _weatherCache[cacheKey] = category;
+    return category;
+  } catch {
+    _weatherCache[cacheKey] = "";
+    return "";
+  }
+}
 const fromDispatch = r => ({ id: r.id, crewId: r.crew_id, date: r.date, jobIds: r.job_ids || [], customStops: r.custom_stops || [], createdBy: r.created_by });
 
 // Overhead receipt destinations — expenses not tied to a job: [key, button label, saved category]
@@ -1410,9 +1442,10 @@ export default function App() {
     const logId = "l" + Date.now();
     const enText = `${T.en.completedTask}: ${task.title}`;
     const esText = `${T.es.completedTask}: ${task.titleEs || task.title}`;
-    const log = { id: logId, en: enText, es: esText, weather: "", taskId: task.id, jobId: task.jobId, crewId: user.id, date: todayD };
+    const weather = await getTodaysWeather(jobs.find(j => j.id === task.jobId));
+    const log = { id: logId, en: enText, es: esText, weather, taskId: task.id, jobId: task.jobId, crewId: user.id, date: todayD };
     setLogs(p => [...p, log]);
-    const row = { id: logId, text_en: enText, text_es: esText, task_id: task.id, job_id: task.jobId, crew_id: user.id, log_date: todayD };
+    const row = { id: logId, text_en: enText, text_es: esText, weather, task_id: task.id, job_id: task.jobId, crew_id: user.id, log_date: todayD };
     try { await sbPost("field_logs", row); } catch { enqueue({ table: "field_logs", payload: row }); }
     const job = jobs.find(j => j.id === task.jobId);
     if (job?.gsmSync && job?.gsmJobId) {
@@ -1429,9 +1462,10 @@ export default function App() {
     const logId = "l" + Date.now();
     const enText = `${T.en.workedOnTask}: ${task.title}`;
     const esText = `${T.es.workedOnTask}: ${task.titleEs || task.title}`;
-    const log = { id: logId, en: enText, es: esText, weather: "", taskId: task.id, jobId: task.jobId, crewId: user.id, date: todayD };
+    const weather = await getTodaysWeather(jobs.find(j => j.id === task.jobId));
+    const log = { id: logId, en: enText, es: esText, weather, taskId: task.id, jobId: task.jobId, crewId: user.id, date: todayD };
     setLogs(p => [...p, log]);
-    const row = { id: logId, text_en: enText, text_es: esText, task_id: task.id, job_id: task.jobId, crew_id: user.id, log_date: todayD };
+    const row = { id: logId, text_en: enText, text_es: esText, weather, task_id: task.id, job_id: task.jobId, crew_id: user.id, log_date: todayD };
     try { await sbPost("field_logs", row); } catch { enqueue({ table: "field_logs", payload: row }); }
   };
 
@@ -1449,9 +1483,10 @@ export default function App() {
   const logOtherWorkGeneral = async (text, jobId = null) => {
     const todayD = localDate();
     const logId = "l" + Date.now();
-    const log = { id: logId, en: text, es: text, weather: "", taskId: null, jobId, crewId: user.id, date: todayD, resolved: Boolean(jobId) };
+    const weather = await getTodaysWeather(jobs.find(j => j.id === jobId));
+    const log = { id: logId, en: text, es: text, weather, taskId: null, jobId, crewId: user.id, date: todayD, resolved: Boolean(jobId) };
     setLogs(p => [...p, log]);
-    const row = { id: logId, text_en: text, text_es: text, task_id: null, job_id: jobId, crew_id: user.id, log_date: todayD, resolved: Boolean(jobId) };
+    const row = { id: logId, text_en: text, text_es: text, weather, task_id: null, job_id: jobId, crew_id: user.id, log_date: todayD, resolved: Boolean(jobId) };
     try { await sbPost("field_logs", row); } catch { enqueue({ table: "field_logs", payload: row }); return; }
     if (settings?.gtKey) {
       try {
@@ -6587,9 +6622,10 @@ function CrewTasks(props) {
     const job = jobs.find(j => j.id === jobId);
     const enText = `[Issue] ${issueText}`;
     const esText = `[Problema] ${issueText}`;
-    const log = { id: logId, en: enText, es: esText, weather: "", taskId: null, jobId, crewId: user.id, date: today };
+    const weather = await getTodaysWeather(job);
+    const log = { id: logId, en: enText, es: esText, weather, taskId: null, jobId, crewId: user.id, date: today };
     setLogs(p => [...p, log]);
-    const row = { id: logId, text_en: enText, text_es: esText, task_id: null, job_id: jobId, crew_id: user.id, log_date: today };
+    const row = { id: logId, text_en: enText, text_es: esText, weather, task_id: null, job_id: jobId, crew_id: user.id, log_date: today };
     try { await sbPost("field_logs", row); } catch { enqueue({ table: "field_logs", payload: row }); }
     // Save photo if attached
     if (issueDataUrl) {
@@ -6623,9 +6659,10 @@ function CrewTasks(props) {
       const logId = "l" + Date.now();
       const enText = `${T.en.completedTask}: ${task.title}`;
       const esText = `${T.es.completedTask}: ${task.titleEs || task.title}`;
-      const log = { id: logId, en: enText, es: esText, weather: "", taskId: id, jobId: task.jobId, crewId: user.id, date: today };
+      const weather = await getTodaysWeather(jobs.find(j => j.id === task.jobId));
+      const log = { id: logId, en: enText, es: esText, weather, taskId: id, jobId: task.jobId, crewId: user.id, date: today };
       setLogs(p => [...p, log]);
-      const row = { id: logId, text_en: enText, text_es: esText, task_id: id, job_id: task.jobId, crew_id: user.id, log_date: today };
+      const row = { id: logId, text_en: enText, text_es: esText, weather, task_id: id, job_id: task.jobId, crew_id: user.id, log_date: today };
       try { await sbPost("field_logs", row); } catch { enqueue({ table: "field_logs", payload: row }); }
       // GSM Builder sync
       const job = jobs.find(j => j.id === task.jobId);
@@ -6649,9 +6686,10 @@ function CrewTasks(props) {
     const logId = "l" + Date.now();
     const enText = `${T.en.workedOnTask}: ${task.title}`;
     const esText = `${T.es.workedOnTask}: ${task.titleEs || task.title}`;
-    const log = { id: logId, en: enText, es: esText, weather: "", taskId: task.id, jobId: task.jobId, crewId: user.id, date: today };
+    const weather = await getTodaysWeather(jobs.find(j => j.id === task.jobId));
+    const log = { id: logId, en: enText, es: esText, weather, taskId: task.id, jobId: task.jobId, crewId: user.id, date: today };
     setLogs(p => [...p, log]);
-    const row = { id: logId, text_en: enText, text_es: esText, task_id: task.id, job_id: task.jobId, crew_id: user.id, log_date: today };
+    const row = { id: logId, text_en: enText, text_es: esText, weather, task_id: task.id, job_id: task.jobId, crew_id: user.id, log_date: today };
     try { await sbPost("field_logs", row); } catch { enqueue({ table: "field_logs", payload: row }); }
   };
 
@@ -6816,9 +6854,10 @@ function CrewTasks(props) {
   const gateLogOther = async (text) => {
     const jobId = checkoutGate?.job?.id || null;
     const logId = "l" + Date.now();
-    const log = { id: logId, en: text, es: text, weather: "", taskId: null, jobId, crewId: user.id, date: today };
+    const weather = await getTodaysWeather(checkoutGate?.job);
+    const log = { id: logId, en: text, es: text, weather, taskId: null, jobId, crewId: user.id, date: today };
     setLogs(p => [...p, log]);
-    const row = { id: logId, text_en: text, text_es: text, task_id: null, job_id: jobId, crew_id: user.id, log_date: today };
+    const row = { id: logId, text_en: text, text_es: text, weather, task_id: null, job_id: jobId, crew_id: user.id, log_date: today };
     try { await sbPost("field_logs", row); } catch { enqueue({ table: "field_logs", payload: row }); return; }
     if (settings?.gtKey) {
       try {
