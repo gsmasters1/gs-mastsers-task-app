@@ -5415,7 +5415,7 @@ function AdminQRCodes({ jobs }) {
       <h2 className="h2" style={{ marginBottom: 6 }}>QR Codes</h2>
       <p className="muted" style={{ fontSize: 13, marginBottom: 8 }}>Print and post at each job site. Crew scans to clock in with GPS verification.</p>
       <div style={{ background: "rgba(245,158,11,.12)", border: "1px solid rgba(245,158,11,.4)", borderRadius: 10, padding: "10px 14px", fontSize: 13, color: "var(--accent)", marginBottom: 20 }}>
-        ⚠️ <strong>Reprint required when jobs are added or re-created.</strong> Old printed QR codes encode stale job IDs and will show "Job not found." Always reprint from this page after adding new jobs.
+        ⚠️ Each code only stops working if its own job gets deleted and re-created (a brand-new job ID). A new code is only needed for a brand-new job -- your other printed codes are unaffected and don't need reprinting.
       </div>
       {activeJobs.length === 0
         ? <div className="empty"><p>No active jobs.</p></div>
