@@ -6549,6 +6549,22 @@ function Crew(props) {
       .catch(() => {});
   }, [user.id]);
 
+  // Which job(s) this crew member has actually checked into today — every
+  // check-in today counts, not just the currently-open one (they may have
+  // already checked out of job A before checking into job B). Used to stop
+  // crew from marking a task complete/worked-on for a job they aren't
+  // physically on today (real incident: crew at Mt Brook tapping a task
+  // that belonged to a different job's mailbox). Refetched on tab switch
+  // so it's current right when it matters, without wiring into every
+  // check-in/out code path across the app.
+  const [todayJobIds, setTodayJobIds] = useState(new Set());
+  useEffect(() => {
+    const today = localDate();
+    sbGet("field_checkins", `crew_id=eq.${user.id}&work_date=eq.${today}&select=job_id`)
+      .then(rows => setTodayJobIds(new Set((rows || []).map(r => r.job_id))))
+      .catch(() => {});
+  }, [user.id, tab]);
+
   const clockOut = async () => {
     if (!openCheckin || clockingOut) return;
     setClockingOut(true);
@@ -6671,10 +6687,10 @@ function Crew(props) {
       </button>
 
       <div style={{ padding: 18, paddingBottom: 24 }}>
-        {ctab === "tasks" && <CrewTasks {...props} />}
-        {ctab === "cam" && <CrewPhotos {...props} />}
-        {ctab === "rec" && <CrewReceipts {...props} />}
-        {ctab === "log" && <CrewLog {...props} />}
+        {ctab === "tasks" && <CrewTasks {...props} todayJobIds={todayJobIds} />}
+        {ctab === "cam" && <CrewPhotos {...props} todayJobIds={todayJobIds} />}
+        {ctab === "rec" && <CrewReceipts {...props} todayJobIds={todayJobIds} />}
+        {ctab === "log" && <CrewLog {...props} todayJobIds={todayJobIds} />}
       </div>
 
       {/* Issue modal */}
@@ -6715,9 +6731,13 @@ function Crew(props) {
 }
 
 function CrewTasks(props) {
-  const { user, tasks, setTasks, jobs, lang, t, settings, photos, setPhotos, receipts, setReceipts, logs, setLogs, dispatches, mats } = props;
+  const { user, tasks, setTasks, jobs, lang, t, settings, photos, setPhotos, receipts, setReceipts, logs, setLogs, dispatches, mats, todayJobIds } = props;
   const closedJobIds = new Set(jobs.filter(j => j.status === "closed").map(j => j.id));
-  const my = tasks.filter(t => (Array.isArray(t.assignedTo) ? t.assignedTo.includes(user.id) : t.assignedTo === user.id) && !closedJobIds.has(t.jobId));
+  const myAssignedAll = tasks.filter(t => (Array.isArray(t.assignedTo) ? t.assignedTo.includes(user.id) : t.assignedTo === user.id) && !closedJobIds.has(t.jobId));
+  // Only tasks for a job this crew member actually checked into today are
+  // selectable — stops marking a task complete/worked-on for a job they
+  // aren't physically at (billing pulls the job straight off the task).
+  const my = myAssignedAll.filter(t => todayJobIds?.has(t.jobId));
   const today = localDate();
   const [checkedJob, setCheckedJob] = useState(null);
   const [gps, setGps] = useState(null);
@@ -7304,6 +7324,9 @@ function CrewTasks(props) {
           });
           const ci = checkedJob?.id === jid;
           const panel = activePanel?.jobId === jid ? activePanel.type : null;
+          const lockedTaskCount = todayJobIds && !todayJobIds.has(jid)
+            ? myAssignedAll.filter(t => t.jobId === jid && (t.status !== "done" || !t.completedAt || t.completedAt >= crew24hCutoff)).length
+            : 0;
 
           return <div key={jid} className="jobsec">
 
@@ -7477,6 +7500,13 @@ function CrewTasks(props) {
             {ci && checkedJob.dist != null && (
               <div style={{ padding: "6px 18px", fontSize: 12, color: checkedJob.dist < 0.5 ? "var(--green)" : "var(--orange)", background: "rgba(0,0,0,.2)" }}>
                 📍 {checkedJob.dist < 0.5 ? t.onSite : `${checkedJob.dist.toFixed(1)} mi ${t.fromSite}`}
+              </div>
+            )}
+
+            {/* ── Locked tasks notice — assigned here, but not checked in today ── */}
+            {lockedTaskCount > 0 && (
+              <div style={{ padding: "8px 18px", fontSize: 12, color: "var(--amber2)", background: "rgba(0,0,0,.15)" }}>
+                🔒 {lockedTaskCount} task{lockedTaskCount !== 1 ? "s" : ""} assigned here — check in above to work on {lockedTaskCount !== 1 ? "them" : "it"}.
               </div>
             )}
 
@@ -7794,8 +7824,10 @@ function CrewTasks(props) {
 
 
 function CrewPhotos(props) {
-  const { user, tasks, jobs, photos, setPhotos, settings, users, t } = props;
-  const my = tasks.filter(tk => Array.isArray(tk.assignedTo) ? tk.assignedTo.includes(user.id) : tk.assignedTo === user.id);
+  const { user, tasks, jobs, photos, setPhotos, settings, users, t, todayJobIds } = props;
+  // Only offer tasks on a job checked into today — same rule as CrewTasks,
+  // stops a photo getting attached to the wrong job's task.
+  const my = tasks.filter(tk => (Array.isArray(tk.assignedTo) ? tk.assignedTo.includes(user.id) : tk.assignedTo === user.id) && todayJobIds?.has(tk.jobId));
   // Regular crew only ever see their own photos here by default -- a
   // supervisor stuck on the same view would otherwise be just as blind to
   // the crew they're supposed to be overseeing. Supervisors always see
@@ -7941,8 +7973,10 @@ function ReceiptShortcutBanner({ lang }) {
 }
 
 function CrewReceipts(props) {
-  const { user, tasks, jobs, receipts, setReceipts, t, lang } = props;
-  const my = tasks.filter(t => Array.isArray(t.assignedTo) ? t.assignedTo.includes(user.id) : t.assignedTo === user.id);
+  const { user, tasks, jobs, receipts, setReceipts, t, lang, todayJobIds } = props;
+  // Only offer tasks on a job checked into today — stops a receipt getting
+  // attached to the wrong job's task.
+  const my = tasks.filter(t => (Array.isArray(t.assignedTo) ? t.assignedTo.includes(user.id) : t.assignedTo === user.id) && todayJobIds?.has(t.jobId));
   const [task, setTask] = useState(""); const [store, setStore] = useState(""); const [amount, setAmount] = useState(""); const [note, setNote] = useState(""); const [paidBy, setPaidBy] = useState("crew"); const [dataUrl, setDataUrl] = useState(null); const [busy, setBusy] = useState(false); const [done, setDone] = useState(false);
   const [showArchive, setShowArchive] = useState(false);
   const [dest, setDest] = useState("task"); // "task" | "office" | "auto" | "tools"
@@ -8069,8 +8103,10 @@ function ReceiptCard({ r, jobs, tasks, user, t, archived }) {
 }
 
 function CrewLog(props) {
-  const { user, tasks, jobs, logs, setLogs, lang, t, settings } = props;
-  const my = tasks.filter(t => Array.isArray(t.assignedTo) ? t.assignedTo.includes(user.id) : t.assignedTo === user.id);
+  const { user, tasks, jobs, logs, setLogs, lang, t, settings, todayJobIds } = props;
+  // Only offer tasks on a job checked into today — stops a log entry getting
+  // tied to the wrong job's task.
+  const my = tasks.filter(t => (Array.isArray(t.assignedTo) ? t.assignedTo.includes(user.id) : t.assignedTo === user.id) && todayJobIds?.has(t.jobId));
   const [task, setTask] = useState(""); const [en, setEn] = useState(""); const [es, setEs] = useState(""); const [weather, setWeather] = useState(""); const [busy, setBusy] = useState(false); const [done, setDone] = useState(false);
   const today = localDate();
   const loggedToday = logs.some(l => l.crewId === user.id && l.date === today);
