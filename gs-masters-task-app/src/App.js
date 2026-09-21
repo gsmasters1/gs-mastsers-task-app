@@ -3204,7 +3204,7 @@ function CalendarReport({ rangeStart, rangeEnd, reportJob, setReportJob, onClose
   );
 }
 
-function Calendar({ tasks, setTasks, jobs, users, receipts, photos }) {
+function Calendar({ tasks, setTasks, jobs, users, receipts, photos, logs }) {
   const [d, setD]         = useState(new Date());
   const [view, setView]   = useState("job");
   const [filter, setFilter] = useState("all");
@@ -3214,6 +3214,7 @@ function Calendar({ tasks, setTasks, jobs, users, receipts, photos }) {
   const [reportModal, setReportModal] = useState(false);
   const [reportJob,  setReportJob]  = useState("all");
   const [selectedDay, setSelectedDay] = useState(null); // date string — day detail panel
+  const [checkins, setCheckins] = useState([]); // field_checkins for the visible month
   const [editTask,   setEditTask]   = useState(null);   // task being edited
   const [editForm,   setEditForm]   = useState({});
   const [confirmDel, setConfirmDel] = useState(null);   // taskId to delete
@@ -3226,6 +3227,14 @@ function Calendar({ tasks, setTasks, jobs, users, receipts, photos }) {
   const dn = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
 
   const ds = (day) => `${y}-${String(mo+1).padStart(2,"0")}-${String(day).padStart(2,"0")}`;
+
+  useEffect(() => {
+    const lo = `${y}-${String(mo+1).padStart(2,"0")}-01`;
+    const hi = `${y}-${String(mo+1).padStart(2,"0")}-${String(days).padStart(2,"0")}`;
+    sbGet("field_checkins", `work_date=gte.${lo}&work_date=lte.${hi}&order=check_in.asc`)
+      .then(rows => setCheckins((rows || []).map(fromCheckin)))
+      .catch(() => setCheckins([]));
+  }, [y, mo, days]);
 
   const inRange = (dateStr) => {
     if (!rangeStart || !rangeEnd) return false;
@@ -3265,9 +3274,17 @@ function Calendar({ tasks, setTasks, jobs, users, receipts, photos }) {
 
   const saveEditTask = async () => {
     if (!editTask) return;
-    setTasks(p => p.map(t => t.id === editTask.id ? { ...t, ...editForm } : t));
+    // Was never re-translating on a title change (unlike saveEdit(), the
+    // task-list edit path a few lines up) -- title_es just went stale,
+    // showing whatever Spanish text existed for the OLD title forever.
+    let titleEs = editTask.titleEs;
+    if (editForm.title !== editTask.title && settings?.gtKey) {
+      try { titleEs = await translateText(editForm.title, "es", settings.gtKey); }
+      catch { titleEs = editForm.title; }
+    }
+    setTasks(p => p.map(t => t.id === editTask.id ? { ...t, ...editForm, titleEs: titleEs || editForm.title } : t));
     const patch = {};
-    if (editForm.title)   patch.title    = editForm.title;
+    if (editForm.title)   { patch.title = editForm.title; patch.title_es = titleEs || editForm.title; }
     if (editForm.dueDate !== undefined) patch.due_date = editForm.dueDate || null;
     try { await sbFetch(`field_tasks?id=eq.${editTask.id}`, { method:"PATCH", body: JSON.stringify(patch), prefer:"return=minimal" }); } catch {}
     setEditTask(null);
@@ -3276,9 +3293,15 @@ function Calendar({ tasks, setTasks, jobs, users, receipts, photos }) {
   const addTaskForDay = async () => {
     if (!newTask.title || !newTask.jobId) return;
     const id = "t" + Date.now();
-    const task = { id, jobId: newTask.jobId, title: newTask.title, titleEs: newTask.title, assignedTo: newTask.assignedTo, dueDate: addForDay, status:"pending", createdAt: todayStr };
+    // Was never translating at all (unlike add()/saveTask() elsewhere) --
+    // titleEs was just a copy of the English title, so a Spanish-language
+    // device showed the same English text as everyone else for any task
+    // created from this calendar day-view screen.
+    let titleEs = newTask.title;
+    if (settings?.gtKey) { try { titleEs = (await translateText(newTask.title, "es", settings.gtKey)) || newTask.title; } catch {} }
+    const task = { id, jobId: newTask.jobId, title: newTask.title, titleEs, assignedTo: newTask.assignedTo, dueDate: addForDay, status:"pending", createdAt: todayStr };
     setTasks(p => [...p, task]);
-    const row = { id, job_id: newTask.jobId, title: newTask.title, title_es: newTask.title, assigned_to: newTask.assignedTo, due_date: addForDay, status:"pending" };
+    const row = { id, job_id: newTask.jobId, title: newTask.title, title_es: titleEs, assigned_to: newTask.assignedTo, due_date: addForDay, status:"pending" };
     try { await sbPost("field_tasks", row); } catch { enqueue({ table:"field_tasks", payload: row }); }
     setNewTask({ jobId:"", title:"", assignedTo:[] });
     setAddForDay(null);
@@ -3317,6 +3340,15 @@ function Calendar({ tasks, setTasks, jobs, users, receipts, photos }) {
     });
     return evs;
   };
+
+  const checkinsForDay = (date) => checkins.filter(c => c.date === date)
+    .sort((a,b) => (a.checkIn||"").localeCompare(b.checkIn||""));
+
+  const noteForCheckin = (ci) => (logs || [])
+    .filter(l => l.crewId === ci.crewId && l.date === ci.date && (!l.jobId || l.jobId === ci.jobId))
+    .map(l => l.en).filter(Boolean).join(" — ");
+
+  const fmtTime = iso => iso ? new Date(iso).toLocaleTimeString([], { hour:"2-digit", minute:"2-digit" }) : "";
 
   const chipColor = (ev) => {
     if (ev.kind === "completed") return "#10b981"; // green = completed that day
@@ -3384,6 +3416,7 @@ function Calendar({ tasks, setTasks, jobs, users, receipts, photos }) {
           {Array(first).fill(0).map((_, i) => <div key={"e"+i} className="cal-d" style={{ opacity: .2 }} />)}
           {Array(days).fill(0).map((_, i) => {
             const day = i + 1, evs = eventsForDay(day), date = ds(day);
+            const dayCheckins = checkinsForDay(date);
             const ranged = inRange(date), edge = isRangeEdge(date);
             const isSelected = selectedDay === date;
             return <div key={day}
@@ -3404,6 +3437,12 @@ function Calendar({ tasks, setTasks, jobs, users, receipts, photos }) {
                 </div>
               ))}
               {evs.length > 3 && <div style={{ fontSize:9, color:"var(--slate)", marginTop:2 }}>+{evs.length-3} more</div>}
+              {dayCheckins.length > 0 && (
+                <div style={{ fontSize:9, color:"var(--accent)", marginTop:3, fontWeight:700 }}
+                  onClick={e => { e.stopPropagation(); setSelectedDay(date); }}>
+                  🕐 {dayCheckins.length} check-in{dayCheckins.length!==1?"s":""}
+                </div>
+              )}
             </div>;
           })}
         </div>
@@ -3412,13 +3451,14 @@ function Calendar({ tasks, setTasks, jobs, users, receipts, photos }) {
       {/* ── Day Detail Panel ── */}
       {selectedDay && (() => {
         const dayTasks = ft.filter(t => t.dueDate === selectedDay || t.createdAt === selectedDay || (t.completedAt && localDateOf(t.completedAt) === selectedDay));
+        const dayCheckins = checkinsForDay(selectedDay);
         const dn2 = new Date(selectedDay + "T12:00:00").toLocaleDateString([], { weekday:"long", month:"long", day:"numeric" });
         return (
           <div className="card" style={{ marginBottom: 16, borderLeft:"4px solid var(--accent)" }}>
             <div className="flexb" style={{ marginBottom:12 }}>
               <div>
                 <div style={{ fontFamily:"'Barlow Condensed'", fontSize:18, fontWeight:800, color:"var(--accent)" }}>{dn2}</div>
-                <div className="muted" style={{ fontSize:12 }}>{dayTasks.length} task{dayTasks.length!==1?"s":""} on this date</div>
+                <div className="muted" style={{ fontSize:12 }}>{dayTasks.length} task{dayTasks.length!==1?"s":""} · {dayCheckins.length} check-in{dayCheckins.length!==1?"s":""} on this date</div>
               </div>
               <div style={{ display:"flex", gap:8 }}>
                 <button className="btn btn-p btn-sm" onClick={() => { setAddForDay(selectedDay); setNewTask({ jobId:"", title:"", assignedTo:[] }); }}>
@@ -3427,6 +3467,28 @@ function Calendar({ tasks, setTasks, jobs, users, receipts, photos }) {
                 <button className="btn btn-s btn-sm" onClick={() => setSelectedDay(null)}>✕</button>
               </div>
             </div>
+
+            {dayCheckins.length > 0 && (
+              <div style={{ marginBottom:16 }}>
+                <div style={{ fontSize:11, fontWeight:700, textTransform:"uppercase", letterSpacing:.6, color:"var(--accent)", marginBottom:6 }}>🕐 Check-ins</div>
+                {dayCheckins.map(ci => {
+                  const crewName = users.find(u => u.id === ci.crewId)?.name || ci.crewId;
+                  const jobName = jobs.find(j => j.id === ci.jobId)?.name || "—";
+                  const note = noteForCheckin(ci);
+                  return (
+                    <div key={ci.id} style={{ padding:"8px 10px", marginBottom:6, background:"rgba(255,255,255,.03)", borderRadius:8 }}>
+                      <div style={{ display:"flex", justifyContent:"space-between", flexWrap:"wrap", gap:6 }}>
+                        <span style={{ fontWeight:600, fontSize:13 }}>{crewName} <span style={{ color:"var(--silver)", fontWeight:400 }}>· {jobName}</span></span>
+                        <span style={{ fontSize:12, fontFamily:"monospace", color:"var(--silver)" }}>
+                          {fmtTime(ci.checkIn)} – {ci.checkOut ? fmtTime(ci.checkOut) : "still on site"} ({(+ci.hours||0).toFixed(1)}h)
+                        </span>
+                      </div>
+                      {note && <div style={{ fontSize:12, color:"var(--mist)", marginTop:4 }}>{note}</div>}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
 
             {dayTasks.length === 0
               ? <div className="empty" style={{ padding:"12px 0" }}><p style={{ fontSize:13 }}>No tasks due or created on this day.</p></div>
