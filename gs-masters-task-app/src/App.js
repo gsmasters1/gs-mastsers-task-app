@@ -3204,7 +3204,7 @@ function CalendarReport({ rangeStart, rangeEnd, reportJob, setReportJob, onClose
   );
 }
 
-function Calendar({ tasks, setTasks, jobs, users, receipts }) {
+function Calendar({ tasks, setTasks, jobs, users, receipts, photos }) {
   const [d, setD]         = useState(new Date());
   const [view, setView]   = useState("job");
   const [filter, setFilter] = useState("all");
