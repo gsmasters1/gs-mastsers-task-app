@@ -6889,8 +6889,19 @@ function CrewTasks(props) {
   const checkIn = async (job) => {
     const loc = await getLocation();
     setGps(loc);
+    // This is the tap-to-check-in path (no QR scan) -- distance was already
+    // being computed for the on-site/off-site badge below but never
+    // enforced, unlike the QR flow, which already hard-blocks at the same
+    // QR_MAX_DIST_MI. That made this the one way to check in from anywhere
+    // with no location check at all. Same threshold, same rule, both paths.
     if (loc && job.lat) {
       const dist = distanceMi(loc, { lat: job.lat, lng: job.lng });
+      if (dist !== null && dist > QR_MAX_DIST_MI) {
+        alert(lang === "es"
+          ? `Demasiado lejos del sitio (${dist.toFixed(2)} mi). Debes estar a menos de ½ milla.`
+          : `Too far from site (${dist.toFixed(2)} mi away). Must be within ½ mile.`);
+        return;
+      }
       setCheckedJob({ id: job.id, dist });
     } else setCheckedJob({ id: job.id, dist: null });
     // Save check-in to DB
