@@ -148,7 +148,7 @@ async function deleteFromStorage(path) {
 // ─── SNAKE ↔ CAMEL TRANSFORMS ──────────────────────────────────────────
 const fromProfile = r => ({ id: r.id, name: r.name, role: r.role, email: r.email, phone: r.phone || "", pin: r.pin, active: r.active !== false, archived: r.archived === true, is1099: r.is_1099 === true, isSupervisor: r.is_supervisor === true });
 const fromJob     = r => ({ id: r.id, name: r.name, address: r.address || "", lat: r.lat, lng: r.lng, budget: r.budget, status: r.status, closedAt: r.closed_at, gsmJobId: r.gsm_job_id, gsmSync: r.gsm_sync || false });
-const fromTask    = r => ({ id: r.id, jobId: r.job_id, title: r.title, titleEs: r.title_es || "", assignedTo: Array.isArray(r.assigned_to) ? r.assigned_to : (r.assigned_to ? [r.assigned_to] : []), status: r.status, dueDate: r.due_date || "", createdAt: (r.created_at || "").slice(0, 10), completedAt: r.completed_at || null, priority: r.priority === 1 ? "urgent" : "normal", recurring: r.recurring || false, photoRequired: r.photo_required === true });
+const fromTask    = r => ({ id: r.id, jobId: r.job_id, title: r.title, titleEs: r.title_es || "", notes: r.notes || "", notesEs: r.notes_es || "", assignedTo: Array.isArray(r.assigned_to) ? r.assigned_to : (r.assigned_to ? [r.assigned_to] : []), status: r.status, dueDate: r.due_date || "", createdAt: (r.created_at || "").slice(0, 10), completedAt: r.completed_at || null, priority: r.priority === 1 ? "urgent" : "normal", recurring: r.recurring || false, photoRequired: r.photo_required === true });
 const toPriority  = p => p === "urgent" ? 1 : 3;
 const fromLog     = r => ({ id: r.id, taskId: r.task_id, jobId: r.job_id, crewId: r.crew_id, en: r.text_en, es: r.text_es, weather: r.weather, date: r.log_date, adminReply: r.admin_reply || null, resolved: r.resolved || false });
 const fromPhoto   = r => ({ id: r.id, taskId: r.task_id, jobId: r.job_id, crewId: r.crew_id, dataUrl: r.storage_path ? `${SB_URL}/storage/v1/object/public/portal-uploads/${r.storage_path}` : (r.data_url || null), storagePath: r.storage_path || null, type: r.photo_type, sizeKB: r.size_kb, note: r.note || "", date: r.created_at });
@@ -2739,13 +2739,18 @@ function Dash({ tasks, jobs, users, receipts, mats, setMats, setTab, navTo, open
 }
 
 function AdminTasks(props) {
-  const { tasks, setTasks, jobs, users, t, lang, settings, statusFilter = "all", setStatusFilter, photos, setPhotos, user } = props;
+  const { tasks, setTasks, jobs, users, t, lang, settings, statusFilter = "all", setStatusFilter, photos, setPhotos, user, mats, setMats } = props;
   const [jobFilter, setJobFilter] = useState("all");
   const [modal, setModal] = useState(false);
-  const [nt, setNt] = useState({ title: "", titleEs: "", jobId: "", assignedTo: [], dueDate: "", priority: "normal", recurring: false, photoRequired: false });
+  const [nt, setNt] = useState({ title: "", titleEs: "", notes: "", jobId: "", assignedTo: [], dueDate: "", priority: "normal", recurring: false, photoRequired: false });
   const [editTask, setEditTask] = useState(null); // task being edited
   const [editForm, setEditForm] = useState({});
   const [busy, setBusy] = useState(false);
+  const [detailTask, setDetailTask] = useState(null); // task being viewed in the click-through detail modal
+  const [refPhoto, setRefPhoto] = useState(null); // { dataUrl, sizeKB } pending admin reference photo
+  const [refPhotoNote, setRefPhotoNote] = useState("");
+  const [refPhotoBusy, setRefPhotoBusy] = useState(false);
+  const refPhotoRef = useRef();
   const today = localDate();
   // Photo attachment on task creation
   const [taskPhoto, setTaskPhoto] = useState(null);   // { dataUrl, sizeKB }
@@ -2780,13 +2785,16 @@ function AdminTasks(props) {
     if (!nt.title || !nt.jobId) return;
     if (!nt.recurring && !nt.assignedTo.length) return;
     setBusy(true);
-    let es;
+    let es, notesEs = "";
     try { es = settings?.gtKey ? await translateText(nt.title, "es", settings.gtKey) : nt.title; }
     catch { es = nt.title; }
+    if (nt.notes && settings?.gtKey) {
+      try { notesEs = await translateText(nt.notes, "es", settings.gtKey); } catch { notesEs = nt.notes; }
+    } else notesEs = nt.notes;
     const id = "t" + Date.now();
-    const task = { id, jobId: nt.jobId, title: nt.title, titleEs: es || nt.title, assignedTo: nt.assignedTo, dueDate: nt.dueDate, status: "pending", createdAt: today, priority: nt.priority, recurring: nt.recurring, photoRequired: nt.photoRequired };
+    const task = { id, jobId: nt.jobId, title: nt.title, titleEs: es || nt.title, notes: nt.notes, notesEs, assignedTo: nt.assignedTo, dueDate: nt.dueDate, status: "pending", createdAt: today, priority: nt.priority, recurring: nt.recurring, photoRequired: nt.photoRequired };
     setTasks(p => [...p, task]);
-    const row = { id, job_id: nt.jobId, title: nt.title, title_es: es || nt.title, assigned_to: nt.assignedTo, due_date: nt.dueDate || null, status: "pending", priority: toPriority(nt.priority), recurring: nt.recurring, photo_required: nt.photoRequired };
+    const row = { id, job_id: nt.jobId, title: nt.title, title_es: es || nt.title, notes: nt.notes || null, notes_es: notesEs || null, assigned_to: nt.assignedTo, due_date: nt.dueDate || null, status: "pending", priority: toPriority(nt.priority), recurring: nt.recurring, photo_required: nt.photoRequired };
     try { await sbPost("field_tasks", row); } catch { enqueue({ table: "field_tasks", payload: row }); }
     // Save attached photo if provided
     if (taskPhoto && nt.jobId) {
@@ -2810,11 +2818,11 @@ function AdminTasks(props) {
       }
     }
     sendPush(nt.assignedTo, pushTitle, pushBody, "/?tab=tasks");
-    setNt({ title: "", jobId: "", assignedTo: [], dueDate: "", priority: "normal", recurring: false, photoRequired: false });
+    setNt({ title: "", titleEs: "", notes: "", jobId: "", assignedTo: [], dueDate: "", priority: "normal", recurring: false, photoRequired: false });
     setTaskPhoto(null); setTaskPhotoNote(""); setTaskPhotoType("before");
     setModal(false); setBusy(false);
   };
-  const openEdit = (task) => { setEditTask(task); setEditForm({ title: task.title, dueDate: task.dueDate, priority: task.priority || "normal", recurring: task.recurring || false, assignedTo: task.assignedTo || [] }); };
+  const openEdit = (task) => { setEditTask(task); setEditForm({ title: task.title, notes: task.notes || "", dueDate: task.dueDate, priority: task.priority || "normal", recurring: task.recurring || false, assignedTo: task.assignedTo || [] }); };
   const saveEdit = async () => {
     if (!editTask) return;
     let es = editTask.titleEs;
@@ -2822,8 +2830,12 @@ function AdminTasks(props) {
       try { es = await translateText(editForm.title, "es", settings.gtKey); }
       catch { es = editForm.title; }
     }
-    const patch = { title: editForm.title, title_es: es || editForm.title, due_date: editForm.dueDate || null, priority: toPriority(editForm.priority), recurring: editForm.recurring, assigned_to: editForm.assignedTo };
-    setTasks(p => p.map(t => t.id === editTask.id ? { ...t, title: editForm.title, titleEs: es || editForm.title, dueDate: editForm.dueDate, priority: editForm.priority, recurring: editForm.recurring, assignedTo: editForm.assignedTo } : t));
+    let notesEs = editTask.notesEs || "";
+    if ((editForm.notes || "") !== (editTask.notes || "") && settings?.gtKey && editForm.notes) {
+      try { notesEs = await translateText(editForm.notes, "es", settings.gtKey); } catch { notesEs = editForm.notes; }
+    } else if (!editForm.notes) notesEs = "";
+    const patch = { title: editForm.title, title_es: es || editForm.title, notes: editForm.notes || null, notes_es: notesEs || null, due_date: editForm.dueDate || null, priority: toPriority(editForm.priority), recurring: editForm.recurring, assigned_to: editForm.assignedTo };
+    setTasks(p => p.map(t => t.id === editTask.id ? { ...t, title: editForm.title, titleEs: es || editForm.title, notes: editForm.notes || "", notesEs, dueDate: editForm.dueDate, priority: editForm.priority, recurring: editForm.recurring, assignedTo: editForm.assignedTo } : t));
     try { await sbFetch(`field_tasks?id=eq.${editTask.id}`, { method: "PATCH", body: JSON.stringify(patch), prefer: "return=minimal" }); } catch {}
     setEditTask(null);
   };
@@ -2840,6 +2852,40 @@ function AdminTasks(props) {
     try { await sbDelete("field_tasks", id); } catch {}
   };
   const st = task => task.status === "done" ? "done" : (task.dueDate && task.dueDate < today ? "overdue" : "pending");
+
+  const fulfillDetailMat = async (id) => {
+    setMats(p => p.map(m => m.id === id ? { ...m, fulfilled: true } : m));
+    try { await sbFetch(`field_material_requests?id=eq.${id}`, { method: "PATCH", body: JSON.stringify({ fulfilled: true }), prefer: "return=minimal" }); } catch {}
+    const m = (mats || []).find(x => x.id === id);
+    const crewPhone = m && users.find(u => u.id === m.crewId)?.phone;
+    if (crewPhone) {
+      const j = m ? jobs.find(x => x.id === m.jobId)?.name : "";
+      fetch("/.netlify/functions/send-sms", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ to: crewPhone, body: `🔧 Your material request has been fulfilled: "${m.en}"${j ? " — " + j : ""}. Check the job site. — G.S. Masters` }) }).catch(() => {});
+    }
+  };
+
+  // Office reference photo — distinct from crew's own before/after/concern
+  // documentation. Shows crew what the finished/expected work should look
+  // like, right on the task, permanently tied to it (task_id), same as
+  // every other task photo.
+  const captureRefPhoto = async (e) => {
+    const file = e.target.files[0]; if (!file) return;
+    try { const { dataUrl, sizeKB } = await compressImage(file); setRefPhoto({ dataUrl, sizeKB }); }
+    catch { alert("Could not process image. Try again."); }
+    e.target.value = "";
+  };
+  const saveRefPhoto = async () => {
+    if (!refPhoto || !detailTask) return;
+    setRefPhotoBusy(true);
+    const pid = "p" + Date.now();
+    let storagePath = null;
+    try { storagePath = await uploadToStorage(refPhoto.dataUrl, `${user?.id || "admin"}/${pid}.jpg`); } catch {}
+    const photo = { id: pid, dataUrl: refPhoto.dataUrl, type: "reference", taskId: detailTask.id, jobId: detailTask.jobId, crewId: user?.id || "admin", sizeKB: refPhoto.sizeKB, note: refPhotoNote || "", date: new Date().toISOString() };
+    const row = { id: pid, data_url: storagePath ? null : refPhoto.dataUrl, storage_path: storagePath, photo_type: "reference", task_id: detailTask.id, job_id: detailTask.jobId, crew_id: user?.id || "admin", size_kb: refPhoto.sizeKB, note: refPhotoNote || null };
+    if (setPhotos) setPhotos(p => [...p, photo]);
+    try { await sbPost("field_photos", row); } catch { enqueue({ table: "field_photos", payload: row }); }
+    setRefPhoto(null); setRefPhotoNote(""); setRefPhotoBusy(false);
+  };
 
   return (
     <div>
@@ -2892,10 +2938,11 @@ function AdminTasks(props) {
                 {recurringTasks.map(task => {
                   const crew = (task.assignedTo || []).map(id => users.find(u => u.id === id)).filter(Boolean);
                   const doneToday = task.completedAt && localDateOf(task.completedAt) === today;
+                  const taskPhotoCount = (photos || []).filter(p => p.taskId === task.id).length;
                   return (
-                    <div key={task.id} style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 14px",
+                    <div key={task.id} style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 14px", cursor: "pointer",
                       background: doneToday ? "rgba(245,158,11,.08)" : "rgba(245,158,11,.04)",
-                      borderTop: "1px solid rgba(245,158,11,.2)" }}>
+                      borderTop: "1px solid rgba(245,158,11,.2)" }} onClick={() => setDetailTask(task)}>
                       <div style={{ width: 10, height: 10, borderRadius: "50%", background: "var(--accent)", flexShrink: 0 }} />
                       <div className="tinfo" style={{ flex: 1 }}>
                         <div className="ten">
@@ -2911,9 +2958,11 @@ function AdminTasks(props) {
                             ? crew.map(a => <span key={a.id} className="tag-l" style={{ marginRight: 3 }}>{a.name}</span>)
                             : <span className="muted" style={{ fontSize: 11 }}>All crew</span>}
                           {doneToday && <span style={{ fontSize: 10, color: "var(--green)", fontWeight: 700, marginLeft: 4 }}>✓ Done today</span>}
+                          {taskPhotoCount > 0 && <span className="tag" style={{ background: "rgba(59,130,246,.12)", color: "var(--sky2)" }}>📷 {taskPhotoCount}</span>}
+                          {task.notes && <span className="tag" style={{ background: "rgba(245,158,11,.12)", color: "var(--accent)" }}>📝 Instructions</span>}
                         </div>
                       </div>
-                      <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
+                      <div style={{ display: "flex", gap: 4, flexShrink: 0 }} onClick={e => e.stopPropagation()}>
                         <button className="btn btn-s btn-sm btn-ic" title="Edit" onClick={() => openEdit(task)}><Icon n="pen" s={14} /></button>
                         {task.status !== "done" && <button className="btn btn-s btn-sm btn-ic" style={{ color: "var(--red)" }} title="Delete" onClick={() => deleteTask(task.id)}><Icon n="x" s={14} /></button>}
                       </div>
@@ -2928,8 +2977,10 @@ function AdminTasks(props) {
               <div className="jobbody">{regularTasks.map(task => {
                 const s = st(task), crew = (task.assignedTo || []).map(id => users.find(u => u.id === id)).filter(Boolean);
                 const rowClass = `trow${task.priority === "urgent" ? " trow-urgent" : ""}`;
-                return <div key={task.id} className={rowClass}>
-                  <div className="tchk"><input type="checkbox" checked={task.status === "done"} onChange={() => toggle(task.id)} /></div>
+                const taskPhotoCount = (photos || []).filter(p => p.taskId === task.id).length;
+                const taskMatCount = (mats || []).filter(m => m.taskId === task.id && !m.fulfilled).length;
+                return <div key={task.id} className={rowClass} style={{ cursor: "pointer" }} onClick={() => setDetailTask(task)}>
+                  <div className="tchk" onClick={e => e.stopPropagation()}><input type="checkbox" checked={task.status === "done"} onChange={() => toggle(task.id)} /></div>
                   <div className="tinfo">
                     <div className="ten" style={{ textDecoration: task.status === "done" ? "line-through" : "none", opacity: task.status === "done" ? .6 : 1 }}>
                       {lang === "es" && task.titleEs && task.titleEs !== task.title ? task.titleEs : task.title}
@@ -2944,9 +2995,12 @@ function AdminTasks(props) {
                       <span className={`tag tag-${s}`}>{t[s]}</span>
                       {task.dueDate && <span className="tag" style={{ background: "rgba(255,255,255,.06)", color: "var(--silver)" }}>Due {task.dueDate}</span>}
                       {crew.map(a => <span key={a.id} className="tag-l" style={{ marginRight: 3 }}>{a.name}</span>)}
+                      {taskPhotoCount > 0 && <span className="tag" style={{ background: "rgba(59,130,246,.12)", color: "var(--sky2)" }}>📷 {taskPhotoCount}</span>}
+                      {task.notes && <span className="tag" style={{ background: "rgba(245,158,11,.12)", color: "var(--accent)" }}>📝 Instructions</span>}
+                      {taskMatCount > 0 && <span className="tag" style={{ background: "rgba(239,68,68,.12)", color: "var(--red)" }}>🔧 {taskMatCount} material{taskMatCount!==1?"s":""}</span>}
                     </div>
                   </div>
-                  <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
+                  <div style={{ display: "flex", gap: 4, flexShrink: 0 }} onClick={e => e.stopPropagation()}>
                     <button className="btn btn-s btn-sm btn-ic" title="Edit" onClick={() => openEdit(task)}><Icon n="pen" s={14} /></button>
                     {task.status !== "done" && <button className="btn btn-s btn-sm btn-ic" style={{ color: "var(--red)" }} title="Delete" onClick={() => deleteTask(task.id)}><Icon n="x" s={14} /></button>}
                   </div>
@@ -2962,6 +3016,10 @@ function AdminTasks(props) {
         <div className="modal"><div className="mt">Edit Task</div>
           <div className="fg"><label className="fl">Task Description</label>
             <input className="fi" value={editForm.title} onChange={e => setEditForm(p => ({ ...p, title: e.target.value }))} />
+            {settings?.gtKey && <p style={{ fontSize:11, color:"var(--slate)", marginTop:5 }}>Auto-translates to Spanish for crew</p>}</div>
+          <div className="fg"><label className="fl">Special Instructions <span style={{ color:"var(--silver)", fontWeight:400, textTransform:"none", letterSpacing:0 }}>— optional, shown to crew on this task</span></label>
+            <textarea className="fi" rows={3} value={editForm.notes || ""} onChange={e => setEditForm(p => ({ ...p, notes: e.target.value }))}
+              placeholder="e.g. Use the leftover brick from the porch, match existing mortar color..." style={{ resize:"none" }} />
             {settings?.gtKey && <p style={{ fontSize:11, color:"var(--slate)", marginTop:5 }}>Auto-translates to Spanish for crew</p>}</div>
           <div className="fg"><label className="fl">Due Date</label>
             <input className="fi" type="date" value={editForm.dueDate} onChange={e => setEditForm(p => ({ ...p, dueDate: e.target.value }))} /></div>
@@ -3019,6 +3077,10 @@ function AdminTasks(props) {
               <option value="">Select Job</option>{jobs.map(j => <option key={j.id} value={j.id}>{j.name}</option>)}</select></div>
           <div className="fg"><label className="fl">Task Description</label>
             <input className="fi" value={nt.title} onChange={e => setNt(p => ({ ...p, title: e.target.value }))} placeholder="Task..." />
+            {settings?.gtKey && <p style={{ fontSize:11, color:"var(--slate)", marginTop:5 }}>Auto-translates to Spanish for crew</p>}</div>
+          <div className="fg"><label className="fl">Special Instructions <span style={{ color:"var(--silver)", fontWeight:400, textTransform:"none", letterSpacing:0 }}>— optional, shown to crew on this task</span></label>
+            <textarea className="fi" rows={3} value={nt.notes} onChange={e => setNt(p => ({ ...p, notes: e.target.value }))}
+              placeholder="e.g. Use the leftover brick from the porch, match existing mortar color..." style={{ resize:"none" }} />
             {settings?.gtKey && <p style={{ fontSize:11, color:"var(--slate)", marginTop:5 }}>Auto-translates to Spanish for crew</p>}</div>
           <div className="fg">
             <label className="fl">Assign To <span style={{ color: "var(--silver)", fontWeight: 400, textTransform: "none", letterSpacing: 0 }}>— select one or more</span></label>
@@ -3122,6 +3184,100 @@ function AdminTasks(props) {
           <div className="macts"><button className="btn btn-s" onClick={() => { setModal(false); setTaskPhoto(null); }}>Cancel</button>
             <button className="btn btn-p" onClick={add} disabled={busy}>{busy ? <span className="spin" /> : "Add Task"}</button></div>
         </div></div>}
+
+      {/* ── Task Detail — click any task row to open ── */}
+      {detailTask && (() => {
+        const task = tasks.find(t => t.id === detailTask.id) || detailTask;
+        const job = jobs.find(j => j.id === task.jobId);
+        const crew = (task.assignedTo || []).map(id => users.find(u => u.id === id)).filter(Boolean);
+        const taskPhotos = (photos || []).filter(p => p.taskId === task.id);
+        const taskMats = (mats || []).filter(m => m.taskId === task.id);
+        const typeColor = k => k === "before" ? "var(--orange)" : k === "after" ? "var(--green)" : k === "reference" ? "var(--sky2)" : "var(--red)";
+        return (
+          <div className="modal-bg" onClick={e => e.target === e.currentTarget && setDetailTask(null)}>
+            <div className="modal" style={{ maxWidth: 480 }}>
+              <div className="flexb" style={{ marginBottom: 4 }}>
+                <div className="mt" style={{ marginBottom: 0 }}>{task.title}</div>
+                <button onClick={() => setDetailTask(null)} style={{ background: "none", border: "none", color: "var(--slate)", cursor: "pointer", fontSize: 20 }}>✕</button>
+              </div>
+              {task.titleEs && task.titleEs !== task.title && <div style={{ fontSize: 12, color: "var(--slate)", fontStyle: "italic", marginBottom: 10 }}>{task.titleEs}</div>}
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 14 }}>
+                <span className="tag-l">{job?.name}</span>
+                <span className={`tag tag-${st(task)}`}>{t[st(task)]}</span>
+                {task.dueDate && <span className="tag" style={{ background: "rgba(255,255,255,.06)", color: "var(--silver)" }}>Due {task.dueDate}</span>}
+                {crew.map(a => <span key={a.id} className="tag-l">{a.name}</span>)}
+              </div>
+
+              {/* Special instructions */}
+              {task.notes && (
+                <div style={{ marginBottom: 16, padding: "10px 12px", background: "rgba(245,158,11,.08)", border: "1px solid rgba(245,158,11,.25)", borderRadius: 8 }}>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: "var(--accent)", textTransform: "uppercase", letterSpacing: .6, marginBottom: 4 }}>📝 Special Instructions</div>
+                  <div style={{ fontSize: 13 }}>{task.notes}</div>
+                  {task.notesEs && task.notesEs !== task.notes && <div style={{ fontSize: 12, color: "var(--slate)", fontStyle: "italic", marginTop: 4 }}>{task.notesEs}</div>}
+                </div>
+              )}
+
+              {/* Materials requested for this task */}
+              {taskMats.length > 0 && (
+                <div style={{ marginBottom: 16 }}>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: "var(--red)", textTransform: "uppercase", letterSpacing: .6, marginBottom: 6 }}>🔧 Materials Requested</div>
+                  {taskMats.map(m => (
+                    <div key={m.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "7px 10px", marginBottom: 4, background: m.fulfilled ? "rgba(16,185,129,.08)" : "rgba(239,68,68,.08)", borderRadius: 8 }}>
+                      <span style={{ flex: 1, fontSize: 13, textDecoration: m.fulfilled ? "line-through" : "none", opacity: m.fulfilled ? .6 : 1 }}>{m.en}</span>
+                      {!m.fulfilled && <button className="btn btn-g btn-sm" onClick={() => fulfillDetailMat(m.id)}>✓ Fulfilled</button>}
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* Photos — crew's before/after/concern, plus an office reference photo */}
+              <div style={{ marginBottom: 16 }}>
+                <div style={{ fontSize: 11, fontWeight: 700, color: "var(--sky2)", textTransform: "uppercase", letterSpacing: .6, marginBottom: 6 }}>📷 Photos ({taskPhotos.length})</div>
+                {taskPhotos.length === 0
+                  ? <div className="muted" style={{ fontSize: 12, marginBottom: 10 }}>No photos yet — crew's before/after photos will show here, or add a reference photo below so crew knows what's expected.</div>
+                  : <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 10 }}>
+                      {taskPhotos.map(p => (
+                        <div key={p.id} style={{ width: 70, position: "relative" }}>
+                          <img src={p.dataUrl || ""} alt={p.type} style={{ width: 70, height: 70, objectFit: "cover", borderRadius: 8, border: `2px solid ${typeColor(p.type)}` }} />
+                          <div style={{ position: "absolute", bottom: 0, left: 0, right: 0, background: "rgba(0,0,0,.65)", fontSize: 8, textAlign: "center", color: "#fff", padding: "1px 0", fontWeight: 700, textTransform: "uppercase" }}>{p.type}</div>
+                        </div>
+                      ))}
+                    </div>
+                }
+
+                <input ref={refPhotoRef} type="file" accept="image/*" style={{ display: "none" }} onChange={captureRefPhoto} />
+                {!refPhoto ? (
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                    <button className="btn btn-s btn-sm" style={{ justifyContent: "center" }}
+                      onClick={() => { refPhotoRef.current?.setAttribute("capture", "environment"); refPhotoRef.current?.click(); }}>
+                      <Icon n="camera" s={15} /> Reference Photo (Camera)
+                    </button>
+                    <button className="btn btn-s btn-sm" style={{ justifyContent: "center" }} onClick={() => openGallery(captureRefPhoto)}>
+                      <Icon n="photo" s={15} /> From File
+                    </button>
+                  </div>
+                ) : (
+                  <div>
+                    <div style={{ display: "flex", gap: 10, marginBottom: 8, alignItems: "flex-start" }}>
+                      <img src={refPhoto.dataUrl} alt="preview" style={{ width: 64, height: 64, objectFit: "cover", borderRadius: 8, border: "2px solid var(--sky2)" }} />
+                      <input className="fi" value={refPhotoNote} onChange={e => setRefPhotoNote(e.target.value)} placeholder="What should this show crew..." style={{ padding: "7px 10px", fontSize: 12 }} />
+                    </div>
+                    <div style={{ display: "flex", gap: 8 }}>
+                      <button className="btn btn-p btn-sm" disabled={refPhotoBusy} onClick={saveRefPhoto}>{refPhotoBusy ? <span className="spin" /> : "💾 Save Reference Photo"}</button>
+                      <button className="btn btn-s btn-sm" onClick={() => { setRefPhoto(null); setRefPhotoNote(""); }}>Cancel</button>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              <div className="macts">
+                <button className="btn btn-s" onClick={() => { setDetailTask(null); openEdit(task); }}>✎ Edit Task</button>
+                <button className="btn btn-p" onClick={() => setDetailTask(null)}>Close</button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 }
@@ -7621,6 +7777,11 @@ function CrewTasks(props) {
                         {task.photoRequired && !photos.some(p => p.taskId === task.id) && task.status !== "done" && <span className="tag" style={{ background: "rgba(249,115,22,.15)", color: "var(--orange)", border: "1px solid rgba(249,115,22,.35)" }}>📷 {lang === "es" ? "Foto requerida" : "Photo required"}</span>}
                         {task.status !== "done" && loggedWorkToday(task.id) && <span className="tag" style={{ background: "rgba(16,185,129,.15)", color: "var(--green)", border: "1px solid rgba(16,185,129,.35)" }}>🔧 {t.loggedToday}</span>}
                       </div>
+                      {task.notes && (
+                        <div style={{ marginTop: 6, padding: "6px 10px", background: "rgba(245,158,11,.08)", border: "1px solid rgba(245,158,11,.25)", borderRadius: 6, fontSize: 12 }}>
+                          📝 {lang === "es" && task.notesEs ? task.notesEs : task.notes}
+                        </div>
+                      )}
                     </div>
                     {/* Icon-only, unlabeled, 7-9px padding -- too small and
                         too cryptic to tap confidently on a phone (title
@@ -7742,17 +7903,20 @@ function CrewTasks(props) {
                         {taskPhotos.map((p, i) => (
                           <div key={i} style={{ display:"flex", flexDirection:"column", width:64, flexShrink:0 }}>
                             <div style={{ position:"relative", width:64, height:64, borderRadius:8, overflow:"hidden",
-                              border:`2px solid ${p.type==="before"?"var(--orange)":p.type==="after"?"var(--green)":"var(--red)"}` }}>
+                              border:`2px solid ${p.type==="before"?"var(--orange)":p.type==="after"?"var(--green)":p.type==="reference"?"var(--sky2)":"var(--red)"}` }}>
                               <div onClick={() => setCrewLightbox(p)} style={{ width:"100%", height:"100%", cursor:"zoom-in" }}>
                                 {p.dataUrl
                                   ? <img src={p.dataUrl} alt={p.type} style={{ width:"100%", height:"100%", objectFit:"cover" }} />
                                   : <div style={{ width:"100%", height:"100%", display:"flex", alignItems:"center", justifyContent:"center" }}><Icon n="camera" s={20} c="var(--slate)" /></div>}
                               </div>
                               <div style={{ position:"absolute", bottom:0, left:0, right:0, background:"rgba(0,0,0,.65)", fontSize:8, textAlign:"center", color:"#fff", padding:"1px 0", fontWeight:700, textTransform:"uppercase" }}>
-                                {p.type}
+                                {p.type === "reference" ? "📌 Office" : p.type}
                               </div>
-                              <button onClick={() => removePhoto(p)}
-                                style={{ position:"absolute",top:2,right:2,background:"rgba(239,68,68,.9)",border:"none",borderRadius:3,color:"#fff",cursor:"pointer",fontSize:9,padding:"1px 3px",lineHeight:1,zIndex:2 }}>✕</button>
+                              {/* Office reference photo is the example crew works from -- never
+                                  crew-deletable, only the office removes it (from the task detail
+                                  screen in Admin). */}
+                              {p.type !== "reference" && <button onClick={() => removePhoto(p)}
+                                style={{ position:"absolute",top:2,right:2,background:"rgba(239,68,68,.9)",border:"none",borderRadius:3,color:"#fff",cursor:"pointer",fontSize:9,padding:"1px 3px",lineHeight:1,zIndex:2 }}>✕</button>}
                             </div>
                             {p.note && <div style={{ fontSize:9, color:"var(--silver)", marginTop:3, lineHeight:1.3, wordBreak:"break-word", maxHeight:28, overflow:"hidden" }}>{p.note}</div>}
                           </div>
