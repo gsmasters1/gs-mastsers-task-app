@@ -6501,9 +6501,23 @@ function Crew(props) {
     setIssueBusy(true);
     const id = "l" + Date.now();
     const today = localDate();
+    // Was saving the same raw text_en/text_es with no translation at all --
+    // an issue typed in Spanish showed as Spanish to English-only staff too.
+    // Save immediately (never delay the admin SMS below on a translate
+    // call), then backfill both languages the same way logOtherWorkGeneral
+    // already does.
     const note = `🚩 ISSUE from ${user.name}: ${issueText}`;
     const row = { id, text_en: note, text_es: note, task_id: null, job_id: null, crew_id: user.id, log_date: today };
     try { await sbPost("field_logs", row); } catch {}
+    if (settings?.gtKey) {
+      try {
+        const [enBody, esBody] = await Promise.all([
+          translateText(issueText, "en", settings.gtKey),
+          translateText(issueText, "es", settings.gtKey),
+        ]);
+        await sbPatch("field_logs", id, { text_en: `🚩 ISSUE from ${user.name}: ${enBody}`, text_es: `🚩 ISSUE from ${user.name}: ${esBody}` });
+      } catch {}
+    }
     // SMS to admin
     const adminPhone = settings?.adminPhone || "+12053699710";
     fetch("/.netlify/functions/send-sms", {
@@ -6836,6 +6850,11 @@ function CrewTasks(props) {
     setIssueBusy(true);
     const logId = "l" + Date.now();
     const job = jobs.find(j => j.id === jobId);
+    // Was prefixing a translated LABEL onto the untranslated body ("[Problema]
+    // <English text>" for a Spanish reader) -- not a translation. Save the
+    // prefixed text immediately (matches existing behavior/labels), then
+    // backfill the real translated body into both fields, same pattern as
+    // logOtherWorkGeneral.
     const enText = `[Issue] ${issueText}`;
     const esText = `[Problema] ${issueText}`;
     const weather = await getTodaysWeather(job);
@@ -6843,6 +6862,17 @@ function CrewTasks(props) {
     setLogs(p => [...p, log]);
     const row = { id: logId, text_en: enText, text_es: esText, weather, task_id: null, job_id: jobId, crew_id: user.id, log_date: today };
     try { await sbPost("field_logs", row); } catch { enqueue({ table: "field_logs", payload: row }); }
+    if (settings?.gtKey) {
+      try {
+        const [enBody, esBody] = await Promise.all([
+          translateText(issueText, "en", settings.gtKey),
+          translateText(issueText, "es", settings.gtKey),
+        ]);
+        const fixedEn = `[Issue] ${enBody}`, fixedEs = `[Problema] ${esBody}`;
+        setLogs(p => p.map(l => l.id === logId ? { ...l, en: fixedEn, es: fixedEs } : l));
+        await sbPatch("field_logs", logId, { text_en: fixedEn, text_es: fixedEs });
+      } catch {}
+    }
     // Save photo if attached
     if (issueDataUrl) {
       const pid = "p" + Date.now();
