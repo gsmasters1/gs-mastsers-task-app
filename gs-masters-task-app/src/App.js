@@ -3584,6 +3584,8 @@ function Report({ tasks, jobs, users, logs, photos, receipts }) {
   const [rangeStart, setRangeStart] = useState(offsetDay(-6));
   const [rangeEnd,   setRangeEnd]   = useState(today);
   const [jobFilter,  setJobFilter]  = useState("all");
+  const [expandedJob, setExpandedJob] = useState(null);
+  const [lightbox, setLightbox] = useState(null);
 
   const lo = rangeStart || "0000-00-00";
   const hi = rangeEnd   || "9999-99-99";
@@ -3757,18 +3759,80 @@ ${jobBlocks || '<p style="color:#888;text-align:center;padding:40px">No activity
               const jl = rLogs.filter(l=>l.jobId===job.id);
               const jp = rPhotos.filter(p=>p.jobId===job.id);
               const jr = rReceipts.filter(r=>r.jobId===job.id);
+              const isOpen = expandedJob === job.id;
               return <div key={job.id} style={{ marginBottom:14, padding:"10px 14px", background:"rgba(255,255,255,.04)", borderRadius:10, border:"1px solid var(--border)" }}>
-                <div style={{ fontFamily:"'Barlow Condensed'", fontWeight:800, fontSize:15, marginBottom:6 }}>{job.name}</div>
-                <div style={{ display:"flex", gap:14, fontSize:12, color:"var(--silver)", flexWrap:"wrap" }}>
+                <div
+                  onClick={() => setExpandedJob(isOpen ? null : job.id)}
+                  style={{ cursor:"pointer", display:"flex", justifyContent:"space-between", alignItems:"center" }}
+                >
+                  <div style={{ fontFamily:"'Barlow Condensed'", fontWeight:800, fontSize:15, marginBottom:6 }}>{job.name}</div>
+                  <span style={{ fontSize:14, color:"var(--silver)", transform: isOpen ? "rotate(180deg)" : "none", display:"inline-block" }}>▾</span>
+                </div>
+                <div
+                  onClick={() => setExpandedJob(isOpen ? null : job.id)}
+                  style={{ cursor:"pointer", display:"flex", gap:14, fontSize:12, color:"var(--silver)", flexWrap:"wrap" }}
+                >
                   {jt.length > 0 && <span>✓ {jt.length} task{jt.length!==1?"s":""} ({jt.filter(t=>t.status==="done").length} done)</span>}
                   {jp.length > 0 && <span>📷 {jp.length} photo{jp.length!==1?"s":""}</span>}
                   {jl.length > 0 && <span>📝 {jl.length} note{jl.length!==1?"s":""}</span>}
                   {jr.length > 0 && <span>🧾 {jr.length} receipt{jr.length!==1?"s":""} (${jr.reduce((s,r)=>s+(+r.amount||0),0).toFixed(2)})</span>}
                 </div>
+
+                {isOpen && <div style={{ marginTop:12, paddingTop:12, borderTop:"1px solid var(--border)" }}>
+                  {jl.length > 0 && <div style={{ marginBottom:14 }}>
+                    <div style={{ fontSize:11, fontWeight:700, textTransform:"uppercase", letterSpacing:.6, color:"var(--sky2)", marginBottom:6 }}>📝 Notes</div>
+                    {jl.map(l => (
+                      <div key={l.id} style={{ padding:"8px 10px", marginBottom:6, background:"rgba(255,255,255,.03)", borderRadius:8 }}>
+                        <div style={{ fontSize:11, color:"var(--silver)", marginBottom:3 }}>{l.date} — <strong>{userName(l.crewId)}</strong>{l.weather ? ` · ${l.weather}` : ""}</div>
+                        <div style={{ fontSize:13 }}>{l.en || l.es || ""}</div>
+                        {l.es && l.es !== l.en && <div style={{ fontSize:12, color:"var(--sky2)", fontStyle:"italic", marginTop:2 }}>{l.es}</div>}
+                        {l.adminReply && <div style={{ fontSize:12, marginTop:6, padding:"6px 8px", background:"rgba(255,255,255,.05)", borderRadius:6 }}><strong>Office reply:</strong> {l.adminReply}</div>}
+                      </div>
+                    ))}
+                  </div>}
+
+                  {jt.length > 0 && <div style={{ marginBottom:14 }}>
+                    <div style={{ fontSize:11, fontWeight:700, textTransform:"uppercase", letterSpacing:.6, color:"var(--slate)", marginBottom:6 }}>✓ Tasks</div>
+                    {jt.map(tk => (
+                      <div key={tk.id} style={{ display:"flex", justifyContent:"space-between", padding:"6px 10px", marginBottom:4, background:"rgba(255,255,255,.03)", borderRadius:8, fontSize:13 }}>
+                        <span>{tk.title}</span>
+                        <span style={{ fontSize:11, fontWeight:700, textTransform:"uppercase", color: statusColor(tk.status==="done"?"done":(tk.dueDate&&tk.dueDate<today?"overdue":"pending")) }}>
+                          {tk.status==="done"?"done":(tk.dueDate&&tk.dueDate<today?"overdue":"pending")}
+                        </span>
+                      </div>
+                    ))}
+                  </div>}
+
+                  {jp.length > 0 && <div style={{ marginBottom:14 }}>
+                    <div style={{ fontSize:11, fontWeight:700, textTransform:"uppercase", letterSpacing:.6, color:"#3b82f6", marginBottom:6 }}>📷 Photos</div>
+                    <div style={{ display:"flex", gap:8, flexWrap:"wrap" }}>
+                      {jp.map(p => (
+                        <img key={p.id} src={p.dataUrl||""} onClick={()=>setLightbox(p)} alt={p.type||"photo"}
+                          style={{ width:80, height:60, objectFit:"cover", borderRadius:6, cursor:"pointer", border:`2px solid ${p.type==="before"?"#f97316":p.type==="after"?"#16a34a":"#ef4444"}` }} />
+                      ))}
+                    </div>
+                  </div>}
+
+                  {jr.length > 0 && <div>
+                    <div style={{ fontSize:11, fontWeight:700, textTransform:"uppercase", letterSpacing:.6, color:"#d97706", marginBottom:6 }}>🧾 Receipts</div>
+                    {jr.map(r => (
+                      <div key={r.id} style={{ display:"flex", justifyContent:"space-between", padding:"6px 10px", marginBottom:4, background:"rgba(255,255,255,.03)", borderRadius:8, fontSize:12 }}>
+                        <span>{r.createdAt} · {r.store} {r.note ? `— ${r.note}` : ""} ({userName(r.crewId)})</span>
+                        <span style={{ fontWeight:700 }}>${(+r.amount||0).toFixed(2)}</span>
+                      </div>
+                    ))}
+                  </div>}
+                </div>}
               </div>;
             })
         }
       </div>
+
+      {lightbox && (
+        <div onClick={()=>setLightbox(null)} style={{ position:"fixed", inset:0, background:"rgba(0,0,0,.85)", display:"flex", alignItems:"center", justifyContent:"center", zIndex:9999, padding:20 }}>
+          <img src={lightbox.dataUrl||""} alt={lightbox.type||"photo"} style={{ maxWidth:"100%", maxHeight:"90vh", borderRadius:10 }} />
+        </div>
+      )}
     </div>
   );
 }
