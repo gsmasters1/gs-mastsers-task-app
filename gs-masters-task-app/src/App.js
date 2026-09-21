@@ -2739,7 +2739,9 @@ function Dash({ tasks, jobs, users, receipts, mats, setMats, setTab, navTo, open
 }
 
 function AdminTasks(props) {
-  const { tasks, setTasks, jobs, users, t, lang, settings, statusFilter = "all", setStatusFilter, photos, setPhotos, user, mats, setMats } = props;
+  const { tasks, setTasks, jobs, users, t, lang, settings, statusFilter = "all", setStatusFilter, photos, setPhotos, user, mats, setMats, logs, setLogs } = props;
+  const [replyText, setReplyText] = useState({}); // { [logId]: text }
+  const [replyBusy, setReplyBusy] = useState(null);
   const [jobFilter, setJobFilter] = useState("all");
   const [modal, setModal] = useState(false);
   const [nt, setNt] = useState({ title: "", titleEs: "", notes: "", jobId: "", assignedTo: [], dueDate: "", priority: "normal", recurring: false, photoRequired: false });
@@ -2852,6 +2854,16 @@ function AdminTasks(props) {
     try { await sbDelete("field_tasks", id); } catch {}
   };
   const st = task => task.status === "done" ? "done" : (task.dueDate && task.dueDate < today ? "overdue" : "pending");
+
+  const replyToLogComment = async (logId) => {
+    const text = (replyText[logId] || "").trim();
+    if (!text) return;
+    setReplyBusy(logId);
+    setLogs(p => p.map(l => l.id === logId ? { ...l, adminReply: text } : l));
+    try { await sbPatch("field_logs", logId, { admin_reply: text }); } catch {}
+    setReplyText(p => ({ ...p, [logId]: "" }));
+    setReplyBusy(null);
+  };
 
   const fulfillDetailMat = async (id) => {
     setMats(p => p.map(m => m.id === id ? { ...m, fulfilled: true } : m));
@@ -2979,6 +2991,7 @@ function AdminTasks(props) {
                 const rowClass = `trow${task.priority === "urgent" ? " trow-urgent" : ""}`;
                 const taskPhotoCount = (photos || []).filter(p => p.taskId === task.id).length;
                 const taskMatCount = (mats || []).filter(m => m.taskId === task.id && !m.fulfilled).length;
+                const taskUnrepliedCount = (logs || []).filter(l => l.taskId === task.id && !l.adminReply && !/^(?:Worked on|Completed): /.test(l.en || "")).length;
                 return <div key={task.id} className={rowClass} style={{ cursor: "pointer" }} onClick={() => setDetailTask(task)}>
                   <div className="tchk" onClick={e => e.stopPropagation()}><input type="checkbox" checked={task.status === "done"} onChange={() => toggle(task.id)} /></div>
                   <div className="tinfo">
@@ -2998,6 +3011,7 @@ function AdminTasks(props) {
                       {taskPhotoCount > 0 && <span className="tag" style={{ background: "rgba(59,130,246,.12)", color: "var(--sky2)" }}>📷 {taskPhotoCount}</span>}
                       {task.notes && <span className="tag" style={{ background: "rgba(245,158,11,.12)", color: "var(--accent)" }}>📝 Instructions</span>}
                       {taskMatCount > 0 && <span className="tag" style={{ background: "rgba(239,68,68,.12)", color: "var(--red)" }}>🔧 {taskMatCount} material{taskMatCount!==1?"s":""}</span>}
+                      {taskUnrepliedCount > 0 && <span className="tag" style={{ background: "rgba(59,130,246,.12)", color: "var(--sky2)" }}>💬 {taskUnrepliedCount} awaiting reply</span>}
                     </div>
                   </div>
                   <div style={{ display: "flex", gap: 4, flexShrink: 0 }} onClick={e => e.stopPropagation()}>
@@ -3192,6 +3206,7 @@ function AdminTasks(props) {
         const crew = (task.assignedTo || []).map(id => users.find(u => u.id === id)).filter(Boolean);
         const taskPhotos = (photos || []).filter(p => p.taskId === task.id);
         const taskMats = (mats || []).filter(m => m.taskId === task.id);
+        const taskComments = (logs || []).filter(l => l.taskId === task.id && !/^(?:Worked on|Completed): /.test(l.en || "")).sort((a,b) => (a.date||"").localeCompare(b.date||""));
         const typeColor = k => k === "before" ? "var(--orange)" : k === "after" ? "var(--green)" : k === "reference" ? "var(--sky2)" : "var(--red)";
         return (
           <div className="modal-bg" onClick={e => e.target === e.currentTarget && setDetailTask(null)}>
@@ -3214,6 +3229,33 @@ function AdminTasks(props) {
                   <div style={{ fontSize: 11, fontWeight: 700, color: "var(--accent)", textTransform: "uppercase", letterSpacing: .6, marginBottom: 4 }}>📝 Special Instructions</div>
                   <div style={{ fontSize: 13 }}>{task.notes}</div>
                   {task.notesEs && task.notesEs !== task.notes && <div style={{ fontSize: 12, color: "var(--slate)", fontStyle: "italic", marginTop: 4 }}>{task.notesEs}</div>}
+                </div>
+              )}
+
+              {/* Crew comments/questions on this task */}
+              {taskComments.length > 0 && (
+                <div style={{ marginBottom: 16 }}>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: "var(--sky2)", textTransform: "uppercase", letterSpacing: .6, marginBottom: 6 }}>💬 Crew Comments</div>
+                  {taskComments.map(l => (
+                    <div key={l.id} style={{ marginBottom: 8, padding: "8px 10px", background: "rgba(59,130,246,.06)", borderRadius: 8 }}>
+                      <div style={{ fontSize: 11, color: "var(--slate)", marginBottom: 2 }}>{users.find(u => u.id === l.crewId)?.name || l.crewId} · {l.date}</div>
+                      <div style={{ fontSize: 13 }}>{l.en}</div>
+                      {l.adminReply ? (
+                        <div style={{ marginTop: 6, padding: "6px 8px", background: "rgba(16,185,129,.1)", borderRadius: 6, fontSize: 12 }}>
+                          <strong style={{ color: "var(--green)" }}>You replied:</strong> {l.adminReply}
+                        </div>
+                      ) : (
+                        <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
+                          <input className="fi" style={{ flex: 1, padding: "6px 10px", fontSize: 12 }} placeholder="Reply to crew..."
+                            value={replyText[l.id] || ""} onChange={e => setReplyText(p => ({ ...p, [l.id]: e.target.value }))}
+                            onKeyDown={e => e.key === "Enter" && replyToLogComment(l.id)} />
+                          <button className="btn btn-p btn-sm" disabled={replyBusy === l.id || !(replyText[l.id] || "").trim()} onClick={() => replyToLogComment(l.id)}>
+                            {replyBusy === l.id ? <span className="spin" /> : "Reply"}
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  ))}
                 </div>
               )}
 
@@ -6982,6 +7024,9 @@ function CrewTasks(props) {
   const [gps, setGps] = useState(null);
   const [matModal, setMatModal] = useState(null);
   const [mat, setMat] = useState("");
+  const [commentPanel, setCommentPanel] = useState(null); // taskId with the comment thread open
+  const [commentText, setCommentText] = useState("");
+  const [commentBusy, setCommentBusy] = useState(false);
   // Job-level quick actions
   const [activePanel, setActivePanel] = useState(null); // { jobId, type: 'photo'|'receipt'|'issue' }
   const [photoType, setPhotoType] = useState("before");
@@ -7201,10 +7246,50 @@ function CrewTasks(props) {
   const submitMat = async (taskId) => {
     if (!mat.trim()) return;
     const tk = tasks.find(t => t.id === taskId);
+    const job = jobs.find(j => j.id === tk?.jobId);
     const id = "m" + Date.now();
     const row = { id, task_id: taskId, job_id: tk?.jobId || null, crew_id: user.id, text_en: mat, text_es: null, fulfilled: false };
     try { await sbPost("field_material_requests", row); } catch { enqueue({ table: "field_material_requests", payload: row }); }
+    // This was queuing silently -- office only found out by opening the app
+    // and happening to check the Materials panel. Now alerts immediately,
+    // same pattern as the issue-report SMS below.
+    const adminPhone = settings?.adminPhone || "+12053699710";
+    fetch("/.netlify/functions/send-sms", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ to: adminPhone, body: `🔧 Material needed — ${user.name} on ${job?.name || "job"}${tk ? ` (task: ${tk.title})` : ""}: "${mat}"` }),
+    }).catch(() => {});
     setMat(""); setMatModal(null);
+  };
+
+  // Free-form comment/question thread on a task -- distinct from the
+  // structured Materials request above. Always alerts the office by SMS
+  // (crew shouldn't have to guess whether their note "counts" as urgent),
+  // and stays visible on the task afterward for both sides, with the
+  // office able to reply (admin_reply on this same field_logs row).
+  const submitTaskComment = async (task) => {
+    const text = commentText.trim();
+    if (!text) return;
+    setCommentBusy(true);
+    const logId = "l" + Date.now();
+    const job = jobs.find(j => j.id === task.jobId);
+    const weather = await getTodaysWeather(job);
+    const log = { id: logId, en: text, es: text, weather, taskId: task.id, jobId: task.jobId, crewId: user.id, date: today };
+    setLogs(p => [...p, log]);
+    const row = { id: logId, text_en: text, text_es: text, weather, task_id: task.id, job_id: task.jobId, crew_id: user.id, log_date: today };
+    try { await sbPost("field_logs", row); } catch { enqueue({ table: "field_logs", payload: row }); }
+    if (settings?.gtKey) {
+      try {
+        const es = await translateText(text, "es", settings.gtKey);
+        setLogs(p => p.map(l => l.id === logId ? { ...l, es } : l));
+        await sbPatch("field_logs", logId, { text_es: es });
+      } catch {}
+    }
+    const adminPhone = settings?.adminPhone || "+12053699710";
+    fetch("/.netlify/functions/send-sms", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ to: adminPhone, body: `💬 ${user.name} on task "${task.title}" (${job?.name || "job"}): "${text}"` }),
+    }).catch(() => {});
+    setCommentText(""); setCommentBusy(false);
   };
 
   // Language-aware task title helpers
@@ -7811,8 +7896,50 @@ function CrewTasks(props) {
                           color: tp === "receipt" ? "var(--accent)" : "var(--slate)" }}>🧾</button>
                       <button className="btn btn-s btn-sm btn-ic" aria-label={t.materials} title={t.materials} onClick={() => setMatModal(task.id)}
                         style={{ minWidth: 40, minHeight: 40 }}><Icon n="tools" s={16} /></button>
+                      <button aria-label={lang === "es" ? "Comentarios" : "Comments"} title={lang === "es" ? "Comentarios" : "Comments"}
+                        onClick={() => setCommentPanel(p => p === task.id ? null : task.id)}
+                        style={{ minWidth: 40, minHeight: 40, padding:"9px 11px", borderRadius:10, border:"none", cursor:"pointer", fontSize:17,
+                          background: commentPanel === task.id ? "rgba(59,130,246,.2)" : "rgba(255,255,255,.08)",
+                          color: commentPanel === task.id ? "var(--sky2)" : "var(--slate)" }}>💬</button>
                     </div>
                   </div>
+
+                  {/* ── Task comments panel — free-form notes/questions to admin ── */}
+                  {commentPanel === task.id && (() => {
+                    const thread = logs.filter(l => l.taskId === task.id && !/^(?:Worked on|Completed): /.test(l.en || "")).sort((a,b) => (a.date||"").localeCompare(b.date||""));
+                    return (
+                      <div style={{ padding:"12px 16px", background:"rgba(8,15,22,.92)", borderBottom:"1px solid rgba(255,255,255,.06)" }}>
+                        <div style={{ fontSize:12, color:"var(--sky2)", fontWeight:700, marginBottom:8 }}>
+                          💬 {lang === "es" ? "Comentarios sobre esta tarea" : "Comments on this task"}
+                        </div>
+                        {thread.length === 0
+                          ? <div className="muted" style={{ fontSize:12, marginBottom:10 }}>{lang === "es" ? "Sin comentarios todavía." : "No comments yet."}</div>
+                          : <div style={{ marginBottom:10 }}>
+                              {thread.map(l => (
+                                <div key={l.id} style={{ marginBottom:8, padding:"8px 10px", background:"rgba(255,255,255,.04)", borderRadius:8 }}>
+                                  <div style={{ fontSize:11, color:"var(--slate)", marginBottom:2 }}>{users.find(u=>u.id===l.crewId)?.name?.split(" ")[0] || l.crewId} · {l.date}</div>
+                                  <div style={{ fontSize:13 }}>{lang === "es" && l.es ? l.es : l.en}</div>
+                                  {l.adminReply && (
+                                    <div style={{ marginTop:6, padding:"6px 8px", background:"rgba(16,185,129,.1)", borderRadius:6, fontSize:12 }}>
+                                      <strong style={{ color:"var(--green)" }}>{lang === "es" ? "Respuesta de oficina:" : "Office replied:"}</strong> {l.adminReply}
+                                    </div>
+                                  )}
+                                </div>
+                              ))}
+                            </div>
+                        }
+                        <div style={{ display:"flex", gap:8 }}>
+                          <input className="fi" value={commentText} onChange={e => setCommentText(e.target.value)}
+                            placeholder={lang === "es" ? "Pregunta, comentario, o lo que necesites..." : "Question, comment, or what you need..."}
+                            style={{ flex:1, padding:"9px 12px" }} onKeyDown={e => e.key === "Enter" && submitTaskComment(task)} />
+                          <button className="btn btn-p btn-sm" disabled={commentBusy || !commentText.trim()} onClick={() => submitTaskComment(task)}>
+                            {commentBusy ? <span className="spin"/> : (lang === "es" ? "Enviar" : "Send")}
+                          </button>
+                        </div>
+                        <div style={{ fontSize:10, color:"var(--slate)", marginTop:6 }}>{lang === "es" ? "Esto notifica a la oficina de inmediato." : "This alerts the office immediately."}</div>
+                      </div>
+                    );
+                  })()}
 
                   {/* ── Task photo panel ── */}
                   {tp === "photo" && (
