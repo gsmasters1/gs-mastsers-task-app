@@ -264,7 +264,7 @@ async function sendPush(crewIds, title, bodyText, url) {
   if (!crewIds?.length) return;
   fetch("/.netlify/functions/send-push", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${_authToken}` },
     body: JSON.stringify({ crewIds, title, bodyText, url: url || "/" }),
   }).catch(() => {});
 }
