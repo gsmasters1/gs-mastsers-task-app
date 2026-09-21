@@ -7342,27 +7342,34 @@ function CrewTasks(props) {
                         {task.status !== "done" && loggedWorkToday(task.id) && <span className="tag" style={{ background: "rgba(16,185,129,.15)", color: "var(--green)", border: "1px solid rgba(16,185,129,.35)" }}>🔧 {t.loggedToday}</span>}
                       </div>
                     </div>
-                    <div className="tact" style={{ gap: 5 }}>
+                    {/* Icon-only, unlabeled, 7-9px padding -- too small and
+                        too cryptic to tap confidently on a phone (title
+                        tooltips don't even show on touch devices). Bumped to
+                        a real touch target size with more breathing room
+                        between buttons and a real aria-label per button --
+                        same onClick handlers, same behavior, just usable. */}
+                    <div className="tact" style={{ gap: 8 }}>
                       {task.status !== "done" && (
-                        <button title={t.workedToday} disabled={loggedWorkToday(task.id)}
+                        <button aria-label={t.workedToday} title={t.workedToday} disabled={loggedWorkToday(task.id)}
                           onClick={() => workedOnTask(task)}
-                          style={{ padding:"7px 9px", borderRadius:9, border:"none", cursor: loggedWorkToday(task.id) ? "default" : "pointer", fontSize:15,
-                            background: loggedWorkToday(task.id) ? "rgba(16,185,129,.15)" : "rgba(255,255,255,.07)",
+                          style={{ minWidth: 40, minHeight: 40, padding:"9px 11px", borderRadius:10, border:"none", cursor: loggedWorkToday(task.id) ? "default" : "pointer", fontSize:17,
+                            background: loggedWorkToday(task.id) ? "rgba(16,185,129,.15)" : "rgba(255,255,255,.08)",
                             color: loggedWorkToday(task.id) ? "var(--green)" : "var(--slate)" }}>
                           {loggedWorkToday(task.id) ? "✅" : "🔧"}
                         </button>
                       )}
-                      <button title={t.photoFor + " " + tt(task)}
+                      <button aria-label={t.photoFor + " " + tt(task)} title={t.photoFor + " " + tt(task)}
                         onClick={() => { const closing = taskPanel?.taskId === task.id && taskPanel?.type === "photo"; setTaskPanel(closing ? null : { taskId: task.id, jobId: task.jobId, type: "photo", photoType: "before" }); if (closing) { setPendingPhoto(null); setSavedCount(0); } }}
-                        style={{ padding:"7px 9px", borderRadius:9, border:"none", cursor:"pointer", fontSize:15,
-                          background: tp === "photo" ? "rgba(249,115,22,.2)" : "rgba(255,255,255,.07)",
+                        style={{ minWidth: 40, minHeight: 40, padding:"9px 11px", borderRadius:10, border:"none", cursor:"pointer", fontSize:17,
+                          background: tp === "photo" ? "rgba(249,115,22,.2)" : "rgba(255,255,255,.08)",
                           color: tp === "photo" ? "var(--orange)" : "var(--slate)" }}>📷</button>
-                      <button title={t.receiptFor + " " + tt(task)}
+                      <button aria-label={t.receiptFor + " " + tt(task)} title={t.receiptFor + " " + tt(task)}
                         onClick={() => { setTaskPanel(p => p?.taskId === task.id && p.type === "receipt" ? null : { taskId: task.id, jobId: task.jobId, type: "receipt" }); setTaskRcForm({ store:"",amount:"",note:"",paidBy:"crew",dataUrl:null }); }}
-                        style={{ padding:"7px 9px", borderRadius:9, border:"none", cursor:"pointer", fontSize:15,
-                          background: tp === "receipt" ? "rgba(245,158,11,.2)" : "rgba(255,255,255,.07)",
+                        style={{ minWidth: 40, minHeight: 40, padding:"9px 11px", borderRadius:10, border:"none", cursor:"pointer", fontSize:17,
+                          background: tp === "receipt" ? "rgba(245,158,11,.2)" : "rgba(255,255,255,.08)",
                           color: tp === "receipt" ? "var(--accent)" : "var(--slate)" }}>🧾</button>
-                      <button className="btn btn-s btn-sm btn-ic" title={t.materials} onClick={() => setMatModal(task.id)}><Icon n="tools" s={14} /></button>
+                      <button className="btn btn-s btn-sm btn-ic" aria-label={t.materials} title={t.materials} onClick={() => setMatModal(task.id)}
+                        style={{ minWidth: 40, minHeight: 40 }}><Icon n="tools" s={16} /></button>
                     </div>
                   </div>
 
