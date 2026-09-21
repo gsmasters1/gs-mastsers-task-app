@@ -1,5 +1,18 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { createClient } from "@supabase/supabase-js";
+import { MapContainer, TileLayer, Marker, Popup } from "react-leaflet";
+import L from "leaflet";
+import "leaflet/dist/leaflet.css";
+
+// Leaflet's default marker icon references image files by a path that
+// webpack/CRA's bundling breaks -- markers render invisible without this,
+// a well-known react-leaflet/CRA gotcha, not a coding mistake here.
+delete L.Icon.Default.prototype._getIconUrl;
+L.Icon.Default.mergeOptions({
+  iconRetinaUrl: require("leaflet/dist/images/marker-icon-2x.png"),
+  iconUrl: require("leaflet/dist/images/marker-icon.png"),
+  shadowUrl: require("leaflet/dist/images/marker-shadow.png"),
+});
 
 /* ════════════════════════════════════════════════════════════════════
    GS MASTERS FIELD APP — v2 "SUPERCHARGED"
@@ -2368,6 +2381,69 @@ function Admin(props) {
   );
 }
 
+// Birmingham, AL -- just a sane default center when nobody's checked in
+// yet with a location on file. Not claimed as any specific address.
+const DEFAULT_MAP_CENTER = [33.5207, -86.8025];
+
+function CrewMap({ onSite, crewName, jobName, jobs }) {
+  const [expanded, setExpanded] = useState(false);
+  const pinned = onSite.filter(c => c.latIn && c.lngIn);
+  const jobPins = jobs.filter(j => j.status !== "closed" && j.lat && j.lng);
+  const center = pinned.length
+    ? [pinned.reduce((s, c) => s + c.latIn, 0) / pinned.length, pinned.reduce((s, c) => s + c.lngIn, 0) / pinned.length]
+    : jobPins.length ? [jobPins[0].lat, jobPins[0].lng] : DEFAULT_MAP_CENTER;
+
+  return (
+    <>
+      <div className="card fade" style={{ marginBottom: 20, padding: 0, overflow: "hidden" }}>
+        <div className="flexb" style={{ padding: "12px 16px", borderBottom: "1px solid var(--border)" }}>
+          <span style={{ fontWeight: 700, fontSize: 15 }}>🗺️ Crew Map</span>
+          <button onClick={() => setExpanded(true)}
+            style={{ fontSize: 11, fontWeight: 700, color: "var(--sky2)", background: "none", border: "none", cursor: "pointer" }}>
+            Expand ⤢
+          </button>
+        </div>
+        {pinned.length === 0
+          ? <div className="muted" style={{ fontSize: 13, padding: "16px" }}>No one currently checked in with a location on file.</div>
+          : <div style={{ height: 200 }}>
+              <MapContainer center={center} zoom={11} style={{ height: "100%", width: "100%" }} scrollWheelZoom={false}>
+                <TileLayer attribution='&copy; OpenStreetMap contributors' url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
+                {pinned.map(c => (
+                  <Marker key={c.id} position={[c.latIn, c.lngIn]}>
+                    <Popup>{crewName(c.crewId)}<br />{jobName(c.jobId)}<br /><span style={{ fontSize: 11, color: "#666" }}>checked in {new Date(c.checkIn).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span></Popup>
+                  </Marker>
+                ))}
+              </MapContainer>
+            </div>
+        }
+      </div>
+
+      {expanded && (
+        <div style={{ position: "fixed", inset: 0, zIndex: 5000, background: "rgba(0,0,0,.6)", display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}
+          onClick={() => setExpanded(false)}>
+          <div style={{ background: "var(--card, #1a1a2e)", borderRadius: 12, width: "100%", maxWidth: 900, height: "80vh", display: "flex", flexDirection: "column", overflow: "hidden" }}
+            onClick={e => e.stopPropagation()}>
+            <div className="flexb" style={{ padding: "12px 16px", borderBottom: "1px solid var(--border)" }}>
+              <span style={{ fontWeight: 700, fontSize: 15 }}>🗺️ Crew Map — {pinned.length} on site</span>
+              <button onClick={() => setExpanded(false)} style={{ fontSize: 13, fontWeight: 700, color: "var(--slate)", background: "none", border: "none", cursor: "pointer" }}>✕ Close</button>
+            </div>
+            <div style={{ flex: 1 }}>
+              <MapContainer center={center} zoom={12} style={{ height: "100%", width: "100%" }}>
+                <TileLayer attribution='&copy; OpenStreetMap contributors' url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
+                {pinned.map(c => (
+                  <Marker key={c.id} position={[c.latIn, c.lngIn]}>
+                    <Popup>{crewName(c.crewId)}<br />{jobName(c.jobId)}<br /><span style={{ fontSize: 11, color: "#666" }}>checked in {new Date(c.checkIn).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span></Popup>
+                  </Marker>
+                ))}
+              </MapContainer>
+            </div>
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
+
 function Dash({ tasks, jobs, users, receipts, mats, setMats, setTab, navTo, openJobDetail, settings }) {
   const today = localDate();
   const [checkins, setCheckins] = useState([]);
@@ -2533,6 +2609,13 @@ function Dash({ tasks, jobs, users, receipts, mats, setMats, setTab, navTo, open
               </div>
         }
       </div>
+
+      {/* ── CREW MAP -- last known location, not live tracking. Pin comes
+          from lat_in/lng_in captured at check-in; it doesn't move again
+          until their next check-in/out, so someone driving between jobs
+          won't show mid-route. See crew-side Settings for why (no
+          background location tracking exists in this app today). ── */}
+      <CrewMap onSite={onSite} crewName={crewName} jobName={jobName} jobs={jobs} />
 
       {/* ── FLAGGED ISSUES TODAY ─────────────────────────────── */}
       {issues.length > 0 && (
