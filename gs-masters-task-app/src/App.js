@@ -195,11 +195,21 @@ async function migrateInlineMedia(photoRows, receiptRows) {
 // ─── SNAKE ↔ CAMEL TRANSFORMS ──────────────────────────────────────────
 const fromProfile = r => ({ id: r.id, name: r.name, role: r.role, email: r.email, phone: r.phone || "", pin: r.pin, active: r.active !== false, archived: r.archived === true, is1099: r.is_1099 === true, isSupervisor: r.is_supervisor === true });
 const fromJob     = r => ({ id: r.id, name: r.name, address: r.address || "", lat: r.lat, lng: r.lng, budget: r.budget, status: r.status, closedAt: r.closed_at, gsmJobId: r.gsm_job_id, gsmSync: r.gsm_sync || false });
-const fromTask    = r => ({ id: r.id, jobId: r.job_id, title: r.title, titleEs: r.title_es || "", notes: r.notes || "", notesEs: r.notes_es || "", assignedTo: Array.isArray(r.assigned_to) ? r.assigned_to : (r.assigned_to ? [r.assigned_to] : []), status: r.status, dueDate: r.due_date || "", createdAt: (r.created_at || "").slice(0, 10), completedAt: r.completed_at || null, priority: r.priority === 1 ? "urgent" : "normal", recurring: r.recurring || false, photoRequired: r.photo_required === true });
+const fromTask    = r => ({ id: r.id, jobId: r.job_id, title: r.title, titleEs: r.title_es || "", notes: r.notes || "", notesEs: r.notes_es || "", assignedTo: Array.isArray(r.assigned_to) ? r.assigned_to : (r.assigned_to ? [r.assigned_to] : []), status: r.status, dueDate: r.due_date || "", createdAt: (r.created_at || "").slice(0, 10), completedAt: r.completed_at || null, priority: r.priority === 1 ? "urgent" : "normal", recurring: r.recurring || false, photoRequired: r.photo_required === true, checklist: Array.isArray(r.checklist) ? r.checklist : [] });
+const fromSignoff = r => ({ id: r.id, taskId: r.task_id, jobId: r.job_id, name: r.signed_name, date: r.created_at });
+
+// Crew task suggestions ride on field_logs with this prefix (job set, so
+// they never land in GSM Builder's job-less classification queue).
+const SUGGEST_PREFIX = "💡 Task suggestion: ";
+const isSuggestion = l => (l?.en || "").startsWith(SUGGEST_PREFIX);
+// One step per line; keeps done state for lines that didn't change.
+const checklistFromText = (text, prev = []) => String(text || "").split(/\r?\n/).map(x => x.trim()).filter(Boolean)
+  .map((line, i) => (prev || []).find(c => c.text === line) || { id: "c" + Date.now().toString(36) + i, text: line, done: false });
+const taskSignoff = (signoffs, taskId) => (signoffs || []).find(x => x.taskId === taskId) || null;
 const toPriority  = p => p === "urgent" ? 1 : 3;
 const fromLog     = r => ({ id: r.id, taskId: r.task_id, jobId: r.job_id, crewId: r.crew_id, en: r.text_en, es: r.text_es, weather: r.weather, date: r.log_date, adminReply: r.admin_reply || null, resolved: r.resolved || false });
 const fromPhoto   = r => ({ id: r.id, taskId: r.task_id, jobId: r.job_id, crewId: r.crew_id, dataUrl: r.data_url || mediaUrl(r.storage_path), storagePath: r.storage_path || null, type: r.photo_type, sizeKB: r.size_kb, note: r.note || "", date: r.created_at });
-const fromReceipt = r => ({ id: r.id, taskId: r.task_id, jobId: r.job_id, category: r.category || null, crewId: r.crew_id, dataUrl: r.data_url || mediaUrl(r.storage_path), storagePath: r.storage_path || null, store: r.store, amount: r.amount, note: r.note, paidBy: r.paid_by || "crew", reimbursementStatus: r.reimbursement_status || "pending", reimbursementDate: r.reimbursement_date || null, billStatus: r.bill_status || "pending_review", createdAt: (r.created_at || "").slice(0, 10), integrationSentAt: r.integration_sent_at || null });
+const fromReceipt = r => ({ id: r.id, taskId: r.task_id, jobId: r.job_id, category: r.category || null, crewId: r.crew_id, dataUrl: r.data_url || mediaUrl(r.storage_path), storagePath: r.storage_path || null, store: r.store, amount: r.amount, note: r.note, paidBy: r.paid_by || "crew", reimbursementStatus: r.reimbursement_status || "pending", reimbursementDate: r.reimbursement_date || null, billStatus: r.bill_status || "pending_review", createdAt: (r.created_at || "").slice(0, 10), integrationSentAt: r.integration_sent_at || null, paymentMethod: r.payment_method || "" });
 const fromMat     = r => ({ id: r.id, taskId: r.task_id, jobId: r.job_id, crewId: r.crew_id, en: r.text_en, es: r.text_es, fulfilled: r.fulfilled });
 const fromCheckin  = r => ({ id: r.id, crewId: r.crew_id, jobId: r.job_id, checkIn: r.check_in, checkOut: r.check_out, hours: r.hours, date: r.work_date, latIn: r.lat_in, lngIn: r.lng_in, method: r.method || "qr", autoClosed: r.auto_closed === true });
 
@@ -236,7 +246,10 @@ async function getTodaysWeather(job) {
     return "";
   }
 }
-const fromDispatch = r => ({ id: r.id, crewId: r.crew_id, date: r.date, jobIds: r.job_ids || [], customStops: r.custom_stops || [], createdBy: r.created_by });
+const fromDispatch = r => ({ id: r.id, crewId: r.crew_id, date: r.date, jobIds: r.job_ids || [], customStops: r.custom_stops || [], createdBy: r.created_by, ackStatus: r.ack_status || null, ackAt: r.ack_at || null });
+const ymd = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+const addDays = (dateStr, n) => { const d = new Date(dateStr + "T12:00:00"); d.setDate(d.getDate() + n); return ymd(d); };
+const fmtClock = ts => ts ? new Date(ts).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) : "";
 
 // Overhead receipt destinations — expenses not tied to a job: [key, button label, saved category]
 const RC_OVERHEAD = [["office","🏢 Office","Office"],["auto","🚗 Auto","Auto"],["tools","🔧 Tools","Tools"],["side","💼 Side Job","Side Job"]];
@@ -273,6 +286,64 @@ async function scanReceiptPhoto(dataUrl) {
 }
 // Strips currency symbols/thousands separators so "$1,234.56" -> "1234.56"
 const cleanScanAmount = v => v == null ? "" : String(v).replace(/[^0-9.]/g, "");
+
+// Office edits from inside the field app (task edits, reimbursements, who-
+// paid changes) go through GSM Builder's field-app-actions function: the
+// 2026-09-23 column lockdown blocks those columns for any direct field-app
+// session. That function re-checks internal_users, so only office staff pass.
+const OFFICE_ACTIONS_FN = "https://app.gsmastersinc.com/.netlify/functions/field-app-actions";
+async function officeAction(action, body = {}) {
+  const res = await fnFetch(OFFICE_ACTIONS_FN, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action, ...body }) });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || data.error) throw new Error(data.error || `HTTP ${res.status}`);
+  return data;
+}
+
+// ── Receipt helpers: which card paid, duplicate check, AI auto-fill ──
+const RC_CARD_DEFAULTS = ["Valley Bank card", "Central State Bank card", "Regions card", "Cash", "Home Depot account", "Lowe's account"];
+const normStore = v => String(v || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+// Same amount (to the cent) + same store (when both known) within 14 days.
+function findDupReceipt(receipts, store, amount, excludeId) {
+  const cents = Math.round((parseFloat(amount) || 0) * 100);
+  if (!cents) return null;
+  const st = normStore(store);
+  const cutoff = Date.now() - 14 * 86400000;
+  return (receipts || []).find(r => r.id !== excludeId
+    && Math.round((+r.amount || 0) * 100) === cents
+    && (!st || !normStore(r.store) || normStore(r.store) === st)
+    && (!r.createdAt || new Date(r.createdAt + "T12:00:00").getTime() >= cutoff)) || null;
+}
+function confirmNotDuplicate(receipts, store, amount, lang, excludeId) {
+  const d = findDupReceipt(receipts, store, amount, excludeId);
+  if (!d) return true;
+  return window.confirm(lang === "es"
+    ? `⚠️ Posible duplicado: ya hay un recibo de ${d.store || "?"} por $${(+d.amount || 0).toFixed(2)} (${d.createdAt || ""}). ¿Guardar de todos modos?`
+    : `⚠️ Possible duplicate: a ${d.store || "?"} receipt for $${(+d.amount || 0).toFixed(2)} was already entered (${d.createdAt || ""}). Save anyway?`);
+}
+// AI read of a receipt photo into a form -- only fills blanks, never
+// overwrites what the person already typed. Returns a short status line.
+async function scanIntoForm(dataUrl, setForm, lang) {
+  const scan = await scanReceiptPhoto(dataUrl);
+  const es = lang === "es";
+  if (!scan.ok || !scan.result) return es ? "No se pudo leer el recibo — llénalo a mano" : `Couldn't read receipt${scan.error ? ` (${scan.error})` : ""} — fill in manually`;
+  const r = scan.result;
+  setForm(p => ({ ...p,
+    store: p.store || r.vendor || "",
+    amount: p.amount || cleanScanAmount(r.amount) || "",
+    note: p.note || r.note || "" }));
+  return (es ? "✓ IA llenó " : "✓ AI filled ") + (r.vendor || "") + (r.amount ? ` · $${Number(cleanScanAmount(r.amount) || 0).toFixed(2)}` : "") + (es ? " — revisa" : " — check it");
+}
+function CardField({ value, onChange, receipts, lang, compact }) {
+  const opts = [...new Set([...RC_CARD_DEFAULTS, ...(receipts || []).map(r => r.paymentMethod).filter(Boolean)])];
+  return (
+    <div style={{ marginBottom: compact ? 8 : 12 }}>
+      <label className="fl">{lang === "es" ? "¿Qué tarjeta o cuenta?" : "Which card / account?"}</label>
+      <input className="fi" list="gsm-card-list" value={value || ""} onChange={e => onChange(e.target.value)}
+        placeholder={lang === "es" ? "Ej: tarjeta Valley Bank" : "e.g. Valley Bank card"} style={compact ? { padding: "8px 12px" } : undefined} />
+      <datalist id="gsm-card-list">{opts.map(o => <option key={o} value={o} />)}</datalist>
+    </div>
+  );
+}
 
 // ─── GSM BUILDER ─────────────────────────────────────────────────────────
 // Receipts reach GSM Builder through its Bills > Field Receipts tab, which
@@ -1140,6 +1211,7 @@ export default function App() {
   const [settings, setSettings] = useState(() => JSON.parse(localStorage.getItem("gsm_set") || "{}"));
   const [users, setUsers] = useState([]);
   const [dispatches, setDispatches] = useState([]);
+  const [signoffs, setSignoffs] = useState([]);
   const [officeCount, setOfficeCount] = useState(0);
   const t = T[lang];
 
@@ -1199,12 +1271,14 @@ export default function App() {
           ["field_tasks", "order=created_at"], ["field_logs", "order=created_at.desc"],
           ["field_photos", "order=created_at.desc"], ["field_receipts", "order=created_at.desc"],
           ["field_material_requests", "order=created_at.desc"], ["field_dispatch", "order=date.desc"],
+          ["field_signoffs", "select=id,task_id,job_id,signed_name,created_at&order=created_at.desc"],
         ];
         const loadOne = ([tbl, q]) => sbGet(tbl, q).catch(() => sbGet(tbl, q));
         const settled = await Promise.allSettled(specs.map(loadOne));
         const failedTables = specs.filter((_, i) => settled[i].status === "rejected").map(([tbl]) => tbl.replace("field_", ""));
         if (failedTables.length) { console.error("Load failed:", failedTables); setTimeout(() => alert(`Could not load: ${failedTables.join(", ")}. Pull down / reopen the app to retry.`), 0); }
-        const [dbUsers, dbJobs, dbTasks, dbLogs, dbPhotos, dbReceipts, dbMats, dbDispatch] = settled.map(r => r.status === "fulfilled" ? r.value : null);
+        const [dbUsers, dbJobs, dbTasks, dbLogs, dbPhotos, dbReceipts, dbMats, dbDispatch, dbSignoffs] = settled.map(r => r.status === "fulfilled" ? r.value : null);
+        if (dbSignoffs) setSignoffs(dbSignoffs.map(fromSignoff));
         if (dbUsers)    setUsers(dbUsers.map(fromProfile));
         if (dbJobs)     setJobs(dbJobs.map(fromJob));
         if (dbTasks)    setTasks(dbTasks.map(fromTask));
@@ -1340,6 +1414,12 @@ export default function App() {
       }
     }
     const reimbChanged = existing && patch.paidBy !== undefined && patch.paidBy !== existing.paidBy;
+    // paid_by / reimbursement_status are locked for direct field-app writes
+    // (2026-09-23 lockdown) -- send them through the office route.
+    if (reimbChanged) {
+      try { await officeAction("receipt_patch", { receipt_id: id, patch: { paid_by: patch.paidBy, reimbursement_status: patch.paidBy === "crew" ? "pending" : "na" } }); }
+      catch (e) { alert("Could not change who paid: " + e.message); return; }
+    }
     const merged = { ...patch };
     if (newPhoto !== undefined) { merged.storagePath = storagePath; merged.dataUrl = dataUrlOut; }
     if (reimbChanged) merged.reimbursementStatus = patch.paidBy === "crew" ? "pending" : "na";
@@ -1348,14 +1428,16 @@ export default function App() {
     if (patch.store    !== undefined) dbPatch.store    = patch.store;
     if (patch.amount   !== undefined) dbPatch.amount   = parseFloat(patch.amount) || 0;
     if (patch.note     !== undefined) dbPatch.note     = patch.note;
-    if (patch.paidBy   !== undefined) { dbPatch.paid_by = patch.paidBy; if (reimbChanged) dbPatch.reimbursement_status = patch.paidBy === "crew" ? "pending" : "na"; }
+    if (patch.paymentMethod !== undefined) dbPatch.payment_method = patch.paymentMethod || null;
     if (patch.category !== undefined) dbPatch.category = patch.category;
     if (patch.jobId    !== undefined) dbPatch.job_id   = patch.jobId;
     if (patch.taskId   !== undefined) dbPatch.task_id  = patch.taskId;
     if (newPhoto !== undefined) { dbPatch.storage_path = storagePath; dbPatch.data_url = dataUrlOut; }
-    try { await sbFetch(`field_receipts?id=eq.${id}`, { method: "PATCH", body: JSON.stringify(dbPatch), prefer: "return=minimal" }); } catch {}
+    if (!Object.keys(dbPatch).length) return;
+    try { await sbFetch(`field_receipts?id=eq.${id}`, { method: "PATCH", body: JSON.stringify(dbPatch), prefer: "return=minimal" }); }
+    catch (e) { alert("Receipt changes did not save: " + e.message); }
   };
-  const upsertDispatch = async (entry) => {
+  const upsertDispatch = async (entry, opts = {}) => {
     const id = "d_" + entry.crewId + "_" + entry.date;
     const row = { id, crew_id: entry.crewId, date: entry.date, job_ids: entry.jobIds, custom_stops: entry.customStops, created_by: user.id };
     const isNew = !dispatches.some(d => d.crewId === entry.crewId && d.date === entry.date);
@@ -1363,7 +1445,7 @@ export default function App() {
     try { await sbFetch(`field_dispatch?id=eq.${id}`, { method: "DELETE", prefer: "return=minimal" }); } catch {}
     try { await sbPost("field_dispatch", row); } catch {}
     // Notify crew member when dispatch is first set (not every toggle)
-    if (isNew && (entry.jobIds.length > 0 || entry.customStops.length > 0)) {
+    if (!opts.silent && isNew && (entry.jobIds.length > 0 || entry.customStops.length > 0)) {
       const member = users.find(u => u.id === entry.crewId);
       const appUrl = settings?.appUrl || window.location.origin;
       const stopCount = entry.jobIds.length + entry.customStops.length;
@@ -1548,7 +1630,7 @@ export default function App() {
         (Array.isArray(tk.assignedTo) ? tk.assignedTo.includes(user.id) : tk.assignedTo === user.id) &&
         !already.has(tk.id)
       );
-      const hasGeneralLogToday = logs.some(l => l.crewId === user.id && l.date === todayD && !l.taskId);
+      const hasGeneralLogToday = logs.some(l => l.crewId === user.id && l.date === todayD && !l.taskId && !isSuggestion(l));
       if (pend.length === 0 && hasGeneralLogToday) { logout(); return; }
       // Only auto-tie the off-list note to a job when it's unambiguous --
       // exactly one job checked into today. Multiple jobs or none at all
@@ -1626,7 +1708,7 @@ export default function App() {
   const shared = { user, canSupervise, lang, t, jobs, setJobs, tasks, setTasks, receipts, setReceipts,
                    logs, setLogs, photos, setPhotos, mats, setMats, settings, saveSettings, users,
                    online, setActive, setIs1099, setIsSupervisor, addUser, updateUser, removeUser, archiveCrew, unarchiveCrew,
-                   dispatches, setDispatches, upsertDispatch, deleteDispatch,
+                   dispatches, setDispatches, upsertDispatch, deleteDispatch, signoffs, setSignoffs,
                    deletePhoto, deleteReceipt, deleteLog, reassignPhoto, reassignReceipt, editReceipt,
                    officeCount, setOfficeCount };
 
@@ -2647,7 +2729,7 @@ function CrewMap({ onSite, crewName, jobName, jobs }) {
   );
 }
 
-function Dash({ tasks, jobs, users, receipts, mats, setMats, setTab, navTo, openJobDetail, settings }) {
+function Dash({ tasks, setTasks, jobs, users, receipts, mats, setMats, setTab, navTo, openJobDetail, settings, logs, setLogs, signoffs, setSignoffs, user }) {
   const today = localDate();
   const [checkins, setCheckins] = useState([]);
   const [checkinLoading, setCheckinLoading] = useState(true);
@@ -2727,6 +2809,7 @@ function Dash({ tasks, jobs, users, receipts, mats, setMats, setTab, navTo, open
   return (
     <div>
       <h2 className="h2 fade" style={{ marginBottom: 18 }}>Dashboard</h2>
+      <OfficeFollowUps tasks={tasks} setTasks={setTasks} jobs={jobs} users={users} logs={logs} setLogs={setLogs} signoffs={signoffs} setSignoffs={setSignoffs} user={user} />
 
       {/* ── TODAY'S ATTENDANCE ────────────────────────────────── */}
       <div className="card fade" style={{ marginBottom: 20, border: onSite.length > 0 ? "1px solid rgba(16,185,129,.4)" : "1px solid var(--border)" }}>
@@ -2942,12 +3025,12 @@ function Dash({ tasks, jobs, users, receipts, mats, setMats, setTab, navTo, open
 }
 
 function AdminTasks(props) {
-  const { tasks, setTasks, jobs, users, t, lang, settings, statusFilter = "all", setStatusFilter, photos, setPhotos, user, mats, setMats, logs, setLogs } = props;
+  const { tasks, setTasks, jobs, users, t, lang, settings, statusFilter = "all", setStatusFilter, photos, setPhotos, user, mats, setMats, logs, setLogs, signoffs, setSignoffs } = props;
   const [replyText, setReplyText] = useState({}); // { [logId]: text }
   const [replyBusy, setReplyBusy] = useState(null);
   const [jobFilter, setJobFilter] = useState("all");
   const [modal, setModal] = useState(false);
-  const [nt, setNt] = useState({ title: "", titleEs: "", notes: "", jobId: "", assignedTo: [], dueDate: "", priority: "normal", recurring: false, photoRequired: false });
+  const [nt, setNt] = useState({ title: "", titleEs: "", notes: "", jobId: "", assignedTo: [], dueDate: "", priority: "normal", recurring: false, photoRequired: false, checklistText: "" });
   const [editTask, setEditTask] = useState(null); // task being edited
   const [editForm, setEditForm] = useState({});
   const [busy, setBusy] = useState(false);
@@ -2997,9 +3080,10 @@ function AdminTasks(props) {
       try { notesEs = await translateText(nt.notes, "es", settings.gtKey); } catch { notesEs = nt.notes; }
     } else notesEs = nt.notes;
     const id = "t" + Date.now();
-    const task = { id, jobId: nt.jobId, title: nt.title, titleEs: es || nt.title, notes: nt.notes, notesEs, assignedTo: nt.assignedTo, dueDate: nt.dueDate, status: "pending", createdAt: today, priority: nt.priority, recurring: nt.recurring, photoRequired: nt.photoRequired };
+    const checklist = checklistFromText(nt.checklistText);
+    const task = { id, jobId: nt.jobId, title: nt.title, titleEs: es || nt.title, notes: nt.notes, notesEs, assignedTo: nt.assignedTo, dueDate: nt.dueDate, status: "pending", createdAt: today, priority: nt.priority, recurring: nt.recurring, photoRequired: nt.photoRequired, checklist };
     setTasks(p => [...p, task]);
-    const row = { id, job_id: nt.jobId, title: nt.title, title_es: es || nt.title, notes: nt.notes || null, notes_es: notesEs || null, assigned_to: nt.assignedTo, due_date: nt.dueDate || null, status: "pending", priority: toPriority(nt.priority), recurring: nt.recurring, photo_required: nt.photoRequired };
+    const row = { id, job_id: nt.jobId, title: nt.title, title_es: es || nt.title, notes: nt.notes || null, notes_es: notesEs || null, assigned_to: nt.assignedTo, due_date: nt.dueDate || null, status: "pending", priority: toPriority(nt.priority), recurring: nt.recurring, photo_required: nt.photoRequired, checklist };
     try { await sbPost("field_tasks", row); } catch { enqueue({ table: "field_tasks", payload: row }); }
     // Save attached photo if provided
     if (taskPhoto && nt.jobId) {
@@ -3023,11 +3107,11 @@ function AdminTasks(props) {
       }
     }
     sendPush(nt.assignedTo, pushTitle, pushBody, "/?tab=tasks");
-    setNt({ title: "", titleEs: "", notes: "", jobId: "", assignedTo: [], dueDate: "", priority: "normal", recurring: false, photoRequired: false });
+    setNt({ title: "", titleEs: "", notes: "", jobId: "", assignedTo: [], dueDate: "", priority: "normal", recurring: false, photoRequired: false, checklistText: "" });
     setTaskPhoto(null); setTaskPhotoNote(""); setTaskPhotoType("before");
     setModal(false); setBusy(false);
   };
-  const openEdit = (task) => { setEditTask(task); setEditForm({ title: task.title, notes: task.notes || "", dueDate: task.dueDate, priority: task.priority || "normal", recurring: task.recurring || false, assignedTo: task.assignedTo || [] }); };
+  const openEdit = (task) => { setEditTask(task); setEditForm({ title: task.title, notes: task.notes || "", dueDate: task.dueDate, priority: task.priority || "normal", recurring: task.recurring || false, assignedTo: task.assignedTo || [], checklistText: (task.checklist || []).map(c => c.text).join("\n") }); };
   const saveEdit = async () => {
     if (!editTask) return;
     let es = editTask.titleEs;
@@ -3039,9 +3123,13 @@ function AdminTasks(props) {
     if ((editForm.notes || "") !== (editTask.notes || "") && settings?.gtKey && editForm.notes) {
       try { notesEs = await translateText(editForm.notes, "es", settings.gtKey); } catch { notesEs = editForm.notes; }
     } else if (!editForm.notes) notesEs = "";
-    const patch = { title: editForm.title, title_es: es || editForm.title, notes: editForm.notes || null, notes_es: notesEs || null, due_date: editForm.dueDate || null, priority: toPriority(editForm.priority), recurring: editForm.recurring, assigned_to: editForm.assignedTo };
-    setTasks(p => p.map(t => t.id === editTask.id ? { ...t, title: editForm.title, titleEs: es || editForm.title, notes: editForm.notes || "", notesEs, dueDate: editForm.dueDate, priority: editForm.priority, recurring: editForm.recurring, assignedTo: editForm.assignedTo } : t));
-    try { await sbFetch(`field_tasks?id=eq.${editTask.id}`, { method: "PATCH", body: JSON.stringify(patch), prefer: "return=minimal" }); } catch {}
+    const checklist = checklistFromText(editForm.checklistText, editTask.checklist || []);
+    const patch = { title: editForm.title, title_es: es || editForm.title, notes: editForm.notes || null, notes_es: notesEs || null, due_date: editForm.dueDate || null, priority: toPriority(editForm.priority), recurring: editForm.recurring, assigned_to: editForm.assignedTo, checklist };
+    // These columns are locked for direct field-app writes (2026-09-23
+    // lockdown); this edit used to fail silently and revert on reload.
+    try { await officeAction("task_patch", { task_id: editTask.id, patch }); }
+    catch (e) { alert("Task changes did not save: " + e.message); return; }
+    setTasks(p => p.map(t => t.id === editTask.id ? { ...t, title: editForm.title, titleEs: es || editForm.title, notes: editForm.notes || "", notesEs, dueDate: editForm.dueDate, priority: editForm.priority, recurring: editForm.recurring, assignedTo: editForm.assignedTo, checklist } : t));
     setEditTask(null);
   };
   const toggleEditCrew = (id) => setEditForm(p => ({ ...p, assignedTo: p.assignedTo.includes(id) ? p.assignedTo.filter(x => x !== id) : [...p.assignedTo, id] }));
@@ -3215,6 +3303,10 @@ function AdminTasks(props) {
                       {task.notes && <span className="tag" style={{ background: "rgba(245,158,11,.12)", color: "var(--accent)" }}>📝 Instructions</span>}
                       {taskMatCount > 0 && <span className="tag" style={{ background: "rgba(239,68,68,.12)", color: "var(--red)" }}>🔧 {taskMatCount} material{taskMatCount!==1?"s":""}</span>}
                       {taskUnrepliedCount > 0 && <span className="tag" style={{ background: "rgba(59,130,246,.12)", color: "var(--sky2)" }}>💬 {taskUnrepliedCount} awaiting reply</span>}
+                      {(task.checklist || []).length > 0 && <span className="tag" style={{ background: "rgba(255,255,255,.06)", color: "var(--silver)" }}>☑ {(task.checklist || []).filter(c => c.done).length}/{task.checklist.length}</span>}
+                      {task.status === "done" && (taskSignoff(signoffs, task.id)
+                        ? <span className="tag tag-done">✅ Verified</span>
+                        : <span className="tag" style={{ background: "rgba(245,158,11,.14)", color: "var(--accent)" }}>Needs sign-off</span>)}
                     </div>
                   </div>
                   <div style={{ display: "flex", gap: 4, flexShrink: 0 }} onClick={e => e.stopPropagation()}>
@@ -3238,6 +3330,9 @@ function AdminTasks(props) {
             <textarea className="fi" rows={3} value={editForm.notes || ""} onChange={e => setEditForm(p => ({ ...p, notes: e.target.value }))}
               placeholder="e.g. Use the leftover brick from the porch, match existing mortar color..." style={{ resize:"none" }} />
             {settings?.gtKey && <p style={{ fontSize:11, color:"var(--slate)", marginTop:5 }}>Auto-translates to Spanish for crew</p>}</div>
+          <div className="fg"><label className="fl">Checklist Steps <span style={{ color:"var(--silver)", fontWeight:400, textTransform:"none", letterSpacing:0 }}>— one per line, crew check them off</span></label>
+            <textarea className="fi" rows={4} value={editForm.checklistText || ""} onChange={e => setEditForm(p => ({ ...p, checklistText: e.target.value }))}
+              placeholder={"Snap lines\nSet bottom plates\nFrame walls\nSheath"} style={{ resize:"vertical" }} /></div>
           <div className="fg"><label className="fl">Due Date</label>
             <input className="fi" type="date" value={editForm.dueDate} onChange={e => setEditForm(p => ({ ...p, dueDate: e.target.value }))} /></div>
           <div className="grid2" style={{ marginBottom: 18 }}>
@@ -3299,6 +3394,9 @@ function AdminTasks(props) {
             <textarea className="fi" rows={3} value={nt.notes} onChange={e => setNt(p => ({ ...p, notes: e.target.value }))}
               placeholder="e.g. Use the leftover brick from the porch, match existing mortar color..." style={{ resize:"none" }} />
             {settings?.gtKey && <p style={{ fontSize:11, color:"var(--slate)", marginTop:5 }}>Auto-translates to Spanish for crew</p>}</div>
+          <div className="fg"><label className="fl">Checklist Steps <span style={{ color:"var(--silver)", fontWeight:400, textTransform:"none", letterSpacing:0 }}>— optional, one per line</span></label>
+            <textarea className="fi" rows={3} value={nt.checklistText} onChange={e => setNt(p => ({ ...p, checklistText: e.target.value }))}
+              placeholder={"Snap lines\nSet bottom plates\nFrame walls"} style={{ resize:"vertical" }} /></div>
           <div className="fg">
             <label className="fl">Assign To <span style={{ color: "var(--silver)", fontWeight: 400, textTransform: "none", letterSpacing: 0 }}>— select one or more</span></label>
             <div style={{ background: "rgba(0,0,0,.15)", borderRadius: 10, padding: "6px 4px", border: "1px solid var(--border)" }}>
@@ -3515,6 +3613,27 @@ function AdminTasks(props) {
                 )}
               </div>
 
+              {(task.checklist || []).length > 0 && (
+                <div style={{ marginBottom: 16 }}>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: "var(--silver)", textTransform: "uppercase", letterSpacing: .6, marginBottom: 6 }}>☑ Checklist ({task.checklist.filter(c => c.done).length}/{task.checklist.length})</div>
+                  {task.checklist.map(c => (
+                    <div key={c.id} style={{ fontSize: 13, padding: "3px 0", color: c.done ? "var(--green)" : "var(--white)" }}>
+                      {c.done ? "✓" : "○"} {c.text}{c.done && c.doneBy ? <span className="muted" style={{ fontSize: 11 }}> — {c.doneBy}</span> : null}
+                    </div>
+                  ))}
+                </div>
+              )}
+              {task.status === "done" && (
+                <div style={{ marginBottom: 16, padding: "10px 12px", borderRadius: 8, background: taskSignoff(signoffs, task.id) ? "rgba(16,185,129,.1)" : "rgba(245,158,11,.08)", border: `1px solid ${taskSignoff(signoffs, task.id) ? "rgba(16,185,129,.3)" : "rgba(245,158,11,.3)"}` }}>
+                  {taskSignoff(signoffs, task.id)
+                    ? <div style={{ fontSize: 13, color: "var(--green)", fontWeight: 700 }}>✅ Verified by {taskSignoff(signoffs, task.id).name} · {new Date(taskSignoff(signoffs, task.id).date).toLocaleDateString()}</div>
+                    : <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+                        <span style={{ fontSize: 13, fontWeight: 700, color: "var(--accent)", flex: 1 }}>Crew marked this done — check it.</span>
+                        <button className="btn btn-g btn-sm" onClick={() => verifyTask(task, user, setSignoffs)}>✅ Verify</button>
+                        <button className="btn btn-s btn-sm" style={{ color: "var(--red)" }} onClick={() => sendBackTask(task, users, setTasks)}>↩ Send back</button>
+                      </div>}
+                </div>
+              )}
               <div className="macts">
                 <button className="btn btn-s" onClick={() => { setDetailTask(null); openEdit(task); }}>✎ Edit Task</button>
                 <button className="btn btn-p" onClick={() => setDetailTask(null)}>Close</button>
@@ -3523,6 +3642,90 @@ function AdminTasks(props) {
           </div>
         );
       })()}
+    </div>
+  );
+}
+
+// Office verification of a finished task (field_signoffs row).
+async function verifyTask(task, user, setSignoffs) {
+  const row = { id: "s" + Date.now(), task_id: task.id, job_id: task.jobId, signed_name: user?.name || "Office", signature_data: "office-verified" };
+  try { await sbPost("field_signoffs", row); }
+  catch (e) { alert("Verification did not save: " + e.message); return; }
+  setSignoffs?.(p => [fromSignoff({ ...row, created_at: new Date().toISOString() }), ...(p || [])]);
+  sendPush(task.assignedTo || [], "✅ Task verified", `${task.title} — office signed off. Nice work.`, "/?tab=tasks");
+}
+// Office rejects a "done": reopen it and tell the crew why.
+async function sendBackTask(task, users, setTasks) {
+  const reason = window.prompt(`Send "${task.title}" back to the crew? Tell them what still needs doing:`, "");
+  if (reason === null) return;
+  try { await sbPatch("field_tasks", task.id, { status: "pending", completed_at: null }); }
+  catch (e) { alert("Could not reopen task: " + e.message); return; }
+  setTasks(p => p.map(t => t.id === task.id ? { ...t, status: "pending", completedAt: null } : t));
+  const msg = `↩ Office sent back "${task.title}"${reason.trim() ? `: ${reason.trim()}` : ""}. It's open again in your app.`;
+  for (const id of task.assignedTo || []) {
+    const phone = users.find(u => u.id === id)?.phone;
+    if (phone) fnFetch("/.netlify/functions/send-sms", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ to: phone, body: msg }) }).catch(() => {});
+  }
+  sendPush(task.assignedTo || [], "↩ Task sent back", msg.slice(0, 120), "/?tab=tasks");
+}
+
+// Dashboard card: finished tasks waiting for office sign-off, and crew task
+// suggestions waiting to be turned into tasks.
+function OfficeFollowUps({ tasks, setTasks, jobs, users, logs, setLogs, signoffs, setSignoffs, user }) {
+  const cutoff = new Date(Date.now() - 14 * 86400000).toISOString();
+  const needSignoff = tasks.filter(t => t.status === "done" && !t.recurring && (!t.completedAt || t.completedAt >= cutoff) && !taskSignoff(signoffs, t.id));
+  const suggestions = (logs || []).filter(l => isSuggestion(l) && !l.resolved);
+  const jobName = id => jobs.find(j => j.id === id)?.name || "—";
+  const crewName = id => users.find(u => u.id === id)?.name || id;
+  const resolveLog = async (l) => {
+    try { await sbPatch("field_logs", l.id, { resolved: true }); }
+    catch (e) { alert("Could not update: " + e.message); return false; }
+    setLogs(p => p.map(x => x.id === l.id ? { ...x, resolved: true } : x));
+    return true;
+  };
+  const makeTask = async (l) => {
+    const title = l.en.slice(SUGGEST_PREFIX.length).trim();
+    const id = "t" + Date.now();
+    const row = { id, job_id: l.jobId, title, title_es: title, notes: null, notes_es: null, assigned_to: [l.crewId], due_date: null, status: "pending", priority: 3, recurring: false, photo_required: false, checklist: [] };
+    try { await sbPost("field_tasks", row); }
+    catch (e) { alert("Could not create task: " + e.message); return; }
+    setTasks(p => [...p, fromTask({ ...row, created_at: new Date().toISOString() })]);
+    await resolveLog(l);
+    sendPush([l.crewId], "💡 Your idea is now a task", title.slice(0, 100), "/?tab=tasks");
+  };
+  if (!needSignoff.length && !suggestions.length) return null;
+  return (
+    <div className="card fade" style={{ marginBottom: 20, border: "1px solid rgba(245,158,11,.4)" }}>
+      {needSignoff.length > 0 && <>
+        <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 10 }}>✅ Needs sign-off ({needSignoff.length})</div>
+        {needSignoff.slice(0, 12).map(t => (
+          <div key={t.id} className="flexb" style={{ gap: 8, padding: "7px 0", borderTop: "1px solid var(--border)", flexWrap: "wrap" }}>
+            <div style={{ minWidth: 0, flex: 1 }}>
+              <div style={{ fontWeight: 600, fontSize: 14 }}>{t.title}</div>
+              <div className="muted" style={{ fontSize: 11 }}>{jobName(t.jobId)} · {(t.assignedTo || []).map(crewName).join(", ")}{t.completedAt ? ` · done ${new Date(t.completedAt).toLocaleDateString()}` : ""}{(t.checklist || []).length ? ` · ☑ ${t.checklist.filter(c => c.done).length}/${t.checklist.length}` : ""}</div>
+            </div>
+            <div style={{ display: "flex", gap: 6 }}>
+              <button className="btn btn-g btn-sm" onClick={() => verifyTask(t, user, setSignoffs)}>✅ Verify</button>
+              <button className="btn btn-s btn-sm" style={{ color: "var(--red)" }} onClick={() => sendBackTask(t, users, setTasks)}>↩ Send back</button>
+            </div>
+          </div>
+        ))}
+      </>}
+      {suggestions.length > 0 && <>
+        <div style={{ fontWeight: 700, fontSize: 15, margin: needSignoff.length ? "16px 0 10px" : "0 0 10px" }}>💡 Crew suggestions ({suggestions.length})</div>
+        {suggestions.map(l => (
+          <div key={l.id} className="flexb" style={{ gap: 8, padding: "7px 0", borderTop: "1px solid var(--border)", flexWrap: "wrap" }}>
+            <div style={{ minWidth: 0, flex: 1 }}>
+              <div style={{ fontWeight: 600, fontSize: 14 }}>{l.en.slice(SUGGEST_PREFIX.length)}</div>
+              <div className="muted" style={{ fontSize: 11 }}>{crewName(l.crewId)} · {jobName(l.jobId)} · {l.date}</div>
+            </div>
+            <div style={{ display: "flex", gap: 6 }}>
+              <button className="btn btn-p btn-sm" onClick={() => makeTask(l)}>+ Make task</button>
+              <button className="btn btn-s btn-sm" onClick={() => resolveLog(l)}>Dismiss</button>
+            </div>
+          </div>
+        ))}
+      </>}
     </div>
   );
 }
@@ -4385,7 +4588,7 @@ ${jobBlocks || '<p style="color:#888;text-align:center;padding:40px">No activity
 
 function AdminReceipts({ receipts, setReceipts, jobs, tasks, users, user, deleteReceipt, reassignReceipt, editReceipt }) {
   const [modal, setModal] = useState(false);
-  const [nr, setNr] = useState({ dest: "job", customCat: "", jobId: "", taskId: "", crewId: "", store: "", amount: "", note: "", paidBy: "company", dataUrl: null });
+  const [nr, setNr] = useState({ dest: "job", customCat: "", jobId: "", taskId: "", crewId: "", store: "", amount: "", note: "", paidBy: "company", paymentMethod: "", dataUrl: null });
   const [busy, setBusy] = useState(false);
   const fileRef = useRef();
   const [scanning, setScanning] = useState(false);
@@ -4419,6 +4622,7 @@ function AdminReceipts({ receipts, setReceipts, jobs, tasks, users, user, delete
       dest: destKey, jobId: r.jobId || "", taskId: r.taskId || "",
       customCat: destKey === "custom" ? (r.category || "") : "",
       store: r.store || "", amount: r.amount != null ? String(r.amount) : "", note: r.note || "", paidBy: r.paidBy || "company",
+      paymentMethod: r.paymentMethod || "",
     });
     setEfNewPhoto(undefined);
     setEfScanMsg(""); setEfScanning(false);
@@ -4456,7 +4660,9 @@ function AdminReceipts({ receipts, setReceipts, jobs, tasks, users, user, delete
     const patch = {
       store: ef.store, amount: ef.amount, note: ef.note, paidBy: ef.paidBy,
       category, jobId: usingJob ? ef.jobId : null, taskId: usingJob ? (ef.taskId || null) : null,
+      paymentMethod: ef.paidBy === "company" ? (ef.paymentMethod || "") : "",
     };
+    if (!confirmNotDuplicate(receipts, ef.store, ef.amount, "en", editing.id)) { setEfBusy(false); return; }
     await editReceipt(editing.id, patch, efNewPhoto);
     setEfBusy(false);
     closeEdit();
@@ -4468,19 +4674,20 @@ function AdminReceipts({ receipts, setReceipts, jobs, tasks, users, user, delete
     if (nr.dest === "custom" && !nr.customCat.trim()) return;
     const category = rcDestCategory(nr.dest, nr.customCat);
     const jobIdVal = usingJob ? nr.jobId : null;
+    if (!confirmNotDuplicate(receipts, nr.store, nr.amount, "en")) return;
     setBusy(true);
     const id = "r" + Date.now();
     let storagePath = null;
     if (nr.dataUrl) { try { storagePath = await uploadToStorage(nr.dataUrl, `${nr.crewId||user.id}/${id}.jpg`, jobIdVal, "receipt"); } catch {} }
     const receipt = { id, jobId: jobIdVal, category, taskId: usingJob ? nr.taskId || null : null, crewId: nr.crewId || user.id,
       dataUrl: nr.dataUrl, store: nr.store, amount: nr.amount, note: nr.note,
-      paidBy: nr.paidBy, reimbursementStatus: nr.paidBy === "crew" ? "pending" : "na", createdAt: today };
+      paidBy: nr.paidBy, reimbursementStatus: nr.paidBy === "crew" ? "pending" : "na", createdAt: today, paymentMethod: nr.paidBy === "company" ? nr.paymentMethod : "" };
     setReceipts(p => [...p, receipt]);
     const row = { id, job_id: jobIdVal, category, task_id: usingJob ? nr.taskId || null : null, crew_id: nr.crewId || user.id,
       data_url: storagePath ? mediaUrl(storagePath) : nr.dataUrl, storage_path: storagePath, store: nr.store, amount: parseFloat(nr.amount) || 0, note: nr.note,
-      paid_by: nr.paidBy, reimbursement_status: nr.paidBy === "crew" ? "pending" : "na" };
+      paid_by: nr.paidBy, reimbursement_status: nr.paidBy === "crew" ? "pending" : "na", payment_method: nr.paidBy === "company" ? (nr.paymentMethod || null) : null };
     try { await sbPost("field_receipts", row); } catch { enqueue({ table: "field_receipts", payload: row }); }
-    setNr({ dest: "job", customCat: "", jobId: "", taskId: "", crewId: "", store: "", amount: "", note: "", paidBy: "company", dataUrl: null });
+    setNr({ dest: "job", customCat: "", jobId: "", taskId: "", crewId: "", store: "", amount: "", note: "", paidBy: "company", paymentMethod: "", dataUrl: null });
     setScanMsg(""); setModal(false); setBusy(false);
   };
 
@@ -4507,8 +4714,11 @@ function AdminReceipts({ receipts, setReceipts, jobs, tasks, users, user, delete
   };
 
   const markReimbursed = async (id) => {
+    // reimbursement_* is locked for direct field-app writes; this used to
+    // fail silently and leave the receipt "unpaid" on reload.
+    try { await officeAction("mark_reimbursed", { receipt_id: id }); }
+    catch (e) { alert("Could not mark paid: " + e.message); return; }
     setReceipts(p => p.map(r => r.id === id ? { ...r, reimbursementStatus: "paid", reimbursementDate: today } : r));
-    try { await sbPatch("field_receipts", id, { reimbursement_status: "paid", reimbursement_date: today }); } catch {}
     const r = receipts.find(x => x.id === id);
     const crewPhone = r && users.find(u => u.id === r.crewId)?.phone;
     if (crewPhone) {
@@ -4818,6 +5028,7 @@ ${r.dataUrl
               <button className={"btn btn-sm " + (ef.paidBy==="company"?"btn-p":"btn-s")} onClick={()=>setEf(p=>({...p,paidBy:"company"}))}>Company Card</button>
               <button className={"btn btn-sm " + (ef.paidBy==="crew"?"btn-a":"btn-s")} onClick={()=>setEf(p=>({...p,paidBy:"crew"}))}>Crew Paid — Needs Reimbursement</button>
             </div></div>
+          {ef.paidBy === "company" && <CardField value={ef.paymentMethod} onChange={v => setEf(p => ({ ...p, paymentMethod: v }))} receipts={receipts} lang="en" />}
           <div className="fg"><label className="fl">Receipt Photo</label>
             <input ref={efFileRef} type="file" accept="image/*" capture="environment" style={{ display:"none" }} onChange={efPhotoCapture} />
             {(() => {
@@ -4885,6 +5096,7 @@ ${r.dataUrl
               <button className={"btn btn-sm " + (nr.paidBy==="company"?"btn-p":"btn-s")} onClick={()=>setNr(p=>({...p,paidBy:"company"}))}>Company Card</button>
               <button className={"btn btn-sm " + (nr.paidBy==="crew"?"btn-a":"btn-s")} onClick={()=>setNr(p=>({...p,paidBy:"crew"}))}>Crew Paid — Needs Reimbursement</button>
             </div></div>
+          {nr.paidBy === "company" && <CardField value={nr.paymentMethod} onChange={v => setNr(p => ({ ...p, paymentMethod: v }))} receipts={receipts} lang="en" />}
           <div className="fg"><label className="fl">Receipt Photo (optional)</label>
             <input ref={fileRef} type="file" accept="image/*" capture="environment" style={{ display:"none" }} onChange={photoCapture} />
             {nr.dataUrl
@@ -5987,13 +6199,14 @@ function AdminFieldMode({ jobs, tasks, setTasks, photos, setPhotos, receipts, se
     if (rcDest === "custom" && !rcCustomCat.trim()) return;
     const category = rcDestCategory(rcDest, rcCustomCat);
     const jobIdVal = usingJob ? selJob : null;
+    if (!confirmNotDuplicate(receipts, rcForm.store, rcForm.amount, "en")) return;
     setRcBusy(true);
     const id = "r" + Date.now();
     let storagePath = null;
     if (rcPhoto) { try { storagePath = await uploadToStorage(rcPhoto, `${user.id}/${id}.jpg`, jobIdVal, "receipt"); } catch {} }
     const receipt = { id, dataUrl: rcPhoto, taskId: null, jobId: jobIdVal, category, crewId: user.id, store: rcForm.store, amount: rcForm.amount, note: rcForm.note, paidBy: rcForm.paidBy, reimbursementStatus: rcForm.paidBy === "crew" ? "pending" : "na", createdAt: today };
     setReceipts(p => [...p, receipt]);
-    const row = { id, data_url: storagePath ? mediaUrl(storagePath) : rcPhoto, storage_path: storagePath, task_id: null, job_id: jobIdVal, category, crew_id: user.id, store: rcForm.store, amount: parseFloat(rcForm.amount)||0, note: rcForm.note, paid_by: rcForm.paidBy, reimbursement_status: rcForm.paidBy==="crew"?"pending":"na" };
+    const row = { id, data_url: storagePath ? mediaUrl(storagePath) : rcPhoto, storage_path: storagePath, task_id: null, job_id: jobIdVal, category, crew_id: user.id, store: rcForm.store, amount: parseFloat(rcForm.amount)||0, note: rcForm.note, paid_by: rcForm.paidBy, reimbursement_status: rcForm.paidBy==="crew"?"pending":"na", payment_method: rcForm.paidBy === "company" ? (rcForm.paymentMethod || null) : null };
     try { await sbPost("field_receipts", row); } catch { enqueue({ table: "field_receipts", payload: row }); }
     setRcForm({ store:"", amount:"", note:"", paidBy:"crew" }); setRcPhoto(null); setRcBusy(false); setRcDest("job"); setRcCustomCat(""); setRcScanMsg("");
     alert("Receipt saved!");
@@ -6216,6 +6429,7 @@ function AdminFieldMode({ jobs, tasks, setTasks, photos, setPhotos, receipts, se
                 <button className={`btn btn-sm ${rcForm.paidBy==="crew"?"btn-a":"btn-s"}`} onClick={()=>setRcForm(p=>({...p,paidBy:"crew"}))}>I Paid — Need Reimbursement</button>
                 <button className={`btn btn-sm ${rcForm.paidBy==="company"?"btn-p":"btn-s"}`} onClick={()=>setRcForm(p=>({...p,paidBy:"company"}))}>Company Card</button>
               </div>
+              {rcForm.paidBy === "company" && <CardField value={rcForm.paymentMethod} onChange={v => setRcForm(p => ({ ...p, paymentMethod: v }))} receipts={receipts} lang="en" compact />}
               <div style={{ display:"flex", gap:8, marginBottom:8, alignItems:"center" }}>
                 {rcPhoto && <img src={rcPhoto} alt="rcpt" style={{ width:48, height:48, objectFit:"cover", borderRadius:6, border:"2px solid var(--green)" }} />}
                 <button className="btn btn-s btn-sm" onClick={()=>{rcPhotoRef.current?.setAttribute("capture","environment");rcPhotoRef.current?.click();}}>
@@ -6530,7 +6744,11 @@ function parseStop(s) {
   catch { return { label: s, address: "" }; }
 }
 
-function DispatchCrewRow({ member, date, activeJobs, dispatch: d, toggleJob, addStop, removeStop, clearAll, onNotify, notified }) {
+function DispatchCrewRow({ member, date, activeJobs, allJobs, dispatch: d, toggleJob, addStop, removeStop, clearAll, onNotify, notified, checkins, onRepeat }) {
+  const todayStr = localDate();
+  const hasStops = d.jobIds.length + d.customStops.length > 0;
+  // Did they actually go where they were sent? (check-ins for this date)
+  const offPlan = (checkins || []).filter(c => d.jobIds.length && !d.jobIds.includes(c.job_id));
   const [stopLabel, setStopLabel] = useState("");
   const [stopAddress, setStopAddress] = useState("");
   return (
@@ -6543,6 +6761,11 @@ function DispatchCrewRow({ member, date, activeJobs, dispatch: d, toggleJob, add
             {d.jobIds.length > 0
               ? <div style={{ fontSize: 11, color: "var(--accent)", fontWeight: 700 }}>📍 {d.jobIds.length} location{d.jobIds.length !== 1 ? "s" : ""} assigned</div>
               : <div style={{ fontSize: 11, color: "var(--slate)" }}>No dispatch for this day</div>}
+            {hasStops && (
+              <div style={{ fontSize: 11, marginTop: 2, fontWeight: 700, color: d.ackStatus ? "var(--green)" : "var(--slate)" }}>
+                {d.ackStatus === "on_my_way" ? `🚚 On the way · ${fmtClock(d.ackAt)}` : d.ackStatus === "seen" ? `👍 Seen · ${fmtClock(d.ackAt)}` : "⏳ Not confirmed yet"}
+              </div>
+            )}
           </div>
         </div>
         <div style={{ display: "flex", gap: 6 }}>
@@ -6551,6 +6774,9 @@ function DispatchCrewRow({ member, date, activeJobs, dispatch: d, toggleJob, add
               style={{ background: notified ? "rgba(16,185,129,.2)" : "rgba(59,130,246,.15)", color: notified ? "var(--green)" : "var(--sky2)", border: `1px solid ${notified ? "rgba(16,185,129,.4)" : "rgba(59,130,246,.35)"}`, fontWeight: 700, fontSize: 12 }}>
               {notified ? "✓ Sent!" : "📣 Notify"}
             </button>
+          )}
+          {hasStops && (
+            <button className="btn btn-s btn-sm" title="Repeat this dispatch on the same weekday for the next few weeks" onClick={onRepeat}>🔁 Repeat</button>
           )}
           {d.jobIds.length > 0 && (
             <button className="btn btn-s btn-sm" style={{ color: "var(--red)" }} onClick={() => clearAll(member.id)}>✕ Clear</button>
@@ -6572,6 +6798,12 @@ function DispatchCrewRow({ member, date, activeJobs, dispatch: d, toggleJob, add
                 <div style={{ flex: 1 }}>
                   <div style={{ fontWeight: 600, fontSize: 14 }}>{job.name}</div>
                   {job.address && <div style={{ fontSize: 11, color: "var(--silver)" }}>{job.address}</div>}
+                  {on && date <= todayStr && (() => {
+                    const ci = (checkins || []).find(c => c.job_id === job.id);
+                    return ci
+                      ? <div style={{ fontSize: 11, color: "var(--green)", fontWeight: 700, marginTop: 2 }}>✓ Checked in {fmtClock(ci.check_in)}</div>
+                      : <div style={{ fontSize: 11, color: "var(--orange)", fontWeight: 700, marginTop: 2 }}>✗ Not checked in{date === todayStr ? " yet" : ""}</div>;
+                  })()}
                 </div>
                 {on && <span style={{ fontSize: 12, color: "var(--accent)", fontWeight: 700 }}>✓</span>}
               </label>
@@ -6579,6 +6811,11 @@ function DispatchCrewRow({ member, date, activeJobs, dispatch: d, toggleJob, add
           })}
         </div>
         {d.jobIds.length >= 3 && <p style={{ fontSize: 11, color: "var(--orange)", marginTop: 6 }}>Max 3 locations selected</p>}
+        {offPlan.length > 0 && (
+          <p style={{ fontSize: 11, color: "var(--orange)", marginTop: 6, fontWeight: 700 }}>
+            ⚠ Also checked in somewhere not dispatched: {[...new Set(offPlan.map(c => (allJobs || activeJobs).find(j => j.id === c.job_id)?.name || c.job_id))].join(", ")}
+          </p>
+        )}
       </div>
 
       <div>
@@ -6625,12 +6862,67 @@ function DispatchCrewRow({ member, date, activeJobs, dispatch: d, toggleJob, add
   );
 }
 
+// Week grid: crew down the side, Mon-Sun across. Tap a day to edit it.
+function DispatchWeek({ crew, jobs, dispatches, date, setDate, onPick }) {
+  const base = new Date(date + "T12:00:00");
+  const monday = addDays(date, -((base.getDay() + 6) % 7));
+  const days = [0, 1, 2, 3, 4, 5, 6].map(i => addDays(monday, i));
+  const today = localDate();
+  const short = id => (jobs.find(j => j.id === id)?.name || "?").split(/[,–-]/)[0].trim();
+  return (
+    <div className="card" style={{ marginBottom: 20, padding: 12 }}>
+      <div className="flexb" style={{ marginBottom: 10 }}>
+        <button className="btn btn-s btn-sm" onClick={() => setDate(addDays(date, -7))}>← Prev week</button>
+        <span style={{ fontWeight: 700, fontSize: 13 }}>Week of {monday}</span>
+        <button className="btn btn-s btn-sm" onClick={() => setDate(addDays(date, 7))}>Next week →</button>
+      </div>
+      <div className="tbl-wrap">
+        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12, minWidth: 620 }}>
+          <thead><tr>
+            <th style={{ textAlign: "left", padding: 6, color: "var(--slate)" }}>Crew</th>
+            {days.map(ds => <th key={ds} style={{ padding: 6, color: ds === today ? "var(--accent)" : "var(--slate)", fontWeight: 700 }}>
+              {new Date(ds + "T12:00:00").toLocaleDateString([], { weekday: "short" })}<br /><span style={{ fontWeight: 400 }}>{ds.slice(5)}</span></th>)}
+          </tr></thead>
+          <tbody>{crew.map(m => (
+            <tr key={m.id} style={{ borderTop: "1px solid var(--border)" }}>
+              <td style={{ padding: 6, fontWeight: 700, whiteSpace: "nowrap" }}>{m.name}</td>
+              {days.map(ds => {
+                const d = dispatches.find(x => x.crewId === m.id && x.date === ds);
+                const n = d ? d.jobIds.length + d.customStops.length : 0;
+                return (
+                  <td key={ds} onClick={() => onPick(ds)} title="Open this day"
+                    style={{ padding: 6, cursor: "pointer", verticalAlign: "top", background: n ? "rgba(245,158,11,.08)" : "transparent", borderLeft: "1px solid var(--border)" }}>
+                    {n ? <>
+                      {d.jobIds.map(id => <div key={id} style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: 110 }}>📍 {short(id)}</div>)}
+                      {d.customStops.map((st, i) => <div key={i} style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: 110 }}>🛑 {parseStop(st).label}</div>)}
+                      <div style={{ fontSize: 10, marginTop: 2, color: d.ackStatus ? "var(--green)" : "var(--slate)" }}>{d.ackStatus === "on_my_way" ? "🚚 on way" : d.ackStatus === "seen" ? "👍 seen" : "⏳"}</div>
+                    </> : <span style={{ color: "var(--slate)" }}>—</span>}
+                  </td>
+                );
+              })}
+            </tr>
+          ))}</tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
 // ─── ADMIN DISPATCH ───────────────────────────────────────────────────
 function AdminDispatch({ users, jobs, dispatches, upsertDispatch, deleteDispatch, settings }) {
   const today = localDate();
   const [date, setDate] = useState(today);
   const [notified, setNotified] = useState({}); // crewId → true
+  const [view, setView] = useState("day"); // "day" | "week"
+  const [dayCheckins, setDayCheckins] = useState([]);
   const crew = users.filter(u => u.active !== false && !u.archived).sort((a,b) => (a.role==="crew"?0:1)-(b.role==="crew"?0:1) || a.name.localeCompare(b.name));
+  useEffect(() => {
+    let off = false;
+    sbGet("field_checkins", `work_date=eq.${date}&select=crew_id,job_id,check_in`)
+      .then(r => { if (!off) setDayCheckins(r || []); })
+      .catch(() => { if (!off) setDayCheckins([]); });
+    return () => { off = true; };
+  }, [date]);
 
   const getDispatch = (crewId) => dispatches.find(d => d.crewId === crewId && d.date === date) || { jobIds: [], customStops: [] };
 
@@ -6672,24 +6964,44 @@ function AdminDispatch({ users, jobs, dispatches, upsertDispatch, deleteDispatch
     if (d) deleteDispatch(d.id);
   };
 
+  // Copy this day's dispatch to the same weekday for the next N weeks.
+  // Silent: no texts now -- crew get the normal morning reminder that day.
+  const repeatWeekly = async (crewId) => {
+    const cur = getDispatch(crewId);
+    if (!cur.jobIds.length && !cur.customStops.length) return;
+    const n = parseInt(window.prompt("Repeat this exact dispatch on this weekday for how many more weeks? (1-12)", "4"), 10);
+    if (!n || n < 1) return;
+    const weeks = Math.min(n, 12);
+    for (let i = 1; i <= weeks; i++) {
+      await upsertDispatch({ crewId, date: addDays(date, 7 * i), jobIds: cur.jobIds, customStops: cur.customStops }, { silent: true });
+    }
+    alert(`Repeated for the next ${weeks} week${weeks !== 1 ? "s" : ""}.`);
+  };
+
   const activeJobs = jobs.filter(j => j.status !== "closed");
 
   return (
     <div>
       <div className="flexb" style={{ marginBottom: 20 }}>
-        <h2 className="h2">📍 Daily Dispatch</h2>
-        <input className="fi" type="date" value={date} onChange={e => setDate(e.target.value)} style={{ width: "auto", padding: "8px 13px" }} />
+        <h2 className="h2">📍 {view === "week" ? "Weekly" : "Daily"} Dispatch</h2>
+        <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+          <button className={`btn btn-sm ${view === "day" ? "btn-p" : "btn-s"}`} onClick={() => setView("day")}>Day</button>
+          <button className={`btn btn-sm ${view === "week" ? "btn-p" : "btn-s"}`} onClick={() => setView("week")}>Week</button>
+          <input className="fi" type="date" value={date} onChange={e => setDate(e.target.value)} style={{ width: "auto", padding: "8px 13px" }} />
+        </div>
       </div>
+      {view === "week" && <DispatchWeek crew={crew} jobs={jobs} dispatches={dispatches} date={date} setDate={setDate} onPick={ds => { setDate(ds); setView("day"); }} />}
       <p className="muted" style={{ marginBottom: 20, fontSize: 13 }}>
         Tell each worker where to go today. Select up to 3 job sites per person. Workers see this at the top of their app — read-only.
       </p>
 
       {crew.length === 0 && <div className="empty"><p>No crew members added yet.</p></div>}
 
-      {crew.map(member => (
-        <DispatchCrewRow key={member.id} member={member} date={date} activeJobs={activeJobs}
+      {view === "day" && crew.map(member => (
+        <DispatchCrewRow key={member.id} member={member} date={date} activeJobs={activeJobs} allJobs={jobs}
           dispatch={getDispatch(member.id)} toggleJob={toggleJob} addStop={addStop} removeStop={removeStop} clearAll={clearAll}
-          onNotify={() => notifyNow(member.id)} notified={!!notified[member.id]} />
+          onNotify={() => notifyNow(member.id)} notified={!!notified[member.id]}
+          checkins={dayCheckins.filter(c => c.crew_id === member.id)} onRepeat={() => repeatWeekly(member.id)} />
       ))}
     </div>
   );
@@ -7210,7 +7522,8 @@ function Crew(props) {
 }
 
 function CrewTasks(props) {
-  const { user, tasks, setTasks, jobs, lang, t, settings, photos, setPhotos, receipts, setReceipts, logs, setLogs, dispatches, mats, todayJobIds, setTodayJobIds } = props;
+  const { user, users, tasks, setTasks, jobs, lang, t, settings, photos, setPhotos, receipts, setReceipts, logs, setLogs, dispatches, setDispatches, mats, todayJobIds, setTodayJobIds, signoffs } = props;
+  const [rcScanMsg, setRcScanMsg] = useState("");
   const closedJobIds = new Set(jobs.filter(j => j.status === "closed").map(j => j.id));
   const myAssignedAll = tasks.filter(t => (Array.isArray(t.assignedTo) ? t.assignedTo.includes(user.id) : t.assignedTo === user.id) && !closedJobIds.has(t.jobId));
   // Only tasks for a job this crew member actually checked into today are
@@ -7258,6 +7571,21 @@ function CrewTasks(props) {
     { k: "concern", l: t.concern, c: "var(--red)"    },
   ];
 
+  // Crew confirms the day's dispatch: "Got it" / "On my way" (the second
+  // also texts the office so nobody has to call and ask).
+  const ackDispatch = async (d, status) => {
+    const at = new Date().toISOString();
+    try { await sbPatch("field_dispatch", d.id, { ack_status: status, ack_at: at }); }
+    catch { alert(lang === "es" ? "No se pudo enviar. Revisa tu señal e intenta otra vez." : "Didn't send — check your signal and try again."); return; }
+    setDispatches?.(p => p.map(x => x.id === d.id ? { ...x, ackStatus: status, ackAt: at } : x));
+    if (status === "on_my_way") {
+      const n = (d.jobIds?.length || 0) + (d.customStops?.length || 0);
+      const first = jobs.find(j => j.id === d.jobIds?.[0])?.name || (d.customStops?.[0] ? parseStop(d.customStops[0]).label : "");
+      fnFetch("/.netlify/functions/send-sms", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ to: settings?.adminPhone || "+12053699710", body: `🚚 ${user.name} is on the way${first ? ` to ${first}` : ""} (${n} stop${n !== 1 ? "s" : ""} today).` }) }).catch(() => {});
+    }
+  };
+
   const togglePanel = (jobId, type) => {
     if (activePanel?.jobId === jobId && activePanel?.type === type) {
       setActivePanel(null);
@@ -7301,20 +7629,24 @@ function CrewTasks(props) {
 
   const captureRcPhoto = async (e) => {
     const file = e.target.files[0]; if (!file) return;
-    try { const { dataUrl } = await compressImage(file, 1000, 0.6); setRcForm(p => ({ ...p, dataUrl })); }
-    catch { alert("Could not process image. Try again."); }
     e.target.value = "";
+    let dataUrl;
+    try { ({ dataUrl } = await compressImage(file, 1000, 0.6)); setRcForm(p => ({ ...p, dataUrl })); }
+    catch { alert("Could not process image. Try again."); return; }
+    setRcScanMsg(lang === "es" ? "Leyendo recibo…" : "Reading receipt…");
+    setRcScanMsg(await scanIntoForm(dataUrl, setRcForm, lang));
   };
 
   const submitJobReceipt = async (jobId) => {
     if (!rcForm.store || !rcForm.amount) return;
+    if (!confirmNotDuplicate(receipts, rcForm.store, rcForm.amount, lang)) return;
     setRcBusy(true);
     const id = "r" + Date.now();
     let storagePath = null;
     if (rcForm.dataUrl) { try { storagePath = await uploadToStorage(rcForm.dataUrl, `${user.id}/${id}.jpg`, jobId, "receipt"); } catch {} }
     const receipt = { id, dataUrl: rcForm.dataUrl, taskId: null, jobId, crewId: user.id, store: rcForm.store, amount: rcForm.amount, note: rcForm.note, paidBy: rcForm.paidBy, reimbursementStatus: rcForm.paidBy === "crew" ? "pending" : "na", createdAt: today };
     setReceipts(p => [...p, receipt]);
-    const row = { id, data_url: storagePath ? mediaUrl(storagePath) : rcForm.dataUrl, storage_path: storagePath, task_id: null, job_id: jobId, crew_id: user.id, store: rcForm.store, amount: parseFloat(rcForm.amount) || 0, note: rcForm.note, paid_by: rcForm.paidBy, reimbursement_status: rcForm.paidBy === "crew" ? "pending" : "na" };
+    const row = { id, data_url: storagePath ? mediaUrl(storagePath) : rcForm.dataUrl, storage_path: storagePath, task_id: null, job_id: jobId, crew_id: user.id, store: rcForm.store, amount: parseFloat(rcForm.amount) || 0, note: rcForm.note, paid_by: rcForm.paidBy, reimbursement_status: rcForm.paidBy === "crew" ? "pending" : "na", payment_method: rcForm.paidBy === "company" ? (rcForm.paymentMethod || null) : null };
     try { await sbPost("field_receipts", row); } catch { enqueue({ table: "field_receipts", payload: row }); }
     // GSM Builder sync
     const job = jobs.find(j => j.id === jobId);
@@ -7324,6 +7656,7 @@ function CrewTasks(props) {
       fnFetch("/.netlify/functions/send-sms", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ to: "+12053699710", body: msg }) }).catch(() => {});
     }
     setRcForm({ store: "", amount: "", note: "", paidBy: "crew", dataUrl: null });
+    setRcScanMsg("");
     setRcBusy(false);
     setActivePanel(null);
   };
@@ -7395,6 +7728,10 @@ function CrewTasks(props) {
         : "📷 This task requires at least one photo before marking it done.");
       return;
     }
+    const openSteps = (task.checklist || []).filter(c => !c.done).length;
+    if (next === "done" && openSteps && !window.confirm(lang === "es"
+      ? `Faltan ${openSteps} paso(s) de la lista. ¿Marcar como terminada de todos modos?`
+      : `${openSteps} checklist step${openSteps !== 1 ? "s are" : " is"} not checked. Mark done anyway?`)) return;
     setTasks(p => p.map(tk => tk.id === id ? { ...tk, status: next } : tk));
     try { await sbPatch("field_tasks", id, { status: next, completed_at: next === "done" ? new Date().toISOString() : null }); } catch {}
     if (next === "done") {
@@ -7409,6 +7746,39 @@ function CrewTasks(props) {
       // GSM Builder sync
       const job = jobs.find(j => j.id === task.jobId);
     }
+  };
+
+  // Checklist step toggle (crew): saved straight to field_tasks.checklist.
+  const toggleCheckItem = async (task, itemId) => {
+    const next = (task.checklist || []).map(c => c.id === itemId
+      ? { ...c, done: !c.done, doneBy: !c.done ? user.name : null, doneAt: !c.done ? new Date().toISOString() : null } : c);
+    setTasks(p => p.map(tk => tk.id === task.id ? { ...tk, checklist: next } : tk));
+    try { await sbPatch("field_tasks", task.id, { checklist: next }); }
+    catch {
+      setTasks(p => p.map(tk => tk.id === task.id ? { ...tk, checklist: task.checklist } : tk));
+      alert(lang === "es" ? "No se guardó. Revisa tu señal." : "Didn't save — check your signal.");
+    }
+  };
+
+  // Crew suggests a task the office should add.
+  const [suggestOpen, setSuggestOpen] = useState(false);
+  const [suggestText, setSuggestText] = useState("");
+  const [suggestJob, setSuggestJob] = useState("");
+  const [suggestBusy, setSuggestBusy] = useState(false);
+  const submitSuggestion = async () => {
+    const text = suggestText.trim();
+    if (!text || !suggestJob || suggestBusy) return;
+    setSuggestBusy(true);
+    const logId = "l" + Date.now();
+    const en = SUGGEST_PREFIX + text;
+    const row = { id: logId, text_en: en, text_es: en, task_id: null, job_id: suggestJob, crew_id: user.id, log_date: today, resolved: false };
+    setLogs(p => [...p, { id: logId, en, es: en, taskId: null, jobId: suggestJob, crewId: user.id, date: today, resolved: false }]);
+    try { await sbPost("field_logs", row); } catch { enqueue({ table: "field_logs", payload: row }); }
+    const jn = jobs.find(j => j.id === suggestJob)?.name || "job";
+    fnFetch("/.netlify/functions/send-sms", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ to: settings?.adminPhone || "+12053699710", body: `💡 ${user.name} suggests a task at ${jn}: "${text}" — review on the field app dashboard.` }) }).catch(() => {});
+    setSuggestText(""); setSuggestJob(""); setSuggestBusy(false); setSuggestOpen(false);
+    alert(lang === "es" ? "✓ Enviado a la oficina. ¡Gracias!" : "✓ Sent to the office. Thanks!");
   };
 
   // "Worked on this today" — logs progress without marking the task done.
@@ -7519,20 +7889,24 @@ function CrewTasks(props) {
 
   const captureTaskRcPhoto = async (e) => {
     const file = e.target.files[0]; if (!file) return;
-    try { const { dataUrl } = await compressImage(file, 1000, 0.6); setTaskRcForm(p => ({ ...p, dataUrl })); }
-    catch { alert("Could not process image. Try again."); }
     e.target.value = "";
+    let dataUrl;
+    try { ({ dataUrl } = await compressImage(file, 1000, 0.6)); setTaskRcForm(p => ({ ...p, dataUrl })); }
+    catch { alert("Could not process image. Try again."); return; }
+    setRcScanMsg(lang === "es" ? "Leyendo recibo…" : "Reading receipt…");
+    setRcScanMsg(await scanIntoForm(dataUrl, setTaskRcForm, lang));
   };
 
   const submitTaskReceipt = async () => {
     if (!taskRcForm.store || !taskRcForm.amount || !taskPanel) return;
+    if (!confirmNotDuplicate(receipts, taskRcForm.store, taskRcForm.amount, lang)) return;
     setTaskRcBusy(true);
     const id = "r" + Date.now();
     let storagePath = null;
     if (taskRcForm.dataUrl) { try { storagePath = await uploadToStorage(taskRcForm.dataUrl, `${user.id}/${id}.jpg`, taskPanel.jobId, "receipt"); } catch {} }
     const receipt = { id, dataUrl: taskRcForm.dataUrl, taskId: taskPanel.taskId, jobId: taskPanel.jobId, crewId: user.id, store: taskRcForm.store, amount: taskRcForm.amount, note: taskRcForm.note, paidBy: taskRcForm.paidBy, reimbursementStatus: taskRcForm.paidBy === "crew" ? "pending" : "na", createdAt: today };
     setReceipts(p => [...p, receipt]);
-    const row = { id, data_url: storagePath ? mediaUrl(storagePath) : taskRcForm.dataUrl, storage_path: storagePath, task_id: taskPanel.taskId, job_id: taskPanel.jobId, crew_id: user.id, store: taskRcForm.store, amount: parseFloat(taskRcForm.amount) || 0, note: taskRcForm.note, paid_by: taskRcForm.paidBy, reimbursement_status: taskRcForm.paidBy === "crew" ? "pending" : "na" };
+    const row = { id, data_url: storagePath ? mediaUrl(storagePath) : taskRcForm.dataUrl, storage_path: storagePath, task_id: taskPanel.taskId, job_id: taskPanel.jobId, crew_id: user.id, store: taskRcForm.store, amount: parseFloat(taskRcForm.amount) || 0, note: taskRcForm.note, paid_by: taskRcForm.paidBy, reimbursement_status: taskRcForm.paidBy === "crew" ? "pending" : "na", payment_method: taskRcForm.paidBy === "company" ? (taskRcForm.paymentMethod || null) : null };
     try { await sbPost("field_receipts", row); } catch { enqueue({ table: "field_receipts", payload: row }); }
     if (taskRcForm.paidBy === "crew") {
       const job = jobs.find(j => j.id === taskPanel.jobId);
@@ -7540,6 +7914,7 @@ function CrewTasks(props) {
       fnFetch("/.netlify/functions/send-sms", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ to: "+12053699710", body: msg }) }).catch(() => {});
     }
     setTaskRcForm({ store: "", amount: "", note: "", paidBy: "crew", dataUrl: null });
+    setRcScanMsg("");
     setTaskRcBusy(false);
     setTaskPanel(null);
   };
@@ -7827,13 +8202,46 @@ function CrewTasks(props) {
                 </div>
               );
             })}
+            <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap", alignItems: "center" }}>
+              {todayDispatch.ackStatus === "on_my_way"
+                ? <span style={{ color: "var(--green)", fontWeight: 700, fontSize: 13 }}>🚚 {lang === "es" ? "La oficina sabe que vas en camino" : "Office knows you're on the way"}</span>
+                : <>
+                    {todayDispatch.ackStatus === "seen"
+                      ? <span style={{ color: "var(--green)", fontSize: 12, fontWeight: 700 }}>✓ {lang === "es" ? "Visto" : "Seen"}</span>
+                      : <button className="btn btn-s btn-sm" onClick={() => ackDispatch(todayDispatch, "seen")}>👍 {lang === "es" ? "Entendido" : "Got it"}</button>}
+                    <button className="btn btn-a btn-sm" onClick={() => ackDispatch(todayDispatch, "on_my_way")}>🚚 {lang === "es" ? "Voy en camino" : "On my way"}</button>
+                  </>}
+            </div>
           </div>
         );
       })()}
 
       <div style={{ marginBottom: 18 }}>
-        <h2 className="h2">{lang === "es" ? `Hola, ${user.name.split(" ")[0]}` : `Hey, ${user.name.split(" ")[0]}`}</h2>
+        <div className="flexb" style={{ gap: 8, flexWrap: "wrap" }}>
+          <h2 className="h2">{lang === "es" ? `Hola, ${user.name.split(" ")[0]}` : `Hey, ${user.name.split(" ")[0]}`}</h2>
+          <button className="btn btn-s btn-sm" onClick={() => setSuggestOpen(true)}>💡 {lang === "es" ? "Sugerir tarea" : "Suggest a task"}</button>
+        </div>
         <p className="muted">{t.yourTasks}</p>
+        {suggestOpen && (
+          <div className="modal-bg" onClick={e => e.target === e.currentTarget && setSuggestOpen(false)}>
+            <div className="modal">
+              <div className="mt">💡 {lang === "es" ? "Sugerir una tarea" : "Suggest a task"}</div>
+              <p className="muted" style={{ fontSize: 13, marginBottom: 12 }}>{lang === "es" ? "¿Viste algo que hay que hacer? La oficina lo revisa y lo convierte en tarea." : "Spotted something that needs doing? The office reviews it and turns it into a task."}</p>
+              <div className="fg"><label className="fl">{lang === "es" ? "Trabajo" : "Job"}</label>
+                <select className="fi" value={suggestJob} onChange={e => setSuggestJob(e.target.value)}>
+                  <option value="">{t.choose}</option>
+                  {jobs.filter(j => j.status !== "closed").map(j => <option key={j.id} value={j.id}>{j.name}</option>)}
+                </select></div>
+              <div className="fg"><label className="fl">{lang === "es" ? "¿Qué hay que hacer?" : "What needs doing?"}</label>
+                <textarea className="fi" rows={3} value={suggestText} onChange={e => setSuggestText(e.target.value)} style={{ resize: "vertical", fontFamily: "inherit" }}
+                  placeholder={lang === "es" ? "Ej: la cerca del lado norte está caída" : "e.g. North side silt fence is down"} /></div>
+              <div className="macts">
+                <button className="btn btn-s" onClick={() => setSuggestOpen(false)}>{lang === "es" ? "Cancelar" : "Cancel"}</button>
+                <button className="btn btn-p" disabled={!suggestText.trim() || !suggestJob || suggestBusy} onClick={submitSuggestion}>{suggestBusy ? <span className="spin" /> : (lang === "es" ? "Enviar" : "Send")}</button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
 
       {groups.length === 0
@@ -7980,6 +8388,8 @@ function CrewTasks(props) {
                     </button>
                   </div>
                 </div>
+                {rcScanMsg && <p style={{ fontSize: 11, color: rcScanMsg.startsWith("✓") ? "var(--green)" : "var(--slate)", marginBottom: 8 }}>{rcScanMsg}</p>}
+                {rcForm.paidBy === "company" && <CardField value={rcForm.paymentMethod} onChange={v => setRcForm(p => ({ ...p, paymentMethod: v }))} receipts={receipts} lang={lang} compact />}
                 {rcForm.paidBy === "crew" && (
                   <p style={{ fontSize: 11, color: "var(--orange)", marginBottom: 10 }}>
                     ⚠ {t.flaggedReimb}
@@ -8068,7 +8478,18 @@ function CrewTasks(props) {
                         {task.dueDate && <span className="tag" style={{ background: "rgba(255,255,255,.06)", color: "var(--silver)" }}>{task.dueDate}</span>}
                         {task.photoRequired && !photos.some(p => p.taskId === task.id) && task.status !== "done" && <span className="tag" style={{ background: "rgba(249,115,22,.15)", color: "var(--orange)", border: "1px solid rgba(249,115,22,.35)" }}>📷 {lang === "es" ? "Foto requerida" : "Photo required"}</span>}
                         {task.status !== "done" && loggedWorkToday(task.id) && <span className="tag" style={{ background: "rgba(16,185,129,.15)", color: "var(--green)", border: "1px solid rgba(16,185,129,.35)" }}>🔧 {t.loggedToday}</span>}
+                        {task.status === "done" && taskSignoff(signoffs, task.id) && <span className="tag tag-done">✅ {lang === "es" ? "Verificada" : "Verified"}</span>}
                       </div>
+                      {(task.checklist || []).length > 0 && (
+                        <div style={{ marginTop: 6 }}>
+                          {task.checklist.map(c => (
+                            <label key={c.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "4px 0", fontSize: 13, cursor: "pointer" }}>
+                              <input type="checkbox" checked={!!c.done} onChange={() => toggleCheckItem(task, c.id)} style={{ width: 18, height: 18, accentColor: "var(--green)", flexShrink: 0 }} />
+                              <span style={{ textDecoration: c.done ? "line-through" : "none", opacity: c.done ? .6 : 1 }}>{c.text}</span>
+                            </label>
+                          ))}
+                        </div>
+                      )}
                       {task.notes && (
                         <div style={{ marginTop: 6, padding: "6px 10px", background: "rgba(245,158,11,.08)", border: "1px solid rgba(245,158,11,.25)", borderRadius: 6, fontSize: 12 }}>
                           📝 {lang === "es" && task.notesEs ? task.notesEs : task.notes}
@@ -8283,6 +8704,8 @@ function CrewTasks(props) {
                           </button>
                         </div>
                       </div>
+                      {rcScanMsg && <p style={{ fontSize: 11, color: rcScanMsg.startsWith("✓") ? "var(--green)" : "var(--slate)", marginBottom: 8 }}>{rcScanMsg}</p>}
+                      {taskRcForm.paidBy==="company" && <CardField value={taskRcForm.paymentMethod} onChange={v => setTaskRcForm(p => ({ ...p, paymentMethod: v }))} receipts={receipts} lang={lang} compact />}
                       {taskRcForm.paidBy==="crew" && <p style={{ fontSize:11,color:"var(--orange)",marginBottom:8 }}>⚠ {t.flaggedReimb}</p>}
                       <div style={{ display:"flex", gap:8 }}>
                         <button className="btn btn-p" style={{ flex:1 }}
@@ -8561,18 +8984,26 @@ function CrewReceipts(props) {
   const [task, setTask] = useState(""); const [store, setStore] = useState(""); const [amount, setAmount] = useState(""); const [note, setNote] = useState(""); const [paidBy, setPaidBy] = useState("crew"); const [dataUrl, setDataUrl] = useState(null); const [busy, setBusy] = useState(false); const [done, setDone] = useState(false);
   const [showArchive, setShowArchive] = useState(false);
   const [dest, setDest] = useState("task"); // "task" | "office" | "auto" | "tools"
+  const [card, setCard] = useState("");
+  const [scanMsg, setScanMsg] = useState("");
   const es = lang === "es";
   const fileRef = useRef();
   const camRef  = useRef();
   const capturePhoto = async e => {
     const file = e.target.files[0]; if (!file) return;
-    try { const { dataUrl: url } = await compressImage(file, 1000, 0.6); setDataUrl(url); }
-    catch { alert("Could not process image. Try again."); }
     e.target.value = "";
+    let url;
+    try { ({ dataUrl: url } = await compressImage(file, 1000, 0.6)); setDataUrl(url); }
+    catch { alert("Could not process image. Try again."); return; }
+    // AI read fills store/amount/note only where still blank.
+    setScanMsg(es ? "Leyendo recibo…" : "Reading receipt…");
+    const bridge = fn => { const cur = fn({ store, amount, note }); if (!store && cur.store) setStore(cur.store); if (!amount && cur.amount) setAmount(cur.amount); if (!note && cur.note) setNote(cur.note); };
+    setScanMsg(await scanIntoForm(url, bridge, lang));
   };
   const submit = async () => {
     const usingTask = dest === "task";
     if ((usingTask && !task) || !store || !amount) return;
+    if (!confirmNotDuplicate(receipts, store, amount, lang)) return;
     setBusy(true);
     const tk = usingTask ? tasks.find(t => t.id === task) : null;
     const category = usingTask ? null : rcDestCategory(dest);
@@ -8582,9 +9013,9 @@ function CrewReceipts(props) {
     if (dataUrl) { try { storagePath = await uploadToStorage(dataUrl, `${user.id}/${id}.jpg`, tk?.jobId, "receipt"); } catch {} }
     const receipt = { id, dataUrl, taskId: usingTask ? task : null, jobId: tk?.jobId || null, category, crewId: user.id, store, amount, note, paidBy, reimbursementStatus: paidBy === "crew" ? "pending" : "na", createdAt: today };
     setReceipts(p => [...p, receipt]);
-    const row = { id, data_url: storagePath ? mediaUrl(storagePath) : dataUrl, storage_path: storagePath, task_id: usingTask ? task : null, job_id: tk?.jobId || null, category, crew_id: user.id, store, amount: parseFloat(amount) || 0, note, paid_by: paidBy, reimbursement_status: paidBy === "crew" ? "pending" : "na" };
+    const row = { id, data_url: storagePath ? mediaUrl(storagePath) : dataUrl, storage_path: storagePath, task_id: usingTask ? task : null, job_id: tk?.jobId || null, category, crew_id: user.id, store, amount: parseFloat(amount) || 0, note, paid_by: paidBy, reimbursement_status: paidBy === "crew" ? "pending" : "na", payment_method: paidBy === "company" ? (card || null) : null };
     try { await sbPost("field_receipts", row); } catch { enqueue({ table: "field_receipts", payload: row }); }
-    setTask(""); setStore(""); setAmount(""); setNote(""); setPaidBy("crew"); setDataUrl(null); setBusy(false); setDest("task");
+    setTask(""); setStore(""); setAmount(""); setNote(""); setPaidBy("crew"); setDataUrl(null); setBusy(false); setDest("task"); setCard(""); setScanMsg("");
     setDone(true); setTimeout(() => setDone(false), 3000);
   };
   return (
@@ -8616,6 +9047,7 @@ function CrewReceipts(props) {
           </div>
           {paidBy === "crew" && <p style={{ fontSize: 11, color: "var(--orange)", marginTop: 6 }}>{t.flaggedReimb}</p>}
         </div>
+        {paidBy === "company" && <CardField value={card} onChange={setCard} receipts={receipts} lang={lang} />}
         <div className="fg"><label className="fl">{t.receiptPhoto}</label>
           <input ref={camRef}  type="file" accept="image/*" capture="environment" style={{ display: "none" }} onChange={capturePhoto} />
           <input ref={fileRef} type="file" accept="image/*" style={{ display: "none" }} onChange={capturePhoto} />
@@ -8624,6 +9056,7 @@ function CrewReceipts(props) {
                 <img src={dataUrl} alt="receipt" style={{ width: 64, height: 64, objectFit: "cover", borderRadius: 8, border: "2px solid var(--green)" }} />
                 <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
                   <span style={{ fontSize: 12, color: "var(--green)" }}>✓ {t.photoReady}</span>
+                  {scanMsg && <span style={{ fontSize: 11, color: scanMsg.startsWith("✓") ? "var(--green)" : "var(--slate)" }}>{scanMsg}</span>}
                   <button className="btn btn-s btn-sm" onClick={() => { setDataUrl(null); openGallery(capturePhoto); }}><Icon n="camera" s={13} /> {t.retake}</button>
                 </div>
               </div>

@@ -2,6 +2,8 @@
 //  GS MASTERS — 7am morning check-in reminder
 //  Runs Mon–Sat at 12:00 UTC (7am CDT / 6am CST)
 //  Texts active crew who haven't checked in yet: check in when you arrive.
+//  Also: tasks due today / overdue for that person (no extra text -- it's
+//  folded into this one), plus one overdue summary text to the office.
 // ════════════════════════════════════════════════════════════════════════
 
 const SB_URL  = process.env.SUPABASE_URL || "https://mkibgjnzbgfqjkhowafr.supabase.co";
@@ -10,6 +12,7 @@ const TW_SID  = process.env.TWILIO_ACCOUNT_SID;
 const TW_TOKEN = process.env.TWILIO_AUTH_TOKEN;
 const TW_FROM = process.env.TWILIO_FROM;
 const APP_URL = process.env.APP_URL || "https://quiet-seahorse-2ba028.netlify.app";
+const ADMIN_PHONE = process.env.ADMIN_PHONE || "+12053699710";
 
 // DST-proof: real Central time, not a fixed offset
 const localDate  = () => new Intl.DateTimeFormat("en-CA", { timeZone: "America/Chicago" }).format(new Date());
@@ -45,11 +48,13 @@ export default async () => {
   const results = { date: today, sent: [], skipped: [] };
 
   try {
-    const [crew, todaysCheckins, dispatches, jobs] = await Promise.all([
+    const [crew, todaysCheckins, dispatches, jobs, dueTasks] = await Promise.all([
       sbGet(`field_profiles?role=eq.crew&active=eq.true&select=id,name,phone,preferred_lang`),
       sbGet(`field_checkins?work_date=eq.${today}&select=crew_id`),
       sbGet(`field_dispatch?date=eq.${today}&select=crew_id,job_ids`),
       sbGet(`field_jobs?status=neq.closed&select=id,name`),
+      // Due today or overdue, still open (recurring tasks have no real due date)
+      sbGet(`field_tasks?status=eq.pending&recurring=eq.false&due_date=lte.${today}&select=id,title,title_es,due_date,assigned_to,job_id`).catch(() => []),
     ]);
     const checkedIn = new Set((todaysCheckins || []).map(c => c.crew_id));
     const jobMap = Object.fromEntries((jobs || []).map(j => [j.id, j.name]));
@@ -65,13 +70,28 @@ export default async () => {
       const stopLine = stops.length
         ? (es ? `Hoy: ${stops.join(" → ")}. ` : `Today: ${stops.join(" → ")}. `)
         : "";
+      const mine = (dueTasks || []).filter(t => (t.assigned_to || []).includes(p.id));
+      const dueToday = mine.filter(t => t.due_date === today).map(t => (es && t.title_es) || t.title);
+      const overdueN = mine.filter(t => t.due_date < today).length;
+      const dueLine = (dueToday.length ? (es ? `Vence hoy: ${dueToday.slice(0, 3).join(", ")}${dueToday.length > 3 ? "…" : ""}. ` : `Due today: ${dueToday.slice(0, 3).join(", ")}${dueToday.length > 3 ? "…" : ""}. `) : "")
+        + (overdueN ? (es ? `${overdueN} tarea(s) atrasada(s). ` : `${overdueN} overdue task${overdueN !== 1 ? "s" : ""}. `) : "");
 
       const msg = es
-        ? `GS Masters: Buenos días ${first}. ${stopLine}Registra tu entrada al llegar al trabajo y anota tu trabajo del día. → ${APP_URL}`
-        : `GS Masters: Good morning ${first}. ${stopLine}Check in when you arrive at the job, and don't forget to log your work today. → ${APP_URL}`;
+        ? `GS Masters: Buenos días ${first}. ${stopLine}${dueLine}Registra tu entrada al llegar al trabajo y anota tu trabajo del día. → ${APP_URL}`
+        : `GS Masters: Good morning ${first}. ${stopLine}${dueLine}Check in when you arrive at the job, and don't forget to log your work today. → ${APP_URL}`;
 
       try { await sendSMS(p.phone, msg); results.sent.push(p.name); }
       catch (e) { results.skipped.push({ name: p.name, reason: e.message }); }
+    }
+
+    // One summary to the office when anything is overdue.
+    const overdue = (dueTasks || []).filter(t => t.due_date < today);
+    if (overdue.length) {
+      const nameOf = id => (crew || []).find(c => c.id === id)?.name?.split(" ")[0] || "?";
+      const lines = overdue.slice(0, 5).map(t => `• ${t.title} (${(t.assigned_to || []).map(nameOf).join("/") || "unassigned"}, due ${t.due_date.slice(5)})`);
+      const body = `GS Field: ${overdue.length} overdue task${overdue.length !== 1 ? "s" : ""}:\n${lines.join("\n")}${overdue.length > 5 ? `\n+${overdue.length - 5} more` : ""}`;
+      try { await sendSMS(ADMIN_PHONE, body); results.adminSummary = overdue.length; }
+      catch (e) { results.adminSummaryError = e.message; }
     }
 
     return new Response(JSON.stringify(results, null, 2), { status: 200, headers: { "Content-Type": "application/json" } });
