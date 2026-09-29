@@ -3,6 +3,9 @@
   publish = "build"
   functions = "netlify/functions"
 
+[functions."office-push-worker"]
+  schedule = "* * * * *"
+
 [[redirects]]
   from = "/*"
   to = "/index.html"

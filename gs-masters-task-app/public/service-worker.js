@@ -1,5 +1,5 @@
 // GS Masters Field App — Service Worker
-const CACHE = "gsm-field-v6";
+const CACHE = "gsm-field-v7";
 const SHELL = ["/manifest.json"];
 
 self.addEventListener("install", (e) => {

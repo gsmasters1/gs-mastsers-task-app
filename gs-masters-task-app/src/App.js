@@ -242,8 +242,6 @@ async function pushReceiptToGSM(receipt, jobs, crewName) {
 }
 
 // ─── PUSH NOTIFICATIONS ─────────────────────────────────────────────────
-const VAPID_PUBLIC_KEY = "BNuhXdjrECrBVABmhVdEe-qy4OMKQnkIZek8scMjJQ-xHg6zTX7-VEIQ2BadiWDh_kCvO1gs9MSboG77Xfl-b9o";
-
 function urlBase64ToUint8Array(base64String) {
   const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
   const base64 = (base64String + padding).replace(/-/g, "+").replace(/_/g, "/");
@@ -256,12 +254,20 @@ async function registerPush(crewId) {
     if (!("Notification" in window) || !("serviceWorker" in navigator)) return;
     const perm = await Notification.requestPermission();
     if (perm !== "granted") return;
+    const configRes = await fetch("/.netlify/functions/send-push", { cache: "no-store" });
+    if (!configRes.ok) return;
+    const { publicKey } = await configRes.json();
+    if (!publicKey) return;
     const reg = await navigator.serviceWorker.ready;
     let sub = await reg.pushManager.getSubscription();
+    if (sub?.options?.applicationServerKey) {
+      const currentKey = btoa(String.fromCharCode(...new Uint8Array(sub.options.applicationServerKey))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+      if (currentKey !== publicKey) { await sub.unsubscribe(); sub = null; }
+    }
     if (!sub) {
       sub = await reg.pushManager.subscribe({
         userVisibleOnly: true,
-        applicationServerKey: urlBase64ToUint8Array(VAPID_PUBLIC_KEY),
+        applicationServerKey: urlBase64ToUint8Array(publicKey),
       });
     }
     const id = "ps_" + crewId + "_" + btoa(sub.endpoint).slice(-12).replace(/[^a-z0-9]/gi, "");
@@ -271,6 +277,16 @@ async function registerPush(crewId) {
       headers: { Prefer: "resolution=merge-duplicates" },
     });
   } catch {}
+}
+
+async function officeMessageRequest(options = {}) {
+  const response = await fetch("/.netlify/functions/office-messages", {
+    ...options,
+    headers: { Authorization: `Bearer ${_authToken}`, "Content-Type": "application/json", ...options.headers },
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data.error || "Message request failed");
+  return data;
 }
 
 async function sendPush(crewIds, title, bodyText, url) {
@@ -568,6 +584,9 @@ const T = {
 };
 
 // ─── ICONS ──────────────────────────────────────────────────────────────
+// First + last initial so crew with the same first letter (Alberto Medina / Alex Alanis) are told apart.
+const initials = name => { const w = String(name || "").trim().split(/\s+/).filter(Boolean); return ((w[0]?.[0] || "") + (w.length > 1 ? w[w.length - 1][0] : "")).toUpperCase() || "?"; };
+
 const Icon = ({ n, s = 20, c = "currentColor" }) => {
   const p = {
     home:"M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z M9 22V12h6v10",
@@ -589,6 +608,7 @@ const Icon = ({ n, s = 20, c = "currentColor" }) => {
     dollar:"M12 1v22 M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6",
     wifi:"M5 13a10 10 0 0 1 14 0 M8.5 16.5a5 5 0 0 1 7 0 M2 8.82a15 15 0 0 1 20 0 M12 20h.01",
     wifiOff:"M1 1l22 22 M16.72 11.06A10.94 10.94 0 0 1 19 12.55 M5 12.55a10.94 10.94 0 0 1 5.17-2.39 M10.71 5.05A16 16 0 0 1 22.58 9 M1.42 9a15.91 15.91 0 0 1 4.7-2.88 M8.53 16.11a6 6 0 0 1 6.95 0 M12 20h.01",
+    message:"M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4z M7 8h10 M7 12h7",
     pen:"M12 19l7-7 3 3-7 7-3-3z M18 13l-1.5-7.5L2 2l3.5 14.5L13 18l5-5z M2 2l7.586 7.586 M11 11a2 2 0 1 0-4 0 2 2 0 0 0 4 0z",
     menu:"M3 12h18 M3 6h18 M3 18h18", x:"M18 6L6 18 M6 6l12 12",
     lock:"M19 11H5a2 2 0 0 0-2 2v7a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7a2 2 0 0 0-2-2z M7 11V7a5 5 0 0 1 10 0v4",
@@ -656,6 +676,7 @@ select.fi{appearance:none;cursor:pointer}textarea.fi{resize:vertical;min-height:
 .tb-mark{width:36px;height:36px;border-radius:9px;background:linear-gradient(135deg,var(--sky-dim),var(--sky));display:flex;align-items:center;justify-content:center}
 .tb-title{font-family:'Barlow Condensed';font-size:19px;font-weight:800;letter-spacing:1px}
 .tb-right{display:flex;align-items:center;gap:10px}
+.tb-name-m{display:none;font-size:13px;font-weight:700;color:var(--sky2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .badge{padding:2px 8px;border-radius:20px;font-size:10px;font-weight:700;letter-spacing:1px;text-transform:uppercase}
 .badge-admin{background:rgba(245,158,11,.2);color:var(--accent);border:1px solid rgba(245,158,11,.3)}
 .badge-crew{background:rgba(59,130,246,.2);color:var(--sky2);border:1px solid rgba(59,130,246,.3)}
@@ -761,6 +782,7 @@ td{padding:9px 11px;font-size:13px;border-bottom:1px solid rgba(255,255,255,.04)
   .hamburger{display:inline-flex;margin-right:2px}
   .tb-title{font-size:14px;letter-spacing:.5px}
   .tb-name{display:none}
+  .tb-name-m{display:block}
   .net-txt{display:none}
   .badge{display:none}
   .topbar{padding:0 10px;gap:4px}
@@ -833,6 +855,7 @@ select.fi option{background:var(--steel2);color:var(--white)}
 .app.light .logo-title,.app.light .logo-sub,.app.light .fl{color:#0f172a}
 .app.light .topbar{background:rgba(255,255,255,.97);border-color:rgba(15,25,36,.1);box-shadow:0 1px 8px rgba(0,0,0,.08);color:#0f172a}
 .app.light .tb-title,.app.light .tb-name{color:#0f172a}
+.app.light .tb-name-m{color:#1d4ed8}
 .app.light .side{background:rgba(241,245,249,.98);border-color:rgba(15,25,36,.1);color:#0f172a}
 .app.light .nav{color:#475569}
 .app.light .nav:hover{background:rgba(59,130,246,.08);color:#0f172a}
@@ -1055,6 +1078,7 @@ export default function App() {
   const [settings, setSettings] = useState(() => JSON.parse(localStorage.getItem("gsm_set") || "{}"));
   const [users, setUsers] = useState([]);
   const [dispatches, setDispatches] = useState([]);
+  const [officeCount, setOfficeCount] = useState(0);
   const t = T[lang];
 
 
@@ -1079,16 +1103,16 @@ export default function App() {
       localStorage.removeItem("gsm_session");
       setUser(null); setSessionChecked(true); return;
     }
-    sbGet("field_profiles", `id=eq.${user.id}&select=id,role,active,name,email`)
+    sbGet("field_profiles", `id=eq.${user.id}&select=id,role,active,name,email,is_supervisor`)
       .then(rows => {
         const match = rows?.[0];
         if (!match || match.active === false) {
           // Account gone or deactivated — clear session
           localStorage.removeItem("gsm_session");
           setUser(null);
-        } else if (match.role !== user.role) {
-          // Role changed in DB — update session to reflect new role
-          const updated = { ...user, role: match.role };
+        } else if (match.role !== user.role || Boolean(match.is_supervisor) !== Boolean(user.isSupervisor)) {
+          // Role/permissions changed in DB — update session to reflect them
+          const updated = { ...user, role: match.role, isSupervisor: match.is_supervisor === true };
           localStorage.setItem("gsm_session", JSON.stringify(updated));
           setUser(updated);
         }
@@ -1334,17 +1358,36 @@ export default function App() {
     return () => { window.removeEventListener("online", on); window.removeEventListener("offline", off); };
   }, []);
 
-  // Deep link: SMS links route crew to the right tab
-  // Also register push subscription for crew members
+  const currentProfile = users.find(member => member.id === user?.id);
+  const currentCanSupervise = user?.role === "admin" || currentProfile?.isSupervisor === true || user?.isSupervisor === true;
+
+  // Deep links route the signed-in person to the right tab.
+  // Every phone registers for push; office-message pushes target only admins/superintendents.
   useEffect(() => {
-    if (!user || user.role !== "crew") return;
+    if (!user) return;
     const params = new URLSearchParams(window.location.search);
     if (params.get("log") === "1") setTab("log");
     const tabParam = params.get("tab");
     if (tabParam) setTab(tabParam);
-    // Register push — fires on login, silently no-ops if already subscribed or denied
     registerPush(user.id);
   }, [user]);
+
+  // Persistent office-message badge in the field app header.
+  useEffect(() => {
+    if (!user || !currentCanSupervise) { setOfficeCount(0); return; }
+    let stopped = false;
+    const load = async () => {
+      if (document.hidden || !_authToken) return;
+      try {
+        const data = await officeMessageRequest();
+        if (!stopped) setOfficeCount(data.messages?.length || 0);
+      } catch {}
+    };
+    load();
+    const timer = setInterval(load, 15000);
+    document.addEventListener("visibilitychange", load);
+    return () => { stopped = true; clearInterval(timer); document.removeEventListener("visibilitychange", load); };
+  }, [user?.id, currentCanSupervise]);
 
   const saveSettings = async (s) => {
     setSettings(s);
@@ -1517,12 +1560,13 @@ export default function App() {
   // Admin always gets every supervisor-tier feature (full dashboard already
   // shows everything) -- canSupervise is the one flag any actual
   // supervisor-only UI in <Crew> should check, never user.role directly.
-  const canSupervise = user.role === "admin" || user.isSupervisor === true;
+  const canSupervise = currentCanSupervise;
   const shared = { user, canSupervise, lang, t, jobs, setJobs, tasks, setTasks, receipts, setReceipts,
                    logs, setLogs, photos, setPhotos, mats, setMats, settings, saveSettings, users,
                    online, setActive, setIs1099, setIsSupervisor, addUser, updateUser, removeUser, archiveCrew, unarchiveCrew,
                    dispatches, setDispatches, upsertDispatch, deleteDispatch,
-                   deletePhoto, deleteReceipt, deleteLog, reassignPhoto, reassignReceipt, editReceipt };
+                   deletePhoto, deleteReceipt, deleteLog, reassignPhoto, reassignReceipt, editReceipt,
+                   officeCount, setOfficeCount };
 
   return (
     <div className={`app${theme === "light" ? " light" : ""}`}>
@@ -1530,6 +1574,7 @@ export default function App() {
       <TopBar user={user} onLogout={requestLogout} t={t} lang={lang} setLang={setLang} online={online}
         theme={theme} toggleTheme={toggleTheme}
         showMenu={user.role === "admin"} menuOpen={menuOpen} setMenuOpen={setMenuOpen}
+        canSupervise={canSupervise} officeCount={officeCount} onMessages={() => setTab("messages")}
         onInstall={() => setShowInstall(true)} />
       {user.role === "admin"
         ? <Admin {...shared} tab={tab} setTab={setTab} menuOpen={menuOpen} setMenuOpen={setMenuOpen} />
@@ -1743,10 +1788,10 @@ function QuickPIN({ quick, onLogin, onSwitch, theme, lang }) {
           {/* Avatar */}
           <div style={{ textAlign:"center", marginBottom: 24 }}>
             <div style={{ width:72, height:72, borderRadius:"50%", background:"linear-gradient(135deg,var(--sky-dim),var(--sky))", display:"flex", alignItems:"center", justifyContent:"center", margin:"0 auto 14px", fontFamily:"'Barlow Condensed'", fontWeight:800, fontSize:32, color:"#fff" }}>
-              {quick.name[0]}
+              {initials(quick.name)}
             </div>
             <div style={{ fontFamily:"'Barlow Condensed'", fontSize:22, fontWeight:800 }}>
-              {es ? "Bienvenido, " : "Welcome back,"}<br/>{quick.name.split(" ")[0]}
+              {es ? "Bienvenido, " : "Welcome back,"}<br/>{quick.name}
             </div>
             <div className="muted" style={{ fontSize:12, marginTop:4 }}>
               {es ? "Ingresa tu PIN para continuar" : "Enter your PIN to continue"}
@@ -2014,7 +2059,7 @@ function QRClockIn({ jobId, theme, loggedInUser }) {
                       background: "linear-gradient(135deg,var(--sky-dim),var(--sky))",
                       display: "flex", alignItems: "center", justifyContent: "center",
                       fontSize: 16, fontWeight: 800, color: "#fff", flexShrink: 0 }}>
-                      {u.name[0]}
+                      {initials(u.name)}
                     </div>
                     {u.name}
                   </button>
@@ -2034,7 +2079,7 @@ function QRClockIn({ jobId, theme, loggedInUser }) {
                   background: "linear-gradient(135deg,var(--sky-dim),var(--sky))",
                   display: "flex", alignItems: "center", justifyContent: "center",
                   margin: "0 auto 12px", fontSize: 26, fontWeight: 800, color: "#fff" }}>
-                  {selected?.name?.[0]}
+                  {initials(selected?.name)}
                 </div>
                 <div style={{ fontFamily: "'Barlow Condensed'", fontSize: 20, fontWeight: 800 }}>{selected?.name}</div>
                 <div style={{ color: "var(--accent)", fontWeight: 600, fontSize: 13, marginTop: 4 }}>{job?.name}</div>
@@ -2079,7 +2124,7 @@ function QRClockIn({ jobId, theme, loggedInUser }) {
                 background: "linear-gradient(135deg,var(--sky-dim),var(--sky))",
                 display: "flex", alignItems: "center", justifyContent: "center",
                 margin: "0 auto 14px", fontSize: 26, fontWeight: 800, color: "#fff" }}>
-                {selected?.name?.[0]}
+                {initials(selected?.name)}
               </div>
               <div style={{ fontFamily: "'Barlow Condensed'", fontSize: 20, fontWeight: 800, marginBottom: 4 }}>{selected?.name}</div>
               <div style={{ fontWeight: 700, fontSize: 15, color: "var(--accent)", marginBottom: 16 }}>{job?.name}</div>
@@ -2239,7 +2284,7 @@ function Login({ onLogin, t, lang, setLang, theme, toggleTheme }) {
     return (
       <div className={`app${theme === "light" ? " light" : ""}`}><div className="login"><style>{CSS}</style>
         <div className="login-card">
-          <div className="logo-mark" style={{ fontFamily: "'Barlow Condensed'", fontWeight: 800, fontSize: 26 }}>{picked.name[0]}</div>
+          <div className="logo-mark" style={{ fontFamily: "'Barlow Condensed'", fontWeight: 800, fontSize: 26 }}>{initials(picked.name)}</div>
           <div className="logo-title" style={{ fontSize: 22 }}>{picked.name}</div>
           <div className="logo-sub">{lang === "es" ? "Ingresa tu PIN" : "Enter your PIN"}</div>
           <div style={{ marginTop: 28 }}>
@@ -2277,9 +2322,9 @@ function Login({ onLogin, t, lang, setLang, theme, toggleTheme }) {
                   style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 6, background: "none", border: "none", cursor: "pointer", padding: 4 }}>
                   <div style={{ width: 56, height: 56, borderRadius: "50%", background: "linear-gradient(135deg,var(--sky-dim),var(--sky))",
                     display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "'Barlow Condensed'", fontWeight: 800, fontSize: 20, color: "#fff" }}>
-                    {p.name[0]}
+                    {initials(p.name)}
                   </div>
-                  <span style={{ fontSize: 11, color: "var(--slate)", textAlign: "center", lineHeight: 1.2 }}>{p.name.split(" ")[0]}</span>
+                  <span style={{ fontSize: 11, color: "var(--slate)", textAlign: "center", lineHeight: 1.2 }}>{p.name}</span>
                 </button>
               ))}
             </div>
@@ -2295,7 +2340,7 @@ function Login({ onLogin, t, lang, setLang, theme, toggleTheme }) {
 }
 
 // ─── TOP BAR ──────────────────────────────────────────────────────────
-function TopBar({ user, onLogout, t, lang, setLang, online, showMenu, menuOpen, setMenuOpen, theme, toggleTheme, onInstall }) {
+function TopBar({ user, onLogout, t, lang, setLang, online, showMenu, menuOpen, setMenuOpen, theme, toggleTheme, onInstall, canSupervise, officeCount, onMessages }) {
   const iconSrc = "/icon-admin.png";
   const installed = isInStandalone();
   return (
@@ -2306,8 +2351,15 @@ function TopBar({ user, onLogout, t, lang, setLang, online, showMenu, menuOpen, 
         <div style={{ width:36, height:36, borderRadius:8, background:'#052f69', flexShrink:0, position:'relative', overflow:'hidden' }}>
           <img src={iconSrc} alt="GSM" style={{ width:44, height:44, position:'absolute', top:-6, left:-4, clipPath:'inset(17% 19% 10% 19% round 5px)' }} />
         </div>
-        <span className="tb-title">GS MASTERS FIELD</span></div>
+        <div style={{ display:"flex", flexDirection:"column", minWidth:0, lineHeight:1.15 }}>
+          <span className="tb-title">GS MASTERS FIELD</span>
+          <span className="tb-name-m">{user.name}</span></div></div>
       <div className="tb-right">
+        {canSupervise && <button className="btn btn-ghost btn-sm btn-ic" onClick={onMessages} title="Office Messages"
+          style={{ position:"relative", color: officeCount ? "var(--sky2)" : "var(--slate)" }}>
+          <Icon n="message" s={19} />
+          {officeCount > 0 && <span style={{ position:"absolute", top:-5, right:-7, minWidth:17, height:17, padding:"0 4px", borderRadius:9, background:"var(--red)", color:"#fff", fontSize:10, fontWeight:800, display:"flex", alignItems:"center", justifyContent:"center", border:"2px solid var(--steel)" }}>{officeCount > 99 ? "99+" : officeCount}</span>}
+        </button>}
         <span className={`net-dot ${online ? "net-on" : "net-off"}`}>
           <Icon n={online ? "wifi" : "wifiOff"} s={12} /> <span className="net-txt">{online ? t.online : t.offline}</span></span>
         {!installed && (
@@ -2330,11 +2382,12 @@ function TopBar({ user, onLogout, t, lang, setLang, online, showMenu, menuOpen, 
 
 // ─── ADMIN ────────────────────────────────────────────────────────────
 function Admin(props) {
-  const { t, tab, setTab, menuOpen, setMenuOpen } = props;
+  const { t, tab, setTab, menuOpen, setMenuOpen, officeCount } = props;
   const [statusFilter, setStatusFilter] = useState("all");
   const [selectedJobId, setSelectedJobId] = useState(null);
   const nav = [
     { k: "dash",     i: "home",      l: "Dashboard"    },
+    { k: "messages", i: "message",   l: `Messages${officeCount ? ` (${officeCount})` : ""}` },
     { k: "dispatch", i: "pin",       l: "Dispatch"     },
     { k: "activity", i: "report",    l: "Live Activity" },
     { k: "tasks",    i: "tasks",     l: t.tasks        },
@@ -2361,6 +2414,7 @@ function Admin(props) {
           <Icon n={n.i} s={17} /> {n.l}</div>)}</div>
       <div className="content">
         {tab === "dash"     && <Dash {...props} navTo={navTo} setTab={setTab} openJobDetail={openJobDetail} mats={props.mats} setMats={props.setMats} />}
+        {tab === "messages" && <OfficeMessages {...props} />}
         {tab === "dispatch" && <AdminDispatch {...props} />}
         {tab === "activity" && <AdminActivity {...props} />}
         {tab === "tasks"    && <AdminTasks {...props} statusFilter={statusFilter} setStatusFilter={setStatusFilter} />}
@@ -2377,6 +2431,93 @@ function Admin(props) {
         {tab === "field"    && <AdminFieldMode {...props} />}
         {tab === "jobdetail"&& <JobDetail {...props} selectedJobId={selectedJobId} setTab={setTab} />}
       </div>
+    </div>
+  );
+}
+
+function OfficeMessages({ user, setOfficeCount }) {
+  const [messages, setMessages] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [replyText, setReplyText] = useState({});
+  const [sending, setSending] = useState("");
+  const [notice, setNotice] = useState("");
+  const [notificationPermission, setNotificationPermission] = useState(() => ("Notification" in window ? Notification.permission : "unsupported"));
+
+  const load = useCallback(async () => {
+    if (document.hidden || !_authToken) return;
+    try {
+      const data = await officeMessageRequest();
+      const items = data.messages || [];
+      setMessages(items);
+      setOfficeCount?.(items.length);
+      setError("");
+    } catch (err) { setError(err.message); }
+    finally { setLoading(false); }
+  }, [setOfficeCount]);
+
+  useEffect(() => {
+    load();
+    const timer = setInterval(load, 15000);
+    document.addEventListener("visibilitychange", load);
+    return () => { clearInterval(timer); document.removeEventListener("visibilitychange", load); };
+  }, [load]);
+
+  const enableNotifications = async () => {
+    await registerPush(user.id);
+    setNotificationPermission("Notification" in window ? Notification.permission : "unsupported");
+    setNotice(Notification.permission === "granted" ? "Phone notifications enabled." : "Notifications were not enabled. Check this app's phone settings.");
+  };
+
+  const sendReply = async message => {
+    const body = String(replyText[message.id] || "").trim();
+    if (!body || sending) return;
+    setSending(message.id); setError(""); setNotice("");
+    try {
+      await officeMessageRequest({ method: "POST", body: JSON.stringify({ kind: message.kind, id: message.id, requestId: message.requestId, body }) });
+      setReplyText(previous => ({ ...previous, [message.id]: "" }));
+      setNotice(`Reply sent to ${message.sender || "sender"}.`);
+      await load();
+    } catch (err) { setError(err.message); }
+    finally { setSending(""); }
+  };
+
+  return (
+    <div>
+      <div className="flexb" style={{ marginBottom: 6 }}>
+        <h2 className="h2">Office Messages</h2>
+        <button className="btn btn-s btn-sm" onClick={load}>Refresh</button>
+      </div>
+      <p className="muted" style={{ fontSize:13, marginBottom:16 }}>Bid Room and Client Portal questions. Reply here or open the full room.</p>
+      {notificationPermission !== "granted" && notificationPermission !== "unsupported" && (
+        <button className="btn btn-p btn-full" onClick={enableNotifications} style={{ justifyContent:"center", marginBottom:16 }}>
+          🔔 Enable Phone Notifications
+        </button>
+      )}
+      {notice && <div style={{ padding:"10px 13px", marginBottom:14, borderRadius:9, color:"var(--green)", background:"rgba(16,185,129,.12)", border:"1px solid rgba(16,185,129,.3)", fontSize:13 }}>{notice}</div>}
+      {error && <div style={{ padding:"10px 13px", marginBottom:14, borderRadius:9, color:"var(--red)", background:"rgba(239,68,68,.1)", border:"1px solid rgba(239,68,68,.3)", fontSize:13 }}>{error}</div>}
+      {loading ? <div className="empty"><span className="spin" /></div> : messages.length === 0 ? (
+        <div className="empty"><Icon n="message" s={28} /><p>No messages need attention.</p></div>
+      ) : messages.map(message => (
+        <div className="card" key={`${message.kind}:${message.id}`} style={{ marginBottom:14, borderLeft:`4px solid ${message.kind === "bid" ? "var(--accent)" : "var(--sky2)"}` }}>
+          <div className="flexb" style={{ gap:12, alignItems:"flex-start" }}>
+            <div style={{ minWidth:0 }}>
+              <div style={{ fontSize:11, fontWeight:800, letterSpacing:.7, textTransform:"uppercase", color:message.kind === "bid" ? "var(--accent)" : "var(--sky2)" }}>{message.source}</div>
+              <div style={{ fontFamily:"'Barlow Condensed'", fontSize:19, fontWeight:800, marginTop:2 }}>{message.title}</div>
+              <div className="muted" style={{ fontSize:12, marginTop:2 }}>{message.meta}</div>
+            </div>
+            <div className="muted" style={{ fontSize:10, whiteSpace:"nowrap" }}>{message.createdAt ? new Date(message.createdAt).toLocaleString([], { month:"short", day:"numeric", hour:"numeric", minute:"2-digit" }) : ""}</div>
+          </div>
+          <div style={{ margin:"13px 0", padding:"12px 13px", borderRadius:9, background:"rgba(255,255,255,.045)", lineHeight:1.5, whiteSpace:"pre-wrap", fontSize:14 }}>{message.body}</div>
+          <textarea className="fi" rows={3} value={replyText[message.id] || ""} onChange={event => setReplyText(previous => ({ ...previous, [message.id]: event.target.value }))} placeholder={`Reply to ${message.sender || "sender"}…`} style={{ resize:"vertical", fontFamily:"inherit" }} />
+          <div style={{ display:"flex", gap:8, marginTop:9, flexWrap:"wrap" }}>
+            <button className="btn btn-p" disabled={!String(replyText[message.id] || "").trim() || sending === message.id} onClick={() => sendReply(message)}>
+              {sending === message.id ? <span className="spin" /> : <><Icon n="message" s={14} /> Send Reply</>}
+            </button>
+            <a className="btn btn-s" href={message.href} target="_blank" rel="noreferrer" style={{ textDecoration:"none" }}>Open Full Room ↗</a>
+          </div>
+        </div>
+      ))}
     </div>
   );
 }
@@ -3105,7 +3246,7 @@ function AdminTasks(props) {
                   <input type="checkbox" checked={nt.assignedTo.includes(u.id)} onChange={() => toggleCrew(u.id)}
                     style={{ width: 17, height: 17, accentColor: "var(--sky)", flexShrink: 0 }} />
                   <div style={{ width: 32, height: 32, borderRadius: "50%", background: nt.assignedTo.includes(u.id) ? "linear-gradient(135deg,var(--sky-dim),var(--sky))" : "rgba(255,255,255,.1)",
-                    display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "'Barlow Condensed'", fontWeight: 800, fontSize: 14, flexShrink: 0 }}>{u.name[0]}</div>
+                    display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "'Barlow Condensed'", fontWeight: 800, fontSize: 14, flexShrink: 0 }}>{initials(u.name)}</div>
                   <span style={{ fontSize: 14, fontWeight: 500 }}>{u.name}</span>
                   {u.role === "admin" && <span style={{ fontSize: 10, color: "var(--accent)", fontWeight: 700 }}>ADMIN</span>}
                   {nt.assignedTo.includes(u.id) && <span style={{ marginLeft: "auto", fontSize: 11, color: "var(--sky2)" }}>✓ assigned</span>}
@@ -5230,7 +5371,7 @@ function CrewMgmt({ users, tasks, setActive, setIs1099, setIsSupervisor, addUser
           const isAdmin = m.role === "admin";
           return <div key={m.id} className="card" style={{ borderTop: `4px solid ${isAdmin ? "var(--accent)" : active ? "var(--sky)" : "var(--red)"}`, opacity: active ? 1 : .75 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 14 }}>
-              <div style={{ width: 46, height: 46, borderRadius: "50%", background: isAdmin ? "linear-gradient(135deg,#b45309,var(--accent))" : active ? "linear-gradient(135deg,var(--sky-dim),var(--sky))" : "linear-gradient(135deg,#7f1d1d,var(--red))", display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "'Barlow Condensed'", fontWeight: 800, fontSize: 19 }}>{m.name[0]}</div>
+              <div style={{ width: 46, height: 46, borderRadius: "50%", background: isAdmin ? "linear-gradient(135deg,#b45309,var(--accent))" : active ? "linear-gradient(135deg,var(--sky-dim),var(--sky))" : "linear-gradient(135deg,#7f1d1d,var(--red))", display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "'Barlow Condensed'", fontWeight: 800, fontSize: 19 }}>{initials(m.name)}</div>
               <div style={{ flex: 1 }}><div style={{ fontWeight: 700, fontSize: 16, display:"flex", alignItems:"center", gap:6 }}>{m.name}{isAdmin && <span style={{ fontSize:10, fontWeight:800, color:"var(--accent)", background:"rgba(245,158,11,.15)", border:"1px solid rgba(245,158,11,.3)", borderRadius:4, padding:"1px 5px" }}>ADMIN</span>}{!isAdmin && m.isSupervisor && <span style={{ fontSize:10, fontWeight:800, color:"var(--sky2)", background:"rgba(56,189,248,.15)", border:"1px solid rgba(56,189,248,.3)", borderRadius:4, padding:"1px 5px" }}>SUPERVISOR</span>}</div><div className="muted" style={{ fontSize: 12 }}>{m.email}</div></div></div>
             <div className="grid2" style={{ marginBottom: 12 }}><div style={{ textAlign: "center", padding: 10, background: "rgba(0,0,0,.2)", borderRadius: 8 }}>
               <div style={{ fontSize: 22, fontWeight: 800, color: "var(--sky2)" }}>{mt.length}</div><div className="muted" style={{ fontSize: 11 }}>Tasks</div></div>
@@ -5269,7 +5410,7 @@ function CrewMgmt({ users, tasks, setActive, setIs1099, setIsSupervisor, addUser
             {users.filter(u => u.archived).map(m => (
               <div key={m.id} className="card" style={{ borderTop: "4px solid var(--slate)", opacity: .7 }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10 }}>
-                  <div style={{ width: 38, height: 38, borderRadius: "50%", background: "rgba(100,116,139,.3)", display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "'Barlow Condensed'", fontWeight: 800, fontSize: 16 }}>{m.name[0]}</div>
+                  <div style={{ width: 38, height: 38, borderRadius: "50%", background: "rgba(100,116,139,.3)", display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "'Barlow Condensed'", fontWeight: 800, fontSize: 16 }}>{initials(m.name)}</div>
                   <div><div style={{ fontWeight: 700 }}>{m.name}</div><div className="muted" style={{ fontSize: 12 }}>{m.email}</div></div>
                 </div>
                 <span className="tag" style={{ background: "rgba(100,116,139,.15)", color: "var(--slate)", marginBottom: 10, display: "inline-block" }}>archived</span>
@@ -6357,7 +6498,7 @@ function DispatchCrewRow({ member, date, activeJobs, dispatch: d, toggleJob, add
     <div className="card" style={{ marginBottom: 18, borderLeft: d.jobIds.length > 0 ? "4px solid var(--accent)" : "4px solid var(--steel3)" }}>
       <div className="flexb" style={{ marginBottom: 14 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-          <div style={{ width: 42, height: 42, borderRadius: "50%", background: "linear-gradient(135deg,var(--sky-dim),var(--sky))", display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "'Barlow Condensed'", fontWeight: 800, fontSize: 17 }}>{member.name[0]}</div>
+          <div style={{ width: 42, height: 42, borderRadius: "50%", background: "linear-gradient(135deg,var(--sky-dim),var(--sky))", display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "'Barlow Condensed'", fontWeight: 800, fontSize: 17 }}>{initials(member.name)}</div>
           <div>
             <div style={{ fontWeight: 700, fontSize: 16 }}>{member.name}</div>
             {d.jobIds.length > 0
@@ -6753,7 +6894,7 @@ function JobDetail({ selectedJobId, jobs, tasks, photos, receipts, logs, users, 
 
 // ─── CREW ─────────────────────────────────────────────────────────────
 function Crew(props) {
-  const { t, tab, setTab, user, jobs, settings, lang } = props;
+  const { t, tab, setTab, user, jobs, settings, lang, canSupervise, officeCount } = props;
   const [openCheckin, setOpenCheckin] = useState(null);
   const [staleCheckin, setStaleCheckin] = useState(null);
   const [manualDate, setManualDate] = useState("");
@@ -6884,6 +7025,7 @@ function Crew(props) {
   const staleJobName = staleCheckin ? (jobs.find(j => j.id === staleCheckin.jobId)?.name || staleCheckin.jobId) : null;
   const nav = [{ k: "tasks", i: "tasks", l: t.tasks }, { k: "cam", i: "camera", l: t.photos },
     { k: "rec", i: "receipt", l: t.receipts }, { k: "log", i: "report", l: t.log }];
+  if (canSupervise) nav.push({ k: "messages", i: "message", l: officeCount ? `Msg (${officeCount})` : "Msg" });
   return (
     <div style={{ minHeight: "calc(100vh - 62px)", background: "var(--steel)" }}>
 
@@ -6972,6 +7114,7 @@ function Crew(props) {
         {ctab === "cam" && <CrewPhotos {...props} todayJobIds={todayJobIds} />}
         {ctab === "rec" && <CrewReceipts {...props} todayJobIds={todayJobIds} />}
         {ctab === "log" && <CrewLog {...props} todayJobIds={todayJobIds} />}
+        {ctab === "messages" && canSupervise && <OfficeMessages {...props} />}
       </div>
 
       {/* Issue modal */}
