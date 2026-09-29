@@ -4327,7 +4327,7 @@ function Calendar({ tasks, setTasks, jobs, users, receipts, photos, logs }) {
   );
 }
 
-function Report({ tasks, jobs, users, logs, photos, receipts }) {
+function Report({ tasks, jobs, users, logs, photos, receipts, signoffs }) {
   const today = localDate();
   const offsetDay = (n) => { const d = new Date(); d.setDate(d.getDate() + n); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`; };
   const [rangeStart, setRangeStart] = useState(offsetDay(-6));
@@ -4341,7 +4341,8 @@ function Report({ tasks, jobs, users, logs, photos, receipts }) {
   const inRange = (d) => d && d.slice(0,10) >= lo && d.slice(0,10) <= hi;
 
   const rTasks    = tasks.filter(tk => (jobFilter === "all" || tk.jobId === jobFilter) && inRange(tk.dueDate || tk.createdAt));
-  const rLogs     = (logs    || []).filter(l => (jobFilter === "all" || l.jobId  === jobFilter) && inRange(l.date));
+  // Crew task suggestions aren't site notes -- keep them off the report.
+  const rLogs     = (logs    || []).filter(l => (jobFilter === "all" || l.jobId  === jobFilter) && inRange(l.date) && !isSuggestion(l));
   const rPhotos   = (photos  || []).filter(p => (jobFilter === "all" || p.jobId  === jobFilter) && inRange((p.date||"").slice(0,10)));
   const rReceipts = (receipts|| []).filter(r => (jobFilter === "all" || r.jobId  === jobFilter) && inRange(r.createdAt));
 
@@ -4350,6 +4351,8 @@ function Report({ tasks, jobs, users, logs, photos, receipts }) {
 
   const userName = id => users.find(u=>u.id===id)?.name || "Unknown";
   const statusColor = s => s==="done"?"#16a34a":s==="overdue"?"#dc2626":"#d97706";
+  const verifiedBy = tk => taskSignoff(signoffs, tk.id);
+  const stepsText = tk => (tk.checklist || []).length ? `${tk.checklist.filter(c => c.done).length}/${tk.checklist.length} steps` : "";
 
   const printReport = () => {
     const w = window.open("", "_blank", "width=950,height=1200");
@@ -4379,7 +4382,7 @@ function Report({ tasks, jobs, users, logs, photos, receipts }) {
             <td style="padding:8px 10px;vertical-align:top;font-size:11px;color:#6b7280;font-style:italic;border-bottom:1px solid #e5e7eb">${tk.titleEs||""}</td>
             <td style="padding:8px 10px;vertical-align:top;font-size:11px;color:#6b7280;border-bottom:1px solid #e5e7eb;white-space:nowrap">${crew}</td>
             <td style="padding:8px 10px;vertical-align:top;font-size:11px;color:#6b7280;border-bottom:1px solid #e5e7eb;white-space:nowrap">${tk.dueDate||tk.createdAt||""}</td>
-            <td style="padding:8px 10px;vertical-align:top;border-bottom:1px solid #e5e7eb"><span style="background:${statusColor(s)}22;color:${statusColor(s)};padding:2px 8px;border-radius:4px;font-size:10px;font-weight:700;text-transform:uppercase">${s}</span></td>
+            <td style="padding:8px 10px;vertical-align:top;border-bottom:1px solid #e5e7eb"><span style="background:${statusColor(s)}22;color:${statusColor(s)};padding:2px 8px;border-radius:4px;font-size:10px;font-weight:700;text-transform:uppercase">${s}</span>${s==="done"?`<div style="font-size:9px;margin-top:3px;color:${verifiedBy(tk)?"#16a34a":"#d97706"}">${verifiedBy(tk)?`✓ Verified — ${verifiedBy(tk).name||"office"}`:"Not yet verified"}</div>`:""}${stepsText(tk)?`<div style="font-size:9px;margin-top:2px;color:#6b7280">☑ ${stepsText(tk)}</div>`:""}</td>
           </tr>
           ${tphotos.length?`<tr style="page-break-inside:avoid"><td colspan="5" style="padding:6px 10px 12px;border-bottom:1px solid #e5e7eb;background:#fafafa">
             <div style="font-size:10px;color:#9ca3af;margin-bottom:6px">📷 ${tphotos.length} photo${tphotos.length!==1?"s":""}</div>
@@ -4404,7 +4407,7 @@ function Report({ tasks, jobs, users, logs, photos, receipts }) {
           <td style="padding:6px 10px;font-size:12px;border-bottom:1px solid #e5e7eb">${userName(r.crewId)}</td>
           <td style="padding:6px 10px;font-size:12px;border-bottom:1px solid #e5e7eb">${r.note||""}</td>
           <td style="padding:6px 10px;font-size:12px;text-align:right;font-weight:700;border-bottom:1px solid #e5e7eb;color:${r.paidBy==="crew"?"#f97316":"#1a1a1a"}">$${(+r.amount||0).toFixed(2)}</td>
-          <td style="padding:6px 10px;font-size:11px;border-bottom:1px solid #e5e7eb">${r.paidBy==="crew"?"Crew/Reimb":"Company"}</td>
+          <td style="padding:6px 10px;font-size:11px;border-bottom:1px solid #e5e7eb">${r.paidBy==="crew"?"Crew/Reimb":`Company${r.paymentMethod?` — ${r.paymentMethod}`:""}`}</td>
           <td style="padding:6px 10px;border-bottom:1px solid #e5e7eb">${r.dataUrl?`<img src="${r.dataUrl}" style="width:48px;height:36px;object-fit:cover;border-radius:4px" onerror="this.style.display='none'"/>`:"—"}</td>
         </tr>`).join("");
 
@@ -4412,7 +4415,7 @@ function Report({ tasks, jobs, users, logs, photos, receipts }) {
         <div style="margin-bottom:32px;page-break-inside:avoid">
           <div style="background:#4a2c1a;color:#fff;padding:10px 16px;border-radius:8px 8px 0 0;display:flex;justify-content:space-between;align-items:center">
             <div style="font-size:16px;font-weight:bold">${job.name}</div>
-            <div style="font-size:11px;opacity:.75">${done}/${jTasks.length} tasks done${job.address?` · ${job.address}`:""}</div>
+            <div style="font-size:11px;opacity:.75">${done}/${jTasks.length} tasks done · ${jTasks.filter(t=>t.status==="done"&&verifiedBy(t)).length} verified${job.address?` · ${job.address}`:""}</div>
           </div>
 
           ${jTasks.length?`
@@ -4544,9 +4547,10 @@ ${jobBlocks || '<p style="color:#888;text-align:center;padding:40px">No activity
                     <div style={{ fontSize:11, fontWeight:700, textTransform:"uppercase", letterSpacing:.6, color:"var(--slate)", marginBottom:6 }}>✓ Tasks</div>
                     {jt.map(tk => (
                       <div key={tk.id} style={{ display:"flex", justifyContent:"space-between", padding:"6px 10px", marginBottom:4, background:"rgba(255,255,255,.03)", borderRadius:8, fontSize:13 }}>
-                        <span>{tk.title}</span>
+                        <span>{tk.title}{stepsText(tk) ? <span style={{ fontSize:11, color:"var(--silver)" }}> · ☑ {stepsText(tk)}</span> : null}</span>
                         <span style={{ fontSize:11, fontWeight:700, textTransform:"uppercase", color: statusColor(tk.status==="done"?"done":(tk.dueDate&&tk.dueDate<today?"overdue":"pending")) }}>
                           {tk.status==="done"?"done":(tk.dueDate&&tk.dueDate<today?"overdue":"pending")}
+                          {tk.status==="done" && <span style={{ marginLeft:6, color: verifiedBy(tk) ? "var(--green)" : "var(--accent)" }}>{verifiedBy(tk) ? "✓ verified" : "· unverified"}</span>}
                         </span>
                       </div>
                     ))}
@@ -4566,7 +4570,7 @@ ${jobBlocks || '<p style="color:#888;text-align:center;padding:40px">No activity
                     <div style={{ fontSize:11, fontWeight:700, textTransform:"uppercase", letterSpacing:.6, color:"#d97706", marginBottom:6 }}>🧾 Receipts</div>
                     {jr.map(r => (
                       <div key={r.id} style={{ display:"flex", justifyContent:"space-between", padding:"6px 10px", marginBottom:4, background:"rgba(255,255,255,.03)", borderRadius:8, fontSize:12 }}>
-                        <span>{r.createdAt} · {r.store} {r.note ? `— ${r.note}` : ""} ({userName(r.crewId)})</span>
+                        <span>{r.createdAt} · {r.store} {r.note ? `— ${r.note}` : ""} ({userName(r.crewId)}){r.paidBy === "company" && r.paymentMethod ? ` · 💳 ${r.paymentMethod}` : ""}</span>
                         <span style={{ fontWeight:700 }}>${(+r.amount||0).toFixed(2)}</span>
                       </div>
                     ))}
@@ -4732,6 +4736,7 @@ function AdminReceipts({ receipts, setReceipts, jobs, tasks, users, user, delete
       receipt_id: r.id, vendor: r.store || "", amount: +r.amount || 0,
       job_id: r.jobId, job_name: jobs.find(j => j.id === r.jobId)?.name || "", category: r.category || null,
       memo: r.note || "", receipt_date: r.createdAt,
+      payment_method: r.paidBy === "company" ? (r.paymentMethod || "") : "",
       submitted_by: users.find(u => u.id === r.crewId)?.name || "Admin",
       image: r.dataUrl ? "[base64 attached]" : null, status: "pending_review",
     }));
@@ -4745,7 +4750,7 @@ function AdminReceipts({ receipts, setReceipts, jobs, tasks, users, user, delete
     const j    = jobs.find(x => x.id === r.jobId);
     const cr   = users.find(u => u.id === r.crewId);
     const tk   = tasks.find(t => t.id === r.taskId);
-    const reimb = r.paidBy === "crew" ? (r.reimbursementStatus === "paid" ? "Crew — Reimbursed ✓" : "Crew — Pending Reimbursement") : "Company";
+    const reimb = r.paidBy === "crew" ? (r.reimbursementStatus === "paid" ? "Crew — Reimbursed ✓" : "Crew — Pending Reimbursement") : `Company${r.paymentMethod ? " — " + r.paymentMethod : ""}`;
     const extras = [tk ? `Task: ${tk.title}` : "", r.note ? `Note: ${r.note}` : ""].filter(Boolean).join("  ·  ");
     const w = window.open("", "_blank", "width=850,height=1100");
     w.document.write(`<!DOCTYPE html><html><head><title>Receipt — ${r.store || ""}</title>
@@ -7008,7 +7013,7 @@ function AdminDispatch({ users, jobs, dispatches, upsertDispatch, deleteDispatch
 }
 
 // ─── JOB DETAIL DASHBOARD ─────────────────────────────────────────────
-function JobDetail({ selectedJobId, jobs, tasks, photos, receipts, logs, users, setTab, deletePhoto, deleteReceipt, deleteLog }) {
+function JobDetail({ selectedJobId, jobs, tasks, photos, receipts, logs, users, setTab, deletePhoto, deleteReceipt, deleteLog, signoffs }) {
   const job = jobs.find(j => j.id === selectedJobId);
   const today = localDate();
   const threeMonthsAgo = localDateOf(new Date(Date.now() - 90 * 86400000).toISOString());
@@ -7131,6 +7136,10 @@ function JobDetail({ selectedJobId, jobs, tasks, photos, receipts, logs, users, 
                               {task.titleEs && task.titleEs !== task.title && <div className="tes">{task.titleEs}</div>}
                               <div className="tmeta">
                                 <span className={`tag tag-${s}`}>{s}</span>
+                                {task.status === "done" && (taskSignoff(signoffs, task.id)
+                                  ? <span className="tag tag-done">✅ Verified</span>
+                                  : <span className="tag" style={{ background: "rgba(245,158,11,.14)", color: "var(--accent)" }}>Needs sign-off</span>)}
+                                {(task.checklist || []).length > 0 && <span className="tag" style={{ background: "rgba(255,255,255,.06)", color: "var(--silver)" }}>☑ {task.checklist.filter(c => c.done).length}/{task.checklist.length}</span>}
                                 {task.dueDate && <span className="tag" style={{ background: "rgba(255,255,255,.06)", color: "var(--silver)" }}>Due {task.dueDate}</span>}
                                 {crew.map(a => <span key={a.id} className="tag-l">{a.name}</span>)}
                               </div>
@@ -9095,7 +9104,7 @@ function CrewReceipts(props) {
 function ReceiptCard({ r, jobs, tasks, user, t, archived }) {
         const j = jobs.find(x => x.id === r.jobId);
         const tk = tasks.find(t => t.id === r.taskId);
-        const reimb = r.paidBy === "crew" ? (r.reimbursementStatus === "paid" ? "Crew — Reimbursed ✓" : "Crew — Reimbursement Pending") : "Company";
+        const reimb = r.paidBy === "crew" ? (r.reimbursementStatus === "paid" ? "Crew — Reimbursed ✓" : "Crew — Reimbursement Pending") : `Company${r.paymentMethod ? " — " + r.paymentMethod : ""}`;
         const extras = [tk ? `Task: ${tk.title}` : "", r.note ? `Note: ${r.note}` : ""].filter(Boolean).join("  ·  ");
         const printRc = () => {
           const w = window.open("", "_blank", "width=850,height=1100");
