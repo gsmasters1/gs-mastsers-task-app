@@ -234,21 +234,11 @@ async function scanReceiptPhoto(dataUrl) {
 // Strips currency symbols/thousands separators so "$1,234.56" -> "1234.56"
 const cleanScanAmount = v => v == null ? "" : String(v).replace(/[^0-9.]/g, "");
 
-// ─── GSM BUILDER INTEGRATION ────────────────────────────────────────────
-async function pushReceiptToGSM(receipt, jobs, crewName) {
-  const job = (jobs || []).find(j => j.id === receipt.jobId);
-  if (!job?.gsmSync || !job?.gsmJobId) return false;
-  try {
-    const res = await fetch("/.netlify/functions/gsm-sync", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ type: "receipt", gsmJobId: job.gsmJobId, data: { ...receipt, crewName: crewName || "Field Crew" } }),
-    });
-    if (!res.ok) return false;
-    await sbFetch(`field_receipts?id=eq.${receipt.id}`, { method: "PATCH", body: JSON.stringify({ bill_status: "posted", integration_sent_at: new Date().toISOString() }), prefer: "return=minimal" });
-    return true;
-  } catch { return false; }
-}
+// ─── GSM BUILDER ─────────────────────────────────────────────────────────
+// Receipts reach GSM Builder through its Bills > Field Receipts tab, which
+// reads field_receipts directly and marks bill_status "posted". The old
+// gsm-sync push (straight into gsm_expenses/gsm_logs) was retired 2026-09-28:
+// it had been silently failing since July and would double-post if revived.
 
 // ─── PUSH NOTIFICATIONS ─────────────────────────────────────────────────
 function urlBase64ToUint8Array(base64String) {
@@ -1537,12 +1527,6 @@ export default function App() {
     const row = { id: logId, text_en: enText, text_es: esText, weather, task_id: task.id, job_id: task.jobId, crew_id: user.id, log_date: todayD };
     try { await sbPost("field_logs", row); } catch { enqueue({ table: "field_logs", payload: row }); }
     const job = jobs.find(j => j.id === task.jobId);
-    if (job?.gsmSync && job?.gsmJobId) {
-      fetch("/.netlify/functions/gsm-sync", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ type: "task_done", gsmJobId: job.gsmJobId, data: { id: logId, taskId: task.id, taskTitle: task.title, crewName: user.name, date: todayD } }),
-      }).catch(() => {});
-    }
     return true;
   };
 
@@ -4450,7 +4434,6 @@ function AdminReceipts({ receipts, setReceipts, jobs, tasks, users, user, delete
       data_url: storagePath ? null : nr.dataUrl, storage_path: storagePath, store: nr.store, amount: parseFloat(nr.amount) || 0, note: nr.note,
       paid_by: nr.paidBy, reimbursement_status: nr.paidBy === "crew" ? "pending" : "na" };
     try { await sbPost("field_receipts", row); } catch { enqueue({ table: "field_receipts", payload: row }); }
-    pushReceiptToGSM(receipt, jobs, users.find(u => u.id === receipt.crewId)?.name);
     setNr({ dest: "job", customCat: "", jobId: "", taskId: "", crewId: "", store: "", amount: "", note: "", paidBy: "company", dataUrl: null });
     setScanMsg(""); setModal(false); setBusy(false);
   };
@@ -4572,35 +4555,12 @@ ${r.dataUrl
   const pendingReimb = receipts.filter(r => r.paidBy === "crew" && r.reimbursementStatus !== "paid");
   const total = receipts.reduce((s, r) => s + (+r.amount || 0), 0);
 
-  const gsmEligible = receipts.filter(r => {
-    const j = jobs.find(x => x.id === r.jobId);
-    return j?.gsmSync && j?.gsmJobId && r.billStatus !== "posted";
-  });
-  const [postingAll, setPostingAll] = useState(false);
-  const postAllToGSM = async () => {
-    if (!gsmEligible.length || postingAll) return;
-    setPostingAll(true);
-    let ok = 0;
-    for (const r of gsmEligible) {
-      const cr = users.find(u => u.id === r.crewId);
-      if (await pushReceiptToGSM(r, jobs, cr?.name)) {
-        ok++;
-        setReceipts(p => p.map(x => x.id === r.id ? { ...x, billStatus: "posted", integrationSentAt: new Date().toISOString() } : x));
-      }
-    }
-    setPostingAll(false);
-    alert(`Posted ${ok} of ${gsmEligible.length} receipt${gsmEligible.length !== 1 ? "s" : ""} to GSM Builder`);
-  };
 
   return (
     <div>
       <div className="flexb" style={{ marginBottom: 8 }}>
         <h2 className="h2">Receipts</h2>
         <div style={{ display: "flex", gap: 8 }}>
-          {gsmEligible.length > 0 && <button className="btn btn-s btn-sm" disabled={postingAll} onClick={postAllToGSM}
-            style={{ background:"rgba(59,130,246,.15)", color:"var(--sky2)", border:"1px solid rgba(59,130,246,.35)" }}>
-            {postingAll ? <span className="spin" /> : <>Post All → GSM ({gsmEligible.length})</>}
-          </button>}
           {receipts.length > 0 && <button className="btn btn-s btn-sm" onClick={exportBills}><Icon n="receipt" s={14} /> Export for Bills</button>}
           <button className="btn btn-p" onClick={() => { setScanMsg(""); setModal(true); }}><Icon n="plus" s={16} /> Add Receipt</button>
         </div>
@@ -4683,18 +4643,9 @@ ${r.dataUrl
                   :<span className="tag tag-done">Reimbursed</span>
                 :<span className="muted">—</span>}</td>
               <td data-l="GSM Builder">
-                {j?.gsmSync && j?.gsmJobId
-                  ? r.billStatus === "posted"
-                    ? <span className="tag tag-done" style={{ fontSize: 10 }}>✓ Posted</span>
-                    : <button className="btn btn-sm"
-                        style={{ fontSize: 10, padding: "3px 8px", background: "rgba(59,130,246,.15)", color: "var(--sky2)", border: "1px solid rgba(59,130,246,.35)" }}
-                        onClick={async () => {
-                          const ok = await pushReceiptToGSM(r, jobs, cr?.name);
-                          if (ok) setReceipts(p => p.map(x => x.id === r.id ? { ...x, billStatus: "posted", integrationSentAt: new Date().toISOString() } : x));
-                        }}>
-                        Post →
-                      </button>
-                  : <span className="muted" style={{ fontSize: 10 }}>—</span>}
+                {r.billStatus === "posted"
+                  ? <span className="tag tag-done" style={{ fontSize: 10 }}>✓ Posted</span>
+                  : <span className="muted" style={{ fontSize: 10 }} title="Post it from GSM Builder → Bills → Field Receipts">Not posted</span>}
               </td>
               <td data-l="Amount" style={{ textAlign:"right",fontWeight:700,color:needsReimb?"var(--orange)":"var(--accent)" }}>${(+r.amount).toFixed(2)}</td>
               <td style={{ whiteSpace:"nowrap" }}>
@@ -5373,11 +5324,22 @@ function CrewMgmt({ users, tasks, setActive, setIs1099, setIsSupervisor, addUser
   const appUrl = settings?.appUrl || (typeof window !== "undefined" ? window.location.origin : "https://your-app.netlify.app");
 
   const openAdd = () => { setForm({ name: "", email: "", phone: "", pin: String(Math.floor(1000 + Math.random() * 9000)), role: "crew", isSupervisor: false }); setModal("add"); };
-  const openEdit = m => { setForm({ name: m.name, email: m.email, phone: m.phone || "", pin: m.pin, role: m.role || "crew", isSupervisor: m.isSupervisor === true }); setModal(m); };
+  // PINs are write-only in the database now (it scrambles them into the
+  // login system and blanks the readable copy), so edit starts blank:
+  // blank = keep the current PIN, typed = set a new one.
+  const openEdit = m => { setForm({ name: m.name, email: m.email, phone: m.phone || "", pin: "", role: m.role || "crew", isSupervisor: m.isSupervisor === true }); setModal(m); };
   const save = () => {
-    if (!form.name || !form.pin) return;
-    if (modal === "add") { addUser(form); setInvite({ ...form }); }
-    else updateUser(modal.id, form);
+    if (!form.name) return;
+    if (form.pin && !/^\d{4,6}$/.test(form.pin)) { alert("PIN must be 4 to 6 digits."); return; }
+    if (modal === "add") {
+      if (!form.pin) { alert("Enter a PIN."); return; }
+      addUser(form); setInvite({ ...form });
+    } else {
+      updateUser(modal.id, form);
+      // New PIN -> open the invite right away so it can be texted; after
+      // this screen closes the PIN can't be looked up again.
+      if (form.pin) setInvite({ ...modal, ...form });
+    }
     setModal(null);
   };
   const inviteText = (m) => {
@@ -5389,7 +5351,7 @@ function CrewMgmt({ users, tasks, setActive, setIs1099, setIsSupervisor, addUser
       : "Once logged in you'll see your personal crew task dashboard — not the admin pages.";
     const displayPhone = m.phone ? m.phone.replace(/\D/g, "").slice(-10).replace(/(\d{3})(\d{3})(\d{4})/, "($1) $2-$3") : "(your phone number)";
     const loginId = m.email && !m.email.includes("@gsm.local") ? `Email: ${m.email}` : `Phone: ${displayPhone}`;
-    return `Hi ${m.name.split(" ")[0]}! Here's the G.S. Masters Field App.\n\n1. Open this link: ${link}\n2. Tap "Add to Home Screen" to save it\n3. Log in with:\n   ${loginId}\n   PIN: ${m.pin}\n\n${dashboardNote}\n\nText me if you have trouble. — Gregory`;
+    return `Hi ${m.name.split(" ")[0]}! Here's the G.S. Masters Field App.\n\n1. Open this link: ${link}\n2. Tap "Add to Home Screen" to save it\n3. Log in with:\n   ${loginId}\n   PIN: ${m.pin || "(Gregory will text you your PIN)"}\n\n${dashboardNote}\n\nText me if you have trouble. — Gregory`;
   };
 
   return (
@@ -5461,7 +5423,7 @@ function CrewMgmt({ users, tasks, setActive, setIs1099, setIsSupervisor, addUser
           <div className="fg"><label className="fl">Email (optional — for login &amp; invite)</label><input className="fi" type="email" value={form.email} onChange={e => setForm(p => ({ ...p, email: e.target.value }))} placeholder="juan@gsm.com (optional)" /></div>
           <div className="grid2">
             <div className="fg"><label className="fl">Phone</label><input className="fi" value={form.phone} onChange={e => setForm(p => ({ ...p, phone: e.target.value }))} placeholder="+1205..." /></div>
-            <div className="fg"><label className="fl">PIN</label><input className="fi" value={form.pin} onChange={e => setForm(p => ({ ...p, pin: e.target.value.replace(/\D/g, "").slice(0, 6) }))} placeholder="4-digit" /></div>
+            <div className="fg"><label className="fl">{modal === "add" ? "PIN" : "New PIN"}</label><input className="fi" inputMode="numeric" value={form.pin} onChange={e => setForm(p => ({ ...p, pin: e.target.value.replace(/\D/g, "").slice(0, 6) }))} placeholder={modal === "add" ? "4-digit" : "Blank = keep current PIN"} /></div>
           </div>
           <div className="fg">
             <label className="fl">Role</label>
@@ -5987,7 +5949,6 @@ function AdminFieldMode({ jobs, tasks, setTasks, photos, setPhotos, receipts, se
     setReceipts(p => [...p, receipt]);
     const row = { id, data_url: storagePath ? null : rcPhoto, storage_path: storagePath, task_id: null, job_id: jobIdVal, category, crew_id: user.id, store: rcForm.store, amount: parseFloat(rcForm.amount)||0, note: rcForm.note, paid_by: rcForm.paidBy, reimbursement_status: rcForm.paidBy==="crew"?"pending":"na" };
     try { await sbPost("field_receipts", row); } catch { enqueue({ table: "field_receipts", payload: row }); }
-    pushReceiptToGSM(receipt, jobs, user.name);
     setRcForm({ store:"", amount:"", note:"", paidBy:"crew" }); setRcPhoto(null); setRcBusy(false); setRcDest("job"); setRcCustomCat(""); setRcScanMsg("");
     alert("Receipt saved!");
   };
@@ -7311,12 +7272,6 @@ function CrewTasks(props) {
     try { await sbPost("field_receipts", row); } catch { enqueue({ table: "field_receipts", payload: row }); }
     // GSM Builder sync
     const job = jobs.find(j => j.id === jobId);
-    if (job?.gsmSync && job?.gsmJobId) {
-      fetch("/.netlify/functions/gsm-sync", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ type: "receipt", gsmJobId: job.gsmJobId, data: receipt }),
-      }).catch(() => {});
-    }
     // Twilio notify admin of crew receipt
     if (rcForm.paidBy === "crew") {
       const msg = `[Field App] ${user.name} submitted a receipt needing reimbursement: ${rcForm.store} $${parseFloat(rcForm.amount).toFixed(2)} — ${job?.name || jobId}`;
@@ -7407,12 +7362,6 @@ function CrewTasks(props) {
       try { await sbPost("field_logs", row); } catch { enqueue({ table: "field_logs", payload: row }); }
       // GSM Builder sync
       const job = jobs.find(j => j.id === task.jobId);
-      if (job?.gsmSync && job?.gsmJobId) {
-        fetch("/.netlify/functions/gsm-sync", {
-          method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ type: "task_done", gsmJobId: job.gsmJobId, data: { id: logId, taskId: id, taskTitle: task.title, crewName: user.name, date: today } }),
-        }).catch(() => {});
-      }
     }
   };
 
