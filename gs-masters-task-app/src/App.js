@@ -132,24 +132,59 @@ const sbPost   = (t, d)        => sbFetch(t, { method: "POST", body: JSON.string
 const sbPatch  = (t, id, d)    => sbFetch(`${t}?id=eq.${id}`, { method: "PATCH", body: JSON.stringify(d), prefer: "return=minimal" });
 const sbDelete = (t, id)       => sbFetch(`${t}?id=eq.${id}`, { method: "DELETE", prefer: "return=minimal" });
 
+// Photos and receipt images live as files in the public "field-media"
+// bucket; the row keeps storage_path plus the public URL in data_url (GSM
+// Builder reads data_url directly). Uploads used to target the private
+// portal-uploads bucket with the publishable key and never once succeeded,
+// so every image was stored base64 inside the row -- 6.7MB for 25 receipts,
+// enough to time out app loads. If an upload fails (offline) the row still
+// falls back to base64 and migrateInlineMedia moves it later.
+const MEDIA_BUCKET = "field-media";
+const mediaUrl = path => path ? `${SB_URL}/storage/v1/object/public/${MEDIA_BUCKET}/${path}` : null;
 async function uploadToStorage(dataUrl, path) {
+  if (!_authToken) throw new Error("Not signed in");
   const res = await fetch(dataUrl);
   const blob = await res.blob();
-  const r = await fetch(`${SB_URL}/storage/v1/object/portal-uploads/${path}`, {
+  const r = await fetch(`${SB_URL}/storage/v1/object/${MEDIA_BUCKET}/${path}`, {
     method: "POST",
-    headers: { "Authorization": `Bearer ${SB_KEY}`, "Content-Type": blob.type || "image/jpeg", "x-upsert": "true" },
+    headers: { apikey: SB_JWT, Authorization: `Bearer ${_authToken}`, "Content-Type": blob.type || "image/jpeg", "x-upsert": "true" },
     body: blob,
   });
-  if (!r.ok) throw new Error("Storage upload failed");
+  if (!r.ok) throw new Error("Storage upload failed: " + r.status);
   return path;
 }
 async function deleteFromStorage(path) {
-  if (!path) return;
-  await fetch(`${SB_URL}/storage/v1/object/portal-uploads`, {
+  if (!path || !_authToken) return;
+  await fetch(`${SB_URL}/storage/v1/object/${MEDIA_BUCKET}`, {
     method: "DELETE",
-    headers: { "Authorization": `Bearer ${SB_KEY}`, "Content-Type": "application/json" },
+    headers: { apikey: SB_JWT, Authorization: `Bearer ${_authToken}`, "Content-Type": "application/json" },
     body: JSON.stringify({ prefixes: [path] }),
   });
+}
+// One-time move of images still stored inline (base64) into field-media.
+// Runs in the background on an admin device only (admin RLS can patch every
+// row), one image at a time, never blocking the app. Also catches rows
+// saved offline later.
+let _mediaMigrating = false;
+async function migrateInlineMedia(photoRows, receiptRows) {
+  if (_mediaMigrating) return;
+  _mediaMigrating = true;
+  let moved = 0, failed = 0;
+  try {
+    const todo = [
+      ...(photoRows || []).filter(r => typeof r.data_url === "string" && r.data_url.startsWith("data:")).map(r => ["field_photos", r]),
+      ...(receiptRows || []).filter(r => typeof r.data_url === "string" && r.data_url.startsWith("data:")).map(r => ["field_receipts", r]),
+    ];
+    for (const [table, r] of todo) {
+      try {
+        const path = await uploadToStorage(r.data_url, `${r.crew_id || "misc"}/${r.id}.jpg`);
+        await sbPatch(table, r.id, { data_url: mediaUrl(path), storage_path: path });
+        moved++;
+      } catch (e) { failed++; console.error("Media migrate", table, r.id, e.message); }
+    }
+  } finally { _mediaMigrating = false; }
+  if (moved || failed) console.info(`Media migration: ${moved} moved, ${failed} failed`);
+  return { moved, failed };
 }
 
 // ─── SNAKE ↔ CAMEL TRANSFORMS ──────────────────────────────────────────
@@ -158,8 +193,8 @@ const fromJob     = r => ({ id: r.id, name: r.name, address: r.address || "", la
 const fromTask    = r => ({ id: r.id, jobId: r.job_id, title: r.title, titleEs: r.title_es || "", notes: r.notes || "", notesEs: r.notes_es || "", assignedTo: Array.isArray(r.assigned_to) ? r.assigned_to : (r.assigned_to ? [r.assigned_to] : []), status: r.status, dueDate: r.due_date || "", createdAt: (r.created_at || "").slice(0, 10), completedAt: r.completed_at || null, priority: r.priority === 1 ? "urgent" : "normal", recurring: r.recurring || false, photoRequired: r.photo_required === true });
 const toPriority  = p => p === "urgent" ? 1 : 3;
 const fromLog     = r => ({ id: r.id, taskId: r.task_id, jobId: r.job_id, crewId: r.crew_id, en: r.text_en, es: r.text_es, weather: r.weather, date: r.log_date, adminReply: r.admin_reply || null, resolved: r.resolved || false });
-const fromPhoto   = r => ({ id: r.id, taskId: r.task_id, jobId: r.job_id, crewId: r.crew_id, dataUrl: r.storage_path ? `${SB_URL}/storage/v1/object/public/portal-uploads/${r.storage_path}` : (r.data_url || null), storagePath: r.storage_path || null, type: r.photo_type, sizeKB: r.size_kb, note: r.note || "", date: r.created_at });
-const fromReceipt = r => ({ id: r.id, taskId: r.task_id, jobId: r.job_id, category: r.category || null, crewId: r.crew_id, dataUrl: r.storage_path ? `${SB_URL}/storage/v1/object/public/portal-uploads/${r.storage_path}` : (r.data_url || null), storagePath: r.storage_path || null, store: r.store, amount: r.amount, note: r.note, paidBy: r.paid_by || "crew", reimbursementStatus: r.reimbursement_status || "pending", reimbursementDate: r.reimbursement_date || null, billStatus: r.bill_status || "pending_review", createdAt: (r.created_at || "").slice(0, 10), integrationSentAt: r.integration_sent_at || null });
+const fromPhoto   = r => ({ id: r.id, taskId: r.task_id, jobId: r.job_id, crewId: r.crew_id, dataUrl: r.data_url || mediaUrl(r.storage_path), storagePath: r.storage_path || null, type: r.photo_type, sizeKB: r.size_kb, note: r.note || "", date: r.created_at });
+const fromReceipt = r => ({ id: r.id, taskId: r.task_id, jobId: r.job_id, category: r.category || null, crewId: r.crew_id, dataUrl: r.data_url || mediaUrl(r.storage_path), storagePath: r.storage_path || null, store: r.store, amount: r.amount, note: r.note, paidBy: r.paid_by || "crew", reimbursementStatus: r.reimbursement_status || "pending", reimbursementDate: r.reimbursement_date || null, billStatus: r.bill_status || "pending_review", createdAt: (r.created_at || "").slice(0, 10), integrationSentAt: r.integration_sent_at || null });
 const fromMat     = r => ({ id: r.id, taskId: r.task_id, jobId: r.job_id, crewId: r.crew_id, en: r.text_en, es: r.text_es, fulfilled: r.fulfilled });
 const fromCheckin  = r => ({ id: r.id, crewId: r.crew_id, jobId: r.job_id, checkIn: r.check_in, checkOut: r.check_out, hours: r.hours, date: r.work_date, latIn: r.lat_in, lngIn: r.lng_in, method: r.method || "qr", autoClosed: r.auto_closed === true });
 
@@ -1174,6 +1209,7 @@ export default function App() {
         if (dbMats)     setMats(dbMats.map(fromMat));
         if (dbDispatch) setDispatches(dbDispatch.map(fromDispatch));
         if (navigator.onLine) flushQueue();
+        if (user.role === "admin" && navigator.onLine) migrateInlineMedia(dbPhotos, dbReceipts);
       } catch (e) { console.error("Load:", e); }
       setLoading(false);
     };
@@ -1294,7 +1330,7 @@ export default function App() {
       else {
         try {
           storagePath = await uploadToStorage(newPhoto, `${existing?.crewId || id}/${id}-${Date.now()}.jpg`);
-          dataUrlOut = `${SB_URL}/storage/v1/object/public/portal-uploads/${storagePath}`;
+          dataUrlOut = mediaUrl(storagePath);
         } catch { storagePath = null; dataUrlOut = newPhoto; }
       }
     }
@@ -1311,7 +1347,7 @@ export default function App() {
     if (patch.category !== undefined) dbPatch.category = patch.category;
     if (patch.jobId    !== undefined) dbPatch.job_id   = patch.jobId;
     if (patch.taskId   !== undefined) dbPatch.task_id  = patch.taskId;
-    if (newPhoto !== undefined) { dbPatch.storage_path = storagePath; dbPatch.data_url = storagePath ? null : dataUrlOut; }
+    if (newPhoto !== undefined) { dbPatch.storage_path = storagePath; dbPatch.data_url = dataUrlOut; }
     try { await sbFetch(`field_receipts?id=eq.${id}`, { method: "PATCH", body: JSON.stringify(dbPatch), prefer: "return=minimal" }); } catch {}
   };
   const upsertDispatch = async (entry) => {
@@ -2965,7 +3001,7 @@ function AdminTasks(props) {
       const pid = "p" + Date.now();
       let storagePath = null;
       try { storagePath = await uploadToStorage(taskPhoto.dataUrl, `${user?.id||"admin"}/${pid}.jpg`); } catch {}
-      const prow = { id: pid, data_url: storagePath ? null : taskPhoto.dataUrl, storage_path: storagePath, photo_type: taskPhotoType, task_id: id, job_id: nt.jobId, crew_id: user?.id || "admin", size_kb: taskPhoto.sizeKB, note: taskPhotoNote || null };
+      const prow = { id: pid, data_url: storagePath ? mediaUrl(storagePath) : taskPhoto.dataUrl, storage_path: storagePath, photo_type: taskPhotoType, task_id: id, job_id: nt.jobId, crew_id: user?.id || "admin", size_kb: taskPhoto.sizeKB, note: taskPhotoNote || null };
       if (setPhotos) setPhotos(p => [...p, { id: pid, dataUrl: taskPhoto.dataUrl, type: taskPhotoType, taskId: id, jobId: nt.jobId, crewId: user?.id || "admin", sizeKB: taskPhoto.sizeKB, note: taskPhotoNote, date: new Date().toISOString() }]);
       try { await sbPost("field_photos", prow); } catch { enqueue({ table: "field_photos", payload: prow }); }
     }
@@ -3055,7 +3091,7 @@ function AdminTasks(props) {
     let storagePath = null;
     try { storagePath = await uploadToStorage(refPhoto.dataUrl, `${user?.id || "admin"}/${pid}.jpg`); } catch {}
     const photo = { id: pid, dataUrl: refPhoto.dataUrl, type: "reference", taskId: detailTask.id, jobId: detailTask.jobId, crewId: user?.id || "admin", sizeKB: refPhoto.sizeKB, note: refPhotoNote || "", date: new Date().toISOString() };
-    const row = { id: pid, data_url: storagePath ? null : refPhoto.dataUrl, storage_path: storagePath, photo_type: "reference", task_id: detailTask.id, job_id: detailTask.jobId, crew_id: user?.id || "admin", size_kb: refPhoto.sizeKB, note: refPhotoNote || null };
+    const row = { id: pid, data_url: storagePath ? mediaUrl(storagePath) : refPhoto.dataUrl, storage_path: storagePath, photo_type: "reference", task_id: detailTask.id, job_id: detailTask.jobId, crew_id: user?.id || "admin", size_kb: refPhoto.sizeKB, note: refPhotoNote || null };
     if (setPhotos) setPhotos(p => [...p, photo]);
     try { await sbPost("field_photos", row); } catch { enqueue({ table: "field_photos", payload: row }); }
     setRefPhoto(null); setRefPhotoNote(""); setRefPhotoBusy(false);
@@ -4436,7 +4472,7 @@ function AdminReceipts({ receipts, setReceipts, jobs, tasks, users, user, delete
       paidBy: nr.paidBy, reimbursementStatus: nr.paidBy === "crew" ? "pending" : "na", createdAt: today };
     setReceipts(p => [...p, receipt]);
     const row = { id, job_id: jobIdVal, category, task_id: usingJob ? nr.taskId || null : null, crew_id: nr.crewId || user.id,
-      data_url: storagePath ? null : nr.dataUrl, storage_path: storagePath, store: nr.store, amount: parseFloat(nr.amount) || 0, note: nr.note,
+      data_url: storagePath ? mediaUrl(storagePath) : nr.dataUrl, storage_path: storagePath, store: nr.store, amount: parseFloat(nr.amount) || 0, note: nr.note,
       paid_by: nr.paidBy, reimbursement_status: nr.paidBy === "crew" ? "pending" : "na" };
     try { await sbPost("field_receipts", row); } catch { enqueue({ table: "field_receipts", payload: row }); }
     setNr({ dest: "job", customCat: "", jobId: "", taskId: "", crewId: "", store: "", amount: "", note: "", paidBy: "company", dataUrl: null });
@@ -4917,7 +4953,7 @@ function AdminPhotos({ photos, setPhotos, tasks, jobs, users, user, deletePhoto,
     try { storagePath = await uploadToStorage(dataUrl, `${user.id}/${id}.jpg`); } catch {}
     const photo = { id, dataUrl, type: uploadType, taskId: uploadTask || null, jobId: uploadJob, crewId: user.id, sizeKB, note: note || "", date: new Date().toISOString() };
     setPhotos(p => [...p, photo]);
-    const row = { id, data_url: storagePath ? null : dataUrl, storage_path: storagePath, photo_type: uploadType, task_id: uploadTask || null, job_id: uploadJob, crew_id: user.id, size_kb: sizeKB, note: note || null };
+    const row = { id, data_url: storagePath ? mediaUrl(storagePath) : dataUrl, storage_path: storagePath, photo_type: uploadType, task_id: uploadTask || null, job_id: uploadJob, crew_id: user.id, size_kb: sizeKB, note: note || null };
     try { await sbPost("field_photos", row); } catch { enqueue({ table: "field_photos", payload: row }); }
     setPendingAdminPhoto(null);
     setAdminPhotoNote("");
@@ -5915,7 +5951,7 @@ function AdminFieldMode({ jobs, tasks, setTasks, photos, setPhotos, receipts, se
     try { storagePath = await uploadToStorage(pendingPhoto.dataUrl, `${user.id}/${id}.jpg`); } catch {}
     const photo = { id, dataUrl: pendingPhoto.dataUrl, type: photoType, taskId: null, jobId: selJob, crewId: user.id, sizeKB: pendingPhoto.sizeKB, note: photoNote, date: new Date().toISOString() };
     setPhotos(p => [...p, photo]);
-    const row = { id, data_url: storagePath ? null : pendingPhoto.dataUrl, storage_path: storagePath, photo_type: photoType, task_id: null, job_id: selJob, crew_id: user.id, size_kb: pendingPhoto.sizeKB, note: photoNote || null };
+    const row = { id, data_url: storagePath ? mediaUrl(storagePath) : pendingPhoto.dataUrl, storage_path: storagePath, photo_type: photoType, task_id: null, job_id: selJob, crew_id: user.id, size_kb: pendingPhoto.sizeKB, note: photoNote || null };
     try { await sbPost("field_photos", row); } catch { enqueue({ table: "field_photos", payload: row }); }
     setPhotoSaved(n => n + 1); setPendingPhoto(null); setPhotoNote("");
     if (done) setPhotoSaved(0);
@@ -5952,7 +5988,7 @@ function AdminFieldMode({ jobs, tasks, setTasks, photos, setPhotos, receipts, se
     if (rcPhoto) { try { storagePath = await uploadToStorage(rcPhoto, `${user.id}/${id}.jpg`); } catch {} }
     const receipt = { id, dataUrl: rcPhoto, taskId: null, jobId: jobIdVal, category, crewId: user.id, store: rcForm.store, amount: rcForm.amount, note: rcForm.note, paidBy: rcForm.paidBy, reimbursementStatus: rcForm.paidBy === "crew" ? "pending" : "na", createdAt: today };
     setReceipts(p => [...p, receipt]);
-    const row = { id, data_url: storagePath ? null : rcPhoto, storage_path: storagePath, task_id: null, job_id: jobIdVal, category, crew_id: user.id, store: rcForm.store, amount: parseFloat(rcForm.amount)||0, note: rcForm.note, paid_by: rcForm.paidBy, reimbursement_status: rcForm.paidBy==="crew"?"pending":"na" };
+    const row = { id, data_url: storagePath ? mediaUrl(storagePath) : rcPhoto, storage_path: storagePath, task_id: null, job_id: jobIdVal, category, crew_id: user.id, store: rcForm.store, amount: parseFloat(rcForm.amount)||0, note: rcForm.note, paid_by: rcForm.paidBy, reimbursement_status: rcForm.paidBy==="crew"?"pending":"na" };
     try { await sbPost("field_receipts", row); } catch { enqueue({ table: "field_receipts", payload: row }); }
     setRcForm({ store:"", amount:"", note:"", paidBy:"crew" }); setRcPhoto(null); setRcBusy(false); setRcDest("job"); setRcCustomCat(""); setRcScanMsg("");
     alert("Receipt saved!");
@@ -5978,7 +6014,7 @@ function AdminFieldMode({ jobs, tasks, setTasks, photos, setPhotos, receipts, se
       const pid = "p" + Date.now();
       let storagePath = null;
       try { storagePath = await uploadToStorage(taskPhoto.dataUrl, `${user.id}/${pid}.jpg`); } catch {}
-      const prow = { id: pid, data_url: storagePath ? null : taskPhoto.dataUrl, storage_path: storagePath, photo_type: "before", task_id: id, job_id: selJob, crew_id: user.id, size_kb: taskPhoto.sizeKB, note: taskPhotoNote || null };
+      const prow = { id: pid, data_url: storagePath ? mediaUrl(storagePath) : taskPhoto.dataUrl, storage_path: storagePath, photo_type: "before", task_id: id, job_id: selJob, crew_id: user.id, size_kb: taskPhoto.sizeKB, note: taskPhotoNote || null };
       setPhotos(p => [...p, { id: pid, dataUrl: taskPhoto.dataUrl, type:"before", taskId: id, jobId: selJob, crewId: user.id, note: taskPhotoNote, date: new Date().toISOString() }]);
       try { await sbPost("field_photos", prow); } catch { enqueue({ table: "field_photos", payload: prow }); }
     }
@@ -7249,7 +7285,7 @@ function CrewTasks(props) {
     try { storagePath = await uploadToStorage(dataUrl, `${user.id}/${id}.jpg`); } catch {}
     const photo = { id, dataUrl, type, taskId: null, jobId, crewId: user.id, sizeKB, note: note || "", date: new Date().toISOString() };
     setPhotos(p => [...p, photo]);
-    const row = { id, data_url: storagePath ? null : dataUrl, storage_path: storagePath, photo_type: dbType, task_id: null, job_id: jobId, crew_id: user.id, size_kb: sizeKB, note: note || null };
+    const row = { id, data_url: storagePath ? mediaUrl(storagePath) : dataUrl, storage_path: storagePath, photo_type: dbType, task_id: null, job_id: jobId, crew_id: user.id, size_kb: sizeKB, note: note || null };
     try { await sbPost("field_photos", row); } catch { enqueue({ table: "field_photos", payload: row }); }
     setPendingJobPhoto(null);
     setJobPhotoNote("");
@@ -7273,7 +7309,7 @@ function CrewTasks(props) {
     if (rcForm.dataUrl) { try { storagePath = await uploadToStorage(rcForm.dataUrl, `${user.id}/${id}.jpg`); } catch {} }
     const receipt = { id, dataUrl: rcForm.dataUrl, taskId: null, jobId, crewId: user.id, store: rcForm.store, amount: rcForm.amount, note: rcForm.note, paidBy: rcForm.paidBy, reimbursementStatus: rcForm.paidBy === "crew" ? "pending" : "na", createdAt: today };
     setReceipts(p => [...p, receipt]);
-    const row = { id, data_url: storagePath ? null : rcForm.dataUrl, storage_path: storagePath, task_id: null, job_id: jobId, crew_id: user.id, store: rcForm.store, amount: parseFloat(rcForm.amount) || 0, note: rcForm.note, paid_by: rcForm.paidBy, reimbursement_status: rcForm.paidBy === "crew" ? "pending" : "na" };
+    const row = { id, data_url: storagePath ? mediaUrl(storagePath) : rcForm.dataUrl, storage_path: storagePath, task_id: null, job_id: jobId, crew_id: user.id, store: rcForm.store, amount: parseFloat(rcForm.amount) || 0, note: rcForm.note, paid_by: rcForm.paidBy, reimbursement_status: rcForm.paidBy === "crew" ? "pending" : "na" };
     try { await sbPost("field_receipts", row); } catch { enqueue({ table: "field_receipts", payload: row }); }
     // GSM Builder sync
     const job = jobs.find(j => j.id === jobId);
@@ -7335,7 +7371,7 @@ function CrewTasks(props) {
       try { storagePath = await uploadToStorage(issueDataUrl, `${user.id}/${pid}.jpg`); } catch {}
       const photo = { id: pid, dataUrl: issueDataUrl, type: "concern", taskId: null, jobId, crewId: user.id, sizeKB: 0, date: new Date().toISOString() };
       setPhotos(p => [...p, photo]);
-      const prow = { id: pid, data_url: storagePath ? null : issueDataUrl, storage_path: storagePath, photo_type: "progress", task_id: null, job_id: jobId, crew_id: user.id, size_kb: 0 };
+      const prow = { id: pid, data_url: storagePath ? mediaUrl(storagePath) : issueDataUrl, storage_path: storagePath, photo_type: "progress", task_id: null, job_id: jobId, crew_id: user.id, size_kb: 0 };
       try { await sbPost("field_photos", prow); } catch { enqueue({ table: "field_photos", payload: prow }); }
     }
     // Twilio alert admin
@@ -7462,7 +7498,7 @@ function CrewTasks(props) {
     try { storagePath = await uploadToStorage(pendingPhoto.dataUrl, `${user.id}/${id}.jpg`); } catch {}
     const photo = { id, dataUrl: pendingPhoto.dataUrl, type: ptype, taskId: taskPanel.taskId, jobId: taskPanel.jobId, crewId: user.id, sizeKB: pendingPhoto.sizeKB, note: photoNote, date: new Date().toISOString() };
     setPhotos(p => [...p, photo]);
-    const row = { id, data_url: storagePath ? null : pendingPhoto.dataUrl, storage_path: storagePath, photo_type: ptype, task_id: taskPanel.taskId, job_id: taskPanel.jobId, crew_id: user.id, size_kb: pendingPhoto.sizeKB, note: photoNote || null };
+    const row = { id, data_url: storagePath ? mediaUrl(storagePath) : pendingPhoto.dataUrl, storage_path: storagePath, photo_type: ptype, task_id: taskPanel.taskId, job_id: taskPanel.jobId, crew_id: user.id, size_kb: pendingPhoto.sizeKB, note: photoNote || null };
     try { await sbPost("field_photos", row); } catch { enqueue({ table: "field_photos", payload: row }); }
     setSavedCount(n => n + 1);
     setPendingPhoto(null);
@@ -7491,7 +7527,7 @@ function CrewTasks(props) {
     if (taskRcForm.dataUrl) { try { storagePath = await uploadToStorage(taskRcForm.dataUrl, `${user.id}/${id}.jpg`); } catch {} }
     const receipt = { id, dataUrl: taskRcForm.dataUrl, taskId: taskPanel.taskId, jobId: taskPanel.jobId, crewId: user.id, store: taskRcForm.store, amount: taskRcForm.amount, note: taskRcForm.note, paidBy: taskRcForm.paidBy, reimbursementStatus: taskRcForm.paidBy === "crew" ? "pending" : "na", createdAt: today };
     setReceipts(p => [...p, receipt]);
-    const row = { id, data_url: storagePath ? null : taskRcForm.dataUrl, storage_path: storagePath, task_id: taskPanel.taskId, job_id: taskPanel.jobId, crew_id: user.id, store: taskRcForm.store, amount: parseFloat(taskRcForm.amount) || 0, note: taskRcForm.note, paid_by: taskRcForm.paidBy, reimbursement_status: taskRcForm.paidBy === "crew" ? "pending" : "na" };
+    const row = { id, data_url: storagePath ? mediaUrl(storagePath) : taskRcForm.dataUrl, storage_path: storagePath, task_id: taskPanel.taskId, job_id: taskPanel.jobId, crew_id: user.id, store: taskRcForm.store, amount: parseFloat(taskRcForm.amount) || 0, note: taskRcForm.note, paid_by: taskRcForm.paidBy, reimbursement_status: taskRcForm.paidBy === "crew" ? "pending" : "na" };
     try { await sbPost("field_receipts", row); } catch { enqueue({ table: "field_receipts", payload: row }); }
     if (taskRcForm.paidBy === "crew") {
       const job = jobs.find(j => j.id === taskPanel.jobId);
@@ -8404,7 +8440,7 @@ function CrewPhotos(props) {
     try { storagePath = await uploadToStorage(dataUrl, `${user.id}/${id}.jpg`); } catch {}
     const photo = { id, dataUrl, type, taskId: task, jobId: tk?.jobId, crewId: user.id, sizeKB, date: new Date().toISOString() };
     setPhotos(p => [...p, photo]);
-    const row = { id, data_url: storagePath ? null : dataUrl, storage_path: storagePath, photo_type: dbType, task_id: task, job_id: tk?.jobId, crew_id: user.id, size_kb: sizeKB };
+    const row = { id, data_url: storagePath ? mediaUrl(storagePath) : dataUrl, storage_path: storagePath, photo_type: dbType, task_id: task, job_id: tk?.jobId, crew_id: user.id, size_kb: sizeKB };
     try { await sbPost("field_photos", row); } catch { enqueue({ table: "field_photos", payload: row }); }
     e.target.value = ""; setBusy(false);
   };
@@ -8541,7 +8577,7 @@ function CrewReceipts(props) {
     if (dataUrl) { try { storagePath = await uploadToStorage(dataUrl, `${user.id}/${id}.jpg`); } catch {} }
     const receipt = { id, dataUrl, taskId: usingTask ? task : null, jobId: tk?.jobId || null, category, crewId: user.id, store, amount, note, paidBy, reimbursementStatus: paidBy === "crew" ? "pending" : "na", createdAt: today };
     setReceipts(p => [...p, receipt]);
-    const row = { id, data_url: storagePath ? null : dataUrl, storage_path: storagePath, task_id: usingTask ? task : null, job_id: tk?.jobId || null, category, crew_id: user.id, store, amount: parseFloat(amount) || 0, note, paid_by: paidBy, reimbursement_status: paidBy === "crew" ? "pending" : "na" };
+    const row = { id, data_url: storagePath ? mediaUrl(storagePath) : dataUrl, storage_path: storagePath, task_id: usingTask ? task : null, job_id: tk?.jobId || null, category, crew_id: user.id, store, amount: parseFloat(amount) || 0, note, paid_by: paidBy, reimbursement_status: paidBy === "crew" ? "pending" : "na" };
     try { await sbPost("field_receipts", row); } catch { enqueue({ table: "field_receipts", payload: row }); }
     setTask(""); setStore(""); setAmount(""); setNote(""); setPaidBy("crew"); setDataUrl(null); setBusy(false); setDest("task");
     setDone(true); setTimeout(() => setDone(false), 3000);
