@@ -1150,16 +1150,21 @@ export default function App() {
     const load = async () => {
       setLoading(true);
       try {
-        const [dbUsers, dbJobs, dbTasks, dbLogs, dbPhotos, dbReceipts, dbMats, dbDispatch] = await Promise.all([
-          sbGet("field_profiles", "order=created_at"),
-          sbGet("field_jobs", "order=created_at"),
-          sbGet("field_tasks", "order=created_at"),
-          sbGet("field_logs", "order=created_at.desc"),
-          sbGet("field_photos", "order=created_at.desc"),
-          sbGet("field_receipts", "order=created_at.desc"),
-          sbGet("field_material_requests", "order=created_at.desc"),
-          sbGet("field_dispatch", "order=date.desc"),
-        ]);
+        // allSettled + one retry per table: with Promise.all, a single slow
+        // table (receipts carry embedded photos) timing out blanked the
+        // whole app -- no crew, tasks, or calendar. Now each table loads on
+        // its own and a failure is shown instead of silently emptying.
+        const specs = [
+          ["field_profiles", "order=created_at"], ["field_jobs", "order=created_at"],
+          ["field_tasks", "order=created_at"], ["field_logs", "order=created_at.desc"],
+          ["field_photos", "order=created_at.desc"], ["field_receipts", "order=created_at.desc"],
+          ["field_material_requests", "order=created_at.desc"], ["field_dispatch", "order=date.desc"],
+        ];
+        const loadOne = ([tbl, q]) => sbGet(tbl, q).catch(() => sbGet(tbl, q));
+        const settled = await Promise.allSettled(specs.map(loadOne));
+        const failedTables = specs.filter((_, i) => settled[i].status === "rejected").map(([tbl]) => tbl.replace("field_", ""));
+        if (failedTables.length) { console.error("Load failed:", failedTables); setTimeout(() => alert(`Could not load: ${failedTables.join(", ")}. Pull down / reopen the app to retry.`), 0); }
+        const [dbUsers, dbJobs, dbTasks, dbLogs, dbPhotos, dbReceipts, dbMats, dbDispatch] = settled.map(r => r.status === "fulfilled" ? r.value : null);
         if (dbUsers)    setUsers(dbUsers.map(fromProfile));
         if (dbJobs)     setJobs(dbJobs.map(fromJob));
         if (dbTasks)    setTasks(dbTasks.map(fromTask));
