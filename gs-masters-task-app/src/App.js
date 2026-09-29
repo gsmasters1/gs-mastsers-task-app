@@ -132,29 +132,34 @@ const sbPost   = (t, d)        => sbFetch(t, { method: "POST", body: JSON.string
 const sbPatch  = (t, id, d)    => sbFetch(`${t}?id=eq.${id}`, { method: "PATCH", body: JSON.stringify(d), prefer: "return=minimal" });
 const sbDelete = (t, id)       => sbFetch(`${t}?id=eq.${id}`, { method: "DELETE", prefer: "return=minimal" });
 
-// Photos and receipt images live as files in the public "field-media"
-// bucket; the row keeps storage_path plus the public URL in data_url (GSM
-// Builder reads data_url directly). Uploads used to target the private
-// portal-uploads bucket with the publishable key and never once succeeded,
-// so every image was stored base64 inside the row -- 6.7MB for 25 receipts,
-// enough to time out app loads. If an upload fails (offline) the row still
-// falls back to base64 and migrateInlineMedia moves it later.
+// Photos and receipt images are stored in Google Drive (15GB free, so this
+// never forces a paid Supabase tier). The upload goes through GSM Builder's
+// field-media-upload function, which checks this crew session and holds the
+// Drive secret; the file lands in the linked GSM job's Drive folder. The row
+// keeps storage_path = "drive:<fileId>" and the link-shared thumbnail URL in
+// data_url (GSM Builder reads data_url directly). Before this, uploads went to
+// a private bucket with the publishable key and never once succeeded, so every
+// image sat base64 inside the row -- 6.7MB for 25 receipts, timing out loads.
+// If an upload fails (offline) the row keeps base64 and migrateInlineMedia
+// moves it later.
 const MEDIA_BUCKET = "field-media";
-const mediaUrl = path => path ? `${SB_URL}/storage/v1/object/public/${MEDIA_BUCKET}/${path}` : null;
-async function uploadToStorage(dataUrl, path) {
+const DRIVE_UPLOAD_FN = "https://app.gsmastersinc.com/.netlify/functions/field-media-upload";
+const mediaUrl = path => !path ? null
+  : path.startsWith("drive:") ? `https://drive.google.com/thumbnail?id=${encodeURIComponent(path.slice(6))}&sz=w2000`
+  : `${SB_URL}/storage/v1/object/public/${MEDIA_BUCKET}/${path}`;
+async function uploadToStorage(dataUrl, path, jobId = null, kind = "photo") {
   if (!_authToken) throw new Error("Not signed in");
-  const res = await fetch(dataUrl);
-  const blob = await res.blob();
-  const r = await fetch(`${SB_URL}/storage/v1/object/${MEDIA_BUCKET}/${path}`, {
-    method: "POST",
-    headers: { apikey: SB_JWT, Authorization: `Bearer ${_authToken}`, "Content-Type": blob.type || "image/jpeg", "x-upsert": "true" },
-    body: blob,
+  const name = String(path || "").replace(/\//g, "_");
+  const res = await fnFetch(DRIVE_UPLOAD_FN, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ dataUrl, fieldJobId: jobId || null, kind, name }),
   });
-  if (!r.ok) throw new Error("Storage upload failed: " + r.status);
-  return path;
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || !data.fileId) throw new Error("Drive upload failed: " + (data.error || res.status));
+  return "drive:" + data.fileId;
 }
 async function deleteFromStorage(path) {
-  if (!path || !_authToken) return;
+  if (!path || !_authToken || path.startsWith("drive:")) return;
   await fetch(`${SB_URL}/storage/v1/object/${MEDIA_BUCKET}`, {
     method: "DELETE",
     headers: { apikey: SB_JWT, Authorization: `Bearer ${_authToken}`, "Content-Type": "application/json" },
@@ -177,7 +182,7 @@ async function migrateInlineMedia(photoRows, receiptRows) {
     ];
     for (const [table, r] of todo) {
       try {
-        const path = await uploadToStorage(r.data_url, `${r.crew_id || "misc"}/${r.id}.jpg`);
+        const path = await uploadToStorage(r.data_url, `${r.crew_id || "misc"}/${r.id}.jpg`, r.job_id, table === "field_receipts" ? "receipt" : "photo");
         await sbPatch(table, r.id, { data_url: mediaUrl(path), storage_path: path });
         moved++;
       } catch (e) { failed++; console.error("Media migrate", table, r.id, e.message); }
@@ -1329,7 +1334,7 @@ export default function App() {
       if (newPhoto === null) { storagePath = null; dataUrlOut = null; }
       else {
         try {
-          storagePath = await uploadToStorage(newPhoto, `${existing?.crewId || id}/${id}-${Date.now()}.jpg`);
+          storagePath = await uploadToStorage(newPhoto, `${existing?.crewId || id}/${id}-${Date.now()}.jpg`, existing?.jobId, "receipt");
           dataUrlOut = mediaUrl(storagePath);
         } catch { storagePath = null; dataUrlOut = newPhoto; }
       }
@@ -3000,7 +3005,7 @@ function AdminTasks(props) {
     if (taskPhoto && nt.jobId) {
       const pid = "p" + Date.now();
       let storagePath = null;
-      try { storagePath = await uploadToStorage(taskPhoto.dataUrl, `${user?.id||"admin"}/${pid}.jpg`); } catch {}
+      try { storagePath = await uploadToStorage(taskPhoto.dataUrl, `${user?.id||"admin"}/${pid}.jpg`, nt.jobId, "photo"); } catch {}
       const prow = { id: pid, data_url: storagePath ? mediaUrl(storagePath) : taskPhoto.dataUrl, storage_path: storagePath, photo_type: taskPhotoType, task_id: id, job_id: nt.jobId, crew_id: user?.id || "admin", size_kb: taskPhoto.sizeKB, note: taskPhotoNote || null };
       if (setPhotos) setPhotos(p => [...p, { id: pid, dataUrl: taskPhoto.dataUrl, type: taskPhotoType, taskId: id, jobId: nt.jobId, crewId: user?.id || "admin", sizeKB: taskPhoto.sizeKB, note: taskPhotoNote, date: new Date().toISOString() }]);
       try { await sbPost("field_photos", prow); } catch { enqueue({ table: "field_photos", payload: prow }); }
@@ -3089,7 +3094,7 @@ function AdminTasks(props) {
     setRefPhotoBusy(true);
     const pid = "p" + Date.now();
     let storagePath = null;
-    try { storagePath = await uploadToStorage(refPhoto.dataUrl, `${user?.id || "admin"}/${pid}.jpg`); } catch {}
+    try { storagePath = await uploadToStorage(refPhoto.dataUrl, `${user?.id || "admin"}/${pid}.jpg`, detailTask.jobId, "photo"); } catch {}
     const photo = { id: pid, dataUrl: refPhoto.dataUrl, type: "reference", taskId: detailTask.id, jobId: detailTask.jobId, crewId: user?.id || "admin", sizeKB: refPhoto.sizeKB, note: refPhotoNote || "", date: new Date().toISOString() };
     const row = { id: pid, data_url: storagePath ? mediaUrl(storagePath) : refPhoto.dataUrl, storage_path: storagePath, photo_type: "reference", task_id: detailTask.id, job_id: detailTask.jobId, crew_id: user?.id || "admin", size_kb: refPhoto.sizeKB, note: refPhotoNote || null };
     if (setPhotos) setPhotos(p => [...p, photo]);
@@ -4466,7 +4471,7 @@ function AdminReceipts({ receipts, setReceipts, jobs, tasks, users, user, delete
     setBusy(true);
     const id = "r" + Date.now();
     let storagePath = null;
-    if (nr.dataUrl) { try { storagePath = await uploadToStorage(nr.dataUrl, `${nr.crewId||user.id}/${id}.jpg`); } catch {} }
+    if (nr.dataUrl) { try { storagePath = await uploadToStorage(nr.dataUrl, `${nr.crewId||user.id}/${id}.jpg`, jobIdVal, "receipt"); } catch {} }
     const receipt = { id, jobId: jobIdVal, category, taskId: usingJob ? nr.taskId || null : null, crewId: nr.crewId || user.id,
       dataUrl: nr.dataUrl, store: nr.store, amount: nr.amount, note: nr.note,
       paidBy: nr.paidBy, reimbursementStatus: nr.paidBy === "crew" ? "pending" : "na", createdAt: today };
@@ -4950,7 +4955,7 @@ function AdminPhotos({ photos, setPhotos, tasks, jobs, users, user, deletePhoto,
     const id = "p" + Date.now();
     const { dataUrl, sizeKB } = pendingAdminPhoto;
     let storagePath = null;
-    try { storagePath = await uploadToStorage(dataUrl, `${user.id}/${id}.jpg`); } catch {}
+    try { storagePath = await uploadToStorage(dataUrl, `${user.id}/${id}.jpg`, uploadJob, "photo"); } catch {}
     const photo = { id, dataUrl, type: uploadType, taskId: uploadTask || null, jobId: uploadJob, crewId: user.id, sizeKB, note: note || "", date: new Date().toISOString() };
     setPhotos(p => [...p, photo]);
     const row = { id, data_url: storagePath ? mediaUrl(storagePath) : dataUrl, storage_path: storagePath, photo_type: uploadType, task_id: uploadTask || null, job_id: uploadJob, crew_id: user.id, size_kb: sizeKB, note: note || null };
@@ -5948,7 +5953,7 @@ function AdminFieldMode({ jobs, tasks, setTasks, photos, setPhotos, receipts, se
     if (!pendingPhoto || !selJob) return;
     const id = "p" + Date.now();
     let storagePath = null;
-    try { storagePath = await uploadToStorage(pendingPhoto.dataUrl, `${user.id}/${id}.jpg`); } catch {}
+    try { storagePath = await uploadToStorage(pendingPhoto.dataUrl, `${user.id}/${id}.jpg`, selJob, "photo"); } catch {}
     const photo = { id, dataUrl: pendingPhoto.dataUrl, type: photoType, taskId: null, jobId: selJob, crewId: user.id, sizeKB: pendingPhoto.sizeKB, note: photoNote, date: new Date().toISOString() };
     setPhotos(p => [...p, photo]);
     const row = { id, data_url: storagePath ? mediaUrl(storagePath) : pendingPhoto.dataUrl, storage_path: storagePath, photo_type: photoType, task_id: null, job_id: selJob, crew_id: user.id, size_kb: pendingPhoto.sizeKB, note: photoNote || null };
@@ -5985,7 +5990,7 @@ function AdminFieldMode({ jobs, tasks, setTasks, photos, setPhotos, receipts, se
     setRcBusy(true);
     const id = "r" + Date.now();
     let storagePath = null;
-    if (rcPhoto) { try { storagePath = await uploadToStorage(rcPhoto, `${user.id}/${id}.jpg`); } catch {} }
+    if (rcPhoto) { try { storagePath = await uploadToStorage(rcPhoto, `${user.id}/${id}.jpg`, jobIdVal, "receipt"); } catch {} }
     const receipt = { id, dataUrl: rcPhoto, taskId: null, jobId: jobIdVal, category, crewId: user.id, store: rcForm.store, amount: rcForm.amount, note: rcForm.note, paidBy: rcForm.paidBy, reimbursementStatus: rcForm.paidBy === "crew" ? "pending" : "na", createdAt: today };
     setReceipts(p => [...p, receipt]);
     const row = { id, data_url: storagePath ? mediaUrl(storagePath) : rcPhoto, storage_path: storagePath, task_id: null, job_id: jobIdVal, category, crew_id: user.id, store: rcForm.store, amount: parseFloat(rcForm.amount)||0, note: rcForm.note, paid_by: rcForm.paidBy, reimbursement_status: rcForm.paidBy==="crew"?"pending":"na" };
@@ -6013,7 +6018,7 @@ function AdminFieldMode({ jobs, tasks, setTasks, photos, setPhotos, receipts, se
     if (taskPhoto) {
       const pid = "p" + Date.now();
       let storagePath = null;
-      try { storagePath = await uploadToStorage(taskPhoto.dataUrl, `${user.id}/${pid}.jpg`); } catch {}
+      try { storagePath = await uploadToStorage(taskPhoto.dataUrl, `${user.id}/${pid}.jpg`, selJob, "photo"); } catch {}
       const prow = { id: pid, data_url: storagePath ? mediaUrl(storagePath) : taskPhoto.dataUrl, storage_path: storagePath, photo_type: "before", task_id: id, job_id: selJob, crew_id: user.id, size_kb: taskPhoto.sizeKB, note: taskPhotoNote || null };
       setPhotos(p => [...p, { id: pid, dataUrl: taskPhoto.dataUrl, type:"before", taskId: id, jobId: selJob, crewId: user.id, note: taskPhotoNote, date: new Date().toISOString() }]);
       try { await sbPost("field_photos", prow); } catch { enqueue({ table: "field_photos", payload: prow }); }
@@ -7282,7 +7287,7 @@ function CrewTasks(props) {
     const { dataUrl, sizeKB, jobId, type } = pendingJobPhoto;
     const dbType = type === "concern" ? "progress" : type;
     let storagePath = null;
-    try { storagePath = await uploadToStorage(dataUrl, `${user.id}/${id}.jpg`); } catch {}
+    try { storagePath = await uploadToStorage(dataUrl, `${user.id}/${id}.jpg`, jobId, "photo"); } catch {}
     const photo = { id, dataUrl, type, taskId: null, jobId, crewId: user.id, sizeKB, note: note || "", date: new Date().toISOString() };
     setPhotos(p => [...p, photo]);
     const row = { id, data_url: storagePath ? mediaUrl(storagePath) : dataUrl, storage_path: storagePath, photo_type: dbType, task_id: null, job_id: jobId, crew_id: user.id, size_kb: sizeKB, note: note || null };
@@ -7306,7 +7311,7 @@ function CrewTasks(props) {
     setRcBusy(true);
     const id = "r" + Date.now();
     let storagePath = null;
-    if (rcForm.dataUrl) { try { storagePath = await uploadToStorage(rcForm.dataUrl, `${user.id}/${id}.jpg`); } catch {} }
+    if (rcForm.dataUrl) { try { storagePath = await uploadToStorage(rcForm.dataUrl, `${user.id}/${id}.jpg`, jobId, "receipt"); } catch {} }
     const receipt = { id, dataUrl: rcForm.dataUrl, taskId: null, jobId, crewId: user.id, store: rcForm.store, amount: rcForm.amount, note: rcForm.note, paidBy: rcForm.paidBy, reimbursementStatus: rcForm.paidBy === "crew" ? "pending" : "na", createdAt: today };
     setReceipts(p => [...p, receipt]);
     const row = { id, data_url: storagePath ? mediaUrl(storagePath) : rcForm.dataUrl, storage_path: storagePath, task_id: null, job_id: jobId, crew_id: user.id, store: rcForm.store, amount: parseFloat(rcForm.amount) || 0, note: rcForm.note, paid_by: rcForm.paidBy, reimbursement_status: rcForm.paidBy === "crew" ? "pending" : "na" };
@@ -7368,7 +7373,7 @@ function CrewTasks(props) {
     if (issueDataUrl) {
       const pid = "p" + Date.now();
       let storagePath = null;
-      try { storagePath = await uploadToStorage(issueDataUrl, `${user.id}/${pid}.jpg`); } catch {}
+      try { storagePath = await uploadToStorage(issueDataUrl, `${user.id}/${pid}.jpg`, jobId, "photo"); } catch {}
       const photo = { id: pid, dataUrl: issueDataUrl, type: "concern", taskId: null, jobId, crewId: user.id, sizeKB: 0, date: new Date().toISOString() };
       setPhotos(p => [...p, photo]);
       const prow = { id: pid, data_url: storagePath ? mediaUrl(storagePath) : issueDataUrl, storage_path: storagePath, photo_type: "progress", task_id: null, job_id: jobId, crew_id: user.id, size_kb: 0 };
@@ -7495,7 +7500,7 @@ function CrewTasks(props) {
     const id = "p" + Date.now();
     const ptype = taskPanel.photoType || "before";
     let storagePath = null;
-    try { storagePath = await uploadToStorage(pendingPhoto.dataUrl, `${user.id}/${id}.jpg`); } catch {}
+    try { storagePath = await uploadToStorage(pendingPhoto.dataUrl, `${user.id}/${id}.jpg`, taskPanel.jobId, "photo"); } catch {}
     const photo = { id, dataUrl: pendingPhoto.dataUrl, type: ptype, taskId: taskPanel.taskId, jobId: taskPanel.jobId, crewId: user.id, sizeKB: pendingPhoto.sizeKB, note: photoNote, date: new Date().toISOString() };
     setPhotos(p => [...p, photo]);
     const row = { id, data_url: storagePath ? mediaUrl(storagePath) : pendingPhoto.dataUrl, storage_path: storagePath, photo_type: ptype, task_id: taskPanel.taskId, job_id: taskPanel.jobId, crew_id: user.id, size_kb: pendingPhoto.sizeKB, note: photoNote || null };
@@ -7524,7 +7529,7 @@ function CrewTasks(props) {
     setTaskRcBusy(true);
     const id = "r" + Date.now();
     let storagePath = null;
-    if (taskRcForm.dataUrl) { try { storagePath = await uploadToStorage(taskRcForm.dataUrl, `${user.id}/${id}.jpg`); } catch {} }
+    if (taskRcForm.dataUrl) { try { storagePath = await uploadToStorage(taskRcForm.dataUrl, `${user.id}/${id}.jpg`, taskPanel.jobId, "receipt"); } catch {} }
     const receipt = { id, dataUrl: taskRcForm.dataUrl, taskId: taskPanel.taskId, jobId: taskPanel.jobId, crewId: user.id, store: taskRcForm.store, amount: taskRcForm.amount, note: taskRcForm.note, paidBy: taskRcForm.paidBy, reimbursementStatus: taskRcForm.paidBy === "crew" ? "pending" : "na", createdAt: today };
     setReceipts(p => [...p, receipt]);
     const row = { id, data_url: storagePath ? mediaUrl(storagePath) : taskRcForm.dataUrl, storage_path: storagePath, task_id: taskPanel.taskId, job_id: taskPanel.jobId, crew_id: user.id, store: taskRcForm.store, amount: parseFloat(taskRcForm.amount) || 0, note: taskRcForm.note, paid_by: taskRcForm.paidBy, reimbursement_status: taskRcForm.paidBy === "crew" ? "pending" : "na" };
@@ -8437,7 +8442,7 @@ function CrewPhotos(props) {
     const id = "p" + Date.now();
     const dbType = type === "concern" ? "progress" : type;
     let storagePath = null;
-    try { storagePath = await uploadToStorage(dataUrl, `${user.id}/${id}.jpg`); } catch {}
+    try { storagePath = await uploadToStorage(dataUrl, `${user.id}/${id}.jpg`, tk?.jobId, "photo"); } catch {}
     const photo = { id, dataUrl, type, taskId: task, jobId: tk?.jobId, crewId: user.id, sizeKB, date: new Date().toISOString() };
     setPhotos(p => [...p, photo]);
     const row = { id, data_url: storagePath ? mediaUrl(storagePath) : dataUrl, storage_path: storagePath, photo_type: dbType, task_id: task, job_id: tk?.jobId, crew_id: user.id, size_kb: sizeKB };
@@ -8574,7 +8579,7 @@ function CrewReceipts(props) {
     const id = "r" + Date.now();
     const today = localDate();
     let storagePath = null;
-    if (dataUrl) { try { storagePath = await uploadToStorage(dataUrl, `${user.id}/${id}.jpg`); } catch {} }
+    if (dataUrl) { try { storagePath = await uploadToStorage(dataUrl, `${user.id}/${id}.jpg`, tk?.jobId, "receipt"); } catch {} }
     const receipt = { id, dataUrl, taskId: usingTask ? task : null, jobId: tk?.jobId || null, category, crewId: user.id, store, amount, note, paidBy, reimbursementStatus: paidBy === "crew" ? "pending" : "na", createdAt: today };
     setReceipts(p => [...p, receipt]);
     const row = { id, data_url: storagePath ? mediaUrl(storagePath) : dataUrl, storage_path: storagePath, task_id: usingTask ? task : null, job_id: tk?.jobId || null, category, crew_id: user.id, store, amount: parseFloat(amount) || 0, note, paid_by: paidBy, reimbursement_status: paidBy === "crew" ? "pending" : "na" };
