@@ -8,6 +8,8 @@
 //  and can edit every field before saving.
 // ════════════════════════════════════════════════════════════════════════
 
+import { requireSession } from "../lib/require-session.mjs";
+
 const GROQ_KEY = process.env.GROQ_API_KEY;
 const GROQ_VISION_MODEL = "meta-llama/llama-4-scout-17b-16e-instruct";
 
@@ -27,6 +29,8 @@ Extract and return ONLY a JSON object with this exact structure, no markdown, no
 export default async (req) => {
   if (req.method !== "POST") return new Response("POST only", { status: 405 });
   if (!GROQ_KEY) return new Response(JSON.stringify({ error: "GROQ_API_KEY not set in Netlify env" }), { status: 500, headers: { "Content-Type": "application/json" } });
+  const auth = await requireSession(req);
+  if (auth.error) return new Response(JSON.stringify({ error: auth.error }), { status: auth.status, headers: { "Content-Type": "application/json" } });
 
   let dataUrl;
   try { ({ dataUrl } = await req.json()); }

@@ -4,6 +4,8 @@
 //  Used by the admin "Send test reminder" button and manual nudges.
 // ════════════════════════════════════════════════════════════════════════
 
+import { requireSession } from "../lib/require-session.mjs";
+
 const TW_SID = process.env.TWILIO_ACCOUNT_SID;
 const TW_TOKEN = process.env.TWILIO_AUTH_TOKEN;
 const TW_FROM = process.env.TWILIO_FROM;
@@ -11,6 +13,8 @@ const TW_FROM = process.env.TWILIO_FROM;
 export default async (req) => {
   if (req.method !== "POST") return new Response("POST only", { status: 405 });
   if (!TW_SID) return new Response("Missing Twilio env vars", { status: 500 });
+  const auth = await requireSession(req);
+  if (auth.error) return new Response(auth.error, { status: auth.status });
 
   let to, body;
   try { ({ to, body } = await req.json()); }

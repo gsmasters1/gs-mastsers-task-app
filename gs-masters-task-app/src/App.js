@@ -117,8 +117,15 @@ async function sbFetch(path, opts = {}, retried = false) {
     await refreshSession();
     return sbFetch(path, opts, true);
   }
-  if (!res.ok) throw new Error(await res.text());
+  if (!res.ok) throw Object.assign(new Error(await res.text()), { status: res.status });
   return res.status === 204 ? null : res.json();
+}
+// Calls to our own Netlify functions that require a signed-in session
+// (send-sms, scan-receipt). Refreshes once on 401, same as sbFetch.
+async function fnFetch(url, opts = {}, retried = false) {
+  const res = await fetch(url, { ...opts, headers: { ...opts.headers, Authorization: `Bearer ${_authToken || ""}` } });
+  if (res.status === 401 && !retried && _refreshToken && await refreshSession()) return fnFetch(url, opts, true);
+  return res;
 }
 const sbGet    = (t, q = "")  => sbFetch(`${t}?${q}`, { method: "GET" });
 const sbPost   = (t, d)        => sbFetch(t, { method: "POST", body: JSON.stringify(d) });
@@ -176,7 +183,9 @@ async function getTodaysWeather(job) {
   const cacheKey = job.id + ":" + localDate();
   if (_weatherCache[cacheKey] !== undefined) return _weatherCache[cacheKey];
   try {
-    const res = await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${job.lat}&longitude=${job.lng}&current=temperature_2m,weather_code&temperature_unit=fahrenheit&timezone=auto`);
+    // Every log save awaits this -- a hung request on one bar of signal
+    // must not hold up the save itself.
+    const res = await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${job.lat}&longitude=${job.lng}&current=temperature_2m,weather_code&temperature_unit=fahrenheit&timezone=auto`, { signal: AbortSignal.timeout ? AbortSignal.timeout(5000) : undefined });
     if (!res.ok) throw new Error("weather fetch failed");
     const data = await res.json();
     const category = weatherCodeToCategory(data?.current?.weather_code, data?.current?.temperature_2m);
@@ -212,7 +221,7 @@ const localDateOf = iso => {
 // a rate limit doesn't look identical to "AI just couldn't read it".
 async function scanReceiptPhoto(dataUrl) {
   try {
-    const res = await fetch("/.netlify/functions/scan-receipt", {
+    const res = await fnFetch("/.netlify/functions/scan-receipt", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ dataUrl }),
@@ -304,17 +313,40 @@ const getQueue = () => JSON.parse(localStorage.getItem(QUEUE_KEY) || "[]");
 const setQueue = (q) => localStorage.setItem(QUEUE_KEY, JSON.stringify(q));
 const enqueue  = (action) => setQueue([...getQueue(), { ...action, ts: Date.now() }]);
 
+// Items are POSTs by default; { method: "PATCH", id } replays an update
+// (offline clock-outs). A network failure stops the flush and keeps the
+// rest for next time. A server rejection (duplicate id = already saved,
+// or a permission/validation error) used to stop it too -- forever, so one
+// bad item blocked every save queued behind it. Now duplicates are dropped
+// as done and other rejections move to a failed list the office can see.
+const FAILED_KEY = "gsm_offline_failed";
+let _flushing = false;
 async function flushQueue() {
-  if (!navigator.onLine) return 0;
+  if (!navigator.onLine || _flushing) return 0;
+  _flushing = true;
   const q = getQueue();
-  let done = 0;
-  for (const action of q) {
-    try {
-      await sbPost(action.table, action.payload);
-      done++;
-    } catch { break; }
+  let handled = 0, done = 0;
+  const failed = [];
+  try {
+    for (const action of q) {
+      try {
+        if (action.method === "PATCH") await sbPatch(action.table, action.id, action.payload);
+        else await sbPost(action.table, action.payload);
+        done++;
+      } catch (e) {
+        if (!e.status || e.status === 401 || e.status >= 500) break; // offline / signed out / server hiccup -- retry later, keep order
+        if (e.status !== 409) failed.push({ ...action, error: String(e.message || e.status).slice(0, 300) });
+      }
+      handled++;
+    }
+  } finally {
+    setQueue([...q.slice(handled), ...getQueue().slice(q.length)]);
+    if (failed.length) {
+      try { localStorage.setItem(FAILED_KEY, JSON.stringify([...JSON.parse(localStorage.getItem(FAILED_KEY) || "[]"), ...failed].slice(-50))); } catch {}
+      alert(`${failed.length} offline save(s) were rejected by the server and not saved. Tell the office. / ${failed.length} registro(s) sin conexión no se guardaron. Avisa a la oficina.`);
+    }
+    _flushing = false;
   }
-  setQueue(q.slice(done));
   return done;
 }
 
@@ -1301,7 +1333,7 @@ export default function App() {
       const stopCount = entry.jobIds.length + entry.customStops.length;
       const msg = `📍 New dispatch for ${entry.date}: you have ${stopCount} stop${stopCount !== 1 ? "s" : ""} assigned. Open your app to see where to go. ${appUrl}/?tab=tasks`;
       if (member?.phone) {
-        fetch("/.netlify/functions/send-sms", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ to: member.phone, body: msg }) }).catch(() => {});
+        fnFetch("/.netlify/functions/send-sms", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ to: member.phone, body: msg }) }).catch(() => {});
       }
       sendPush([entry.crewId], "📍 New Dispatch", `You have ${stopCount} stop${stopCount !== 1 ? "s" : ""} for ${entry.date}. Tap to see where to go.`, "/?tab=tasks");
     }
@@ -2620,7 +2652,7 @@ function Dash({ tasks, jobs, users, receipts, mats, setMats, setTab, navTo, open
     const crewPhone = m && users.find(u => u.id === m.crewId)?.phone;
     if (crewPhone) {
       const j = m ? jobs.find(x => x.id === m.jobId)?.name : "";
-      fetch("/.netlify/functions/send-sms", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ to: crewPhone, body: `🔧 Your material request has been fulfilled: "${m.en}"${j ? " — " + j : ""}. Check the job site. — G.S. Masters` }) }).catch(() => {});
+      fnFetch("/.netlify/functions/send-sms", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ to: crewPhone, body: `🔧 Your material request has been fulfilled: "${m.en}"${j ? " — " + j : ""}. Check the job site. — G.S. Masters` }) }).catch(() => {});
     }
   };
 
@@ -2640,7 +2672,7 @@ function Dash({ tasks, jobs, users, receipts, mats, setMats, setTab, navTo, open
     if (crewMember?.phone) {
       const crewFirstName = crewMember.name?.split(" ")[0] || "Crew";
       const smsBody = `Hi ${crewFirstName}, Admin replied to your issue: "${reply}" — GS Masters Field App`;
-      fetch("/.netlify/functions/send-sms", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ to: crewMember.phone, body: smsBody }) }).catch(() => {});
+      fnFetch("/.netlify/functions/send-sms", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ to: crewMember.phone, body: smsBody }) }).catch(() => {});
     }
     sendPush([issue.crewId], "💬 Admin Reply", reply.slice(0, 100), "/?log=1");
   };
@@ -2957,7 +2989,7 @@ function AdminTasks(props) {
       const member = users.find(u => u.id === crewId);
       if (member?.phone) {
         const msg = `New task assigned to you: "${nt.title}"\nJob: ${jobName}${nt.dueDate ? `\nDue: ${nt.dueDate}` : ""}\nOpen your crew app: ${appUrl}/?tab=tasks`;
-        fetch("/.netlify/functions/send-sms", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ to: member.phone, body: msg }) }).catch(() => {});
+        fnFetch("/.netlify/functions/send-sms", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ to: member.phone, body: msg }) }).catch(() => {});
       }
     }
     sendPush(nt.assignedTo, pushTitle, pushBody, "/?tab=tasks");
@@ -3013,7 +3045,7 @@ function AdminTasks(props) {
     const crewPhone = m && users.find(u => u.id === m.crewId)?.phone;
     if (crewPhone) {
       const j = m ? jobs.find(x => x.id === m.jobId)?.name : "";
-      fetch("/.netlify/functions/send-sms", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ to: crewPhone, body: `🔧 Your material request has been fulfilled: "${m.en}"${j ? " — " + j : ""}. Check the job site. — G.S. Masters` }) }).catch(() => {});
+      fnFetch("/.netlify/functions/send-sms", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ to: crewPhone, body: `🔧 Your material request has been fulfilled: "${m.en}"${j ? " — " + j : ""}. Check the job site. — G.S. Masters` }) }).catch(() => {});
     }
   };
 
@@ -4452,7 +4484,7 @@ function AdminReceipts({ receipts, setReceipts, jobs, tasks, users, user, delete
     const crewPhone = r && users.find(u => u.id === r.crewId)?.phone;
     if (crewPhone) {
       const j = r ? jobs.find(x => x.id === r.jobId)?.name : "";
-      fetch("/.netlify/functions/send-sms", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ to: crewPhone, body: `✅ Your receipt has been reimbursed: ${r.store} $${(+r.amount||0).toFixed(2)}${j ? " — " + j : ""}. — G.S. Masters` }) }).catch(() => {});
+      fnFetch("/.netlify/functions/send-sms", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ to: crewPhone, body: `✅ Your receipt has been reimbursed: ${r.store} $${(+r.amount||0).toFixed(2)}${j ? " — " + j : ""}. — G.S. Masters` }) }).catch(() => {});
     }
   };
 
@@ -5472,7 +5504,7 @@ function CrewMgmt({ users, tasks, setActive, setIs1099, setIsSupervisor, addUser
             <button className="btn btn-p" onClick={() => { navigator.clipboard?.writeText(inviteText(invite)); }}><Icon n="check" s={14} /> Copy</button>
             <button className="btn btn-g" onClick={async () => {
               if (!invite.phone) { alert("No phone on file for this crew member."); return; }
-              const res = await fetch("/.netlify/functions/send-sms", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ to: invite.phone, body: inviteText(invite) }) });
+              const res = await fnFetch("/.netlify/functions/send-sms", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ to: invite.phone, body: inviteText(invite) }) });
               const d = await res.json();
               alert(d.ok ? "✓ Text sent via Twilio!" : "SMS failed — check Twilio env vars in Netlify.");
             }}><Icon n="translate" s={14} /> Text (Twilio)</button>
@@ -5497,7 +5529,7 @@ function TestReminder({ f }) {
     setBusy(true); setStatus("");
     try {
       const link = (f.appUrl || window.location.origin) + "/?log=1";
-      const res = await fetch("/.netlify/functions/send-sms", {
+      const res = await fnFetch("/.netlify/functions/send-sms", {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ to: phone, body: `Test from GS Masters Field: don't forget to log today's work. Tap here: ${link}` }),
       });
@@ -6603,7 +6635,7 @@ function AdminDispatch({ users, jobs, dispatches, upsertDispatch, deleteDispatch
     const appUrl = settings?.appUrl || window.location.origin;
     const msg = `📍 Dispatch for ${date}: ${stopCount} stop${stopCount !== 1 ? "s" : ""} assigned. Open your app: ${appUrl}/?tab=tasks`;
     if (member?.phone) {
-      fetch("/.netlify/functions/send-sms", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ to: member.phone, body: msg }) }).catch(() => {});
+      fnFetch("/.netlify/functions/send-sms", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ to: member.phone, body: msg }) }).catch(() => {});
     }
     sendPush([crewId], "📍 Dispatch Update", `${stopCount} stop${stopCount !== 1 ? "s" : ""} assigned for ${date}. Tap to see where to go.`, "/?tab=tasks");
     setNotified(p => ({ ...p, [crewId]: true }));
@@ -6930,7 +6962,13 @@ function Crew(props) {
     // already does.
     const note = `🚩 ISSUE from ${user.name}: ${issueText}`;
     const row = { id, text_en: note, text_es: note, task_id: null, job_id: null, crew_id: user.id, log_date: today };
-    try { await sbPost("field_logs", row); } catch {}
+    try { await sbPost("field_logs", row); } catch { enqueue({ table: "field_logs", payload: row }); }
+    // The attached photo used to be dropped -- the text said "[photo
+    // attached]" but it was never saved anywhere.
+    if (issuePhoto) {
+      const prow = { id: "p" + Date.now(), data_url: issuePhoto, storage_path: null, photo_type: "progress", task_id: null, job_id: openCheckin?.jobId || null, crew_id: user.id, size_kb: Math.round(issuePhoto.length * 0.75 / 1024), note: `🚩 ${issueText}`.slice(0, 500) };
+      try { await sbPost("field_photos", prow); } catch { enqueue({ table: "field_photos", payload: prow }); }
+    }
     if (settings?.gtKey) {
       try {
         const [enBody, esBody] = await Promise.all([
@@ -6942,7 +6980,7 @@ function Crew(props) {
     }
     // SMS to admin
     const adminPhone = settings?.adminPhone || "+12053699710";
-    fetch("/.netlify/functions/send-sms", {
+    fnFetch("/.netlify/functions/send-sms", {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ to: adminPhone, body: `🚩 ISSUE — ${user.name}: ${issueText}${issuePhoto ? " [photo attached]" : ""}` }),
     }).catch(() => {});
@@ -7000,7 +7038,15 @@ function Crew(props) {
         prefer: "return=minimal",
       });
       setOpenCheckin(null);
-    } catch {}
+    } catch (e) {
+      // Was silent: the banner stayed, but nobody knew the clock-out never
+      // saved, so it got auto-closed the next day with bogus hours.
+      if (!e.status) {
+        enqueue({ table: "field_checkins", method: "PATCH", id: openCheckin.id, payload: { check_out: now.toISOString(), hours: hrs, lat_out: gps?.lat || null, lng_out: gps?.lng || null } });
+        setOpenCheckin(null);
+        alert(lang === "es" ? "Sin señal — tu salida se guardará cuando vuelva la conexión." : "No signal — your clock-out is saved on this phone and will send when you're back online.");
+      } else alert(lang === "es" ? "No se pudo registrar tu salida. Intenta otra vez." : "Clock-out did not save. Try again.");
+    }
     setClockingOut(false);
   };
 
@@ -7016,7 +7062,9 @@ function Crew(props) {
         prefer: "return=minimal",
       });
       setStaleCheckin(null);
-    } catch {}
+    } catch {
+      alert(lang === "es" ? "No se pudo guardar. Revisa tu conexión e intenta otra vez." : "Could not save. Check your connection and try again.");
+    }
     setManualBusy(false);
   };
 
@@ -7110,7 +7158,7 @@ function Crew(props) {
       </button>
 
       <div style={{ padding: 18, paddingBottom: 24 }}>
-        {ctab === "tasks" && <CrewTasks {...props} todayJobIds={todayJobIds} />}
+        {ctab === "tasks" && <CrewTasks {...props} todayJobIds={todayJobIds} setTodayJobIds={setTodayJobIds} />}
         {ctab === "cam" && <CrewPhotos {...props} todayJobIds={todayJobIds} />}
         {ctab === "rec" && <CrewReceipts {...props} todayJobIds={todayJobIds} />}
         {ctab === "log" && <CrewLog {...props} todayJobIds={todayJobIds} />}
@@ -7155,7 +7203,7 @@ function Crew(props) {
 }
 
 function CrewTasks(props) {
-  const { user, tasks, setTasks, jobs, lang, t, settings, photos, setPhotos, receipts, setReceipts, logs, setLogs, dispatches, mats, todayJobIds } = props;
+  const { user, tasks, setTasks, jobs, lang, t, settings, photos, setPhotos, receipts, setReceipts, logs, setLogs, dispatches, mats, todayJobIds, setTodayJobIds } = props;
   const closedJobIds = new Set(jobs.filter(j => j.status === "closed").map(j => j.id));
   const myAssignedAll = tasks.filter(t => (Array.isArray(t.assignedTo) ? t.assignedTo.includes(user.id) : t.assignedTo === user.id) && !closedJobIds.has(t.jobId));
   // Only tasks for a job this crew member actually checked into today are
@@ -7272,7 +7320,7 @@ function CrewTasks(props) {
     // Twilio notify admin of crew receipt
     if (rcForm.paidBy === "crew") {
       const msg = `[Field App] ${user.name} submitted a receipt needing reimbursement: ${rcForm.store} $${parseFloat(rcForm.amount).toFixed(2)} — ${job?.name || jobId}`;
-      fetch("/.netlify/functions/send-sms", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ to: "+12053699710", body: msg }) }).catch(() => {});
+      fnFetch("/.netlify/functions/send-sms", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ to: "+12053699710", body: msg }) }).catch(() => {});
     }
     setRcForm({ store: "", amount: "", note: "", paidBy: "crew", dataUrl: null });
     setRcBusy(false);
@@ -7332,7 +7380,7 @@ function CrewTasks(props) {
     }
     // Twilio alert admin
     const msg = `⚠️ Field Issue — ${job?.name || jobId}\nWorker: ${user.name}\n"${issueText}"\nOpen app to review.`;
-    fetch("/.netlify/functions/send-sms", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ to: "+12053699710", body: msg }) }).catch(() => {});
+    fnFetch("/.netlify/functions/send-sms", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ to: "+12053699710", body: msg }) }).catch(() => {});
     setIssueText(""); setIssueDataUrl(null); setIssueBusy(false);
     setActivePanel(null);
   };
@@ -7397,7 +7445,7 @@ function CrewTasks(props) {
     // and happening to check the Materials panel. Now alerts immediately,
     // same pattern as the issue-report SMS below.
     const adminPhone = settings?.adminPhone || "+12053699710";
-    fetch("/.netlify/functions/send-sms", {
+    fnFetch("/.netlify/functions/send-sms", {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ to: adminPhone, body: `🔧 Material needed — ${user.name} on ${job?.name || "job"}${tk ? ` (task: ${tk.title})` : ""}: "${mat}"` }),
     }).catch(() => {});
@@ -7428,7 +7476,7 @@ function CrewTasks(props) {
       } catch {}
     }
     const adminPhone = settings?.adminPhone || "+12053699710";
-    fetch("/.netlify/functions/send-sms", {
+    fnFetch("/.netlify/functions/send-sms", {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ to: adminPhone, body: `💬 ${user.name} on task "${task.title}" (${job?.name || "job"}): "${text}"` }),
     }).catch(() => {});
@@ -7494,7 +7542,7 @@ function CrewTasks(props) {
     if (taskRcForm.paidBy === "crew") {
       const job = jobs.find(j => j.id === taskPanel.jobId);
       const msg = `[Field App] ${user.name} submitted a receipt: ${taskRcForm.store} $${parseFloat(taskRcForm.amount).toFixed(2)} — ${job?.name}`;
-      fetch("/.netlify/functions/send-sms", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ to: "+12053699710", body: msg }) }).catch(() => {});
+      fnFetch("/.netlify/functions/send-sms", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ to: "+12053699710", body: msg }) }).catch(() => {});
     }
     setTaskRcForm({ store: "", amount: "", note: "", paidBy: "crew", dataUrl: null });
     setTaskRcBusy(false);
@@ -7529,7 +7577,17 @@ function CrewTasks(props) {
       .catch(() => {});
   }, [user.id]);
 
+  // GPS can take several seconds; a second tap during that wait used to
+  // create a duplicate check-in (dozens of <60s-apart pairs in the data).
+  const checkInBusy = useRef(false);
+  const [checkingIn, setCheckingIn] = useState(null);
   const checkIn = async (job) => {
+    if (checkInBusy.current || openCheckins[job.id]) return;
+    checkInBusy.current = true;
+    setCheckingIn(job.id);
+    try { await doCheckIn(job); } finally { checkInBusy.current = false; setCheckingIn(null); }
+  };
+  const doCheckIn = async (job) => {
     const loc = await getLocation();
     setGps(loc);
     // This is the tap-to-check-in path (no QR scan) -- distance was already
@@ -7551,6 +7609,9 @@ function CrewTasks(props) {
     const id = "ci" + Date.now();
     const row = { id, crew_id: user.id, job_id: job.id, check_in: new Date().toISOString(), lat_in: loc?.lat || null, lng_in: loc?.lng || null, work_date: today };
     setOpenCheckins(p => ({ ...p, [job.id]: { id, jobId: job.id, checkIn: new Date().toISOString() } }));
+    // Unlock this job's tasks right away -- they used to stay locked until
+    // the crew member switched tabs and back.
+    setTodayJobIds?.(p => new Set([...p, job.id]));
     try { await sbPost("field_checkins", row); } catch { enqueue({ table: "field_checkins", payload: row }); }
   };
 
@@ -7562,7 +7623,15 @@ function CrewTasks(props) {
     const inTime = new Date(open.checkIn);
     const hours = Math.round(((now - inTime) / 3600000) * 100) / 100;
     const patch = { check_out: now.toISOString(), lat_out: loc?.lat || null, lng_out: loc?.lng || null, hours };
-    try { await sbFetch(`field_checkins?id=eq.${open.id}`, { method: "PATCH", body: JSON.stringify(patch), prefer: "return=minimal" }); } catch {}
+    try { await sbFetch(`field_checkins?id=eq.${open.id}`, { method: "PATCH", body: JSON.stringify(patch), prefer: "return=minimal" }); }
+    catch (e) {
+      // Was silent -- offline check-outs were simply lost (no PATCH queue),
+      // so the row stayed open and got auto-closed next day.
+      if (!e.status) {
+        enqueue({ table: "field_checkins", method: "PATCH", id: open.id, payload: patch });
+        alert(lang === "es" ? "Sin señal — tu salida se guardará cuando vuelva la conexión." : "No signal — your check-out is saved on this phone and will send when you're back online.");
+      } else { alert(lang === "es" ? "No se pudo registrar tu salida. Intenta otra vez." : "Check-out did not save. Try again."); return; }
+    }
     setOpenCheckins(p => { const n = { ...p }; delete n[job.id]; return n; });
     setCheckedJob(null);
   };
@@ -7813,8 +7882,8 @@ function CrewTasks(props) {
                 ? <button className="btn btn-sm btn-a" onClick={() => requestCheckOut(job)}>
                     <Icon n="power" s={13} /> {t.checkOut}
                   </button>
-                : <button className={`btn btn-sm ${ci ? "btn-g" : "btn-s"}`} onClick={() => checkIn(job)}>
-                    <Icon n="pin" s={13} /> {ci ? t.checkedIn : t.checkIn}
+                : <button className={`btn btn-sm ${ci ? "btn-g" : "btn-s"}`} onClick={() => checkIn(job)} disabled={checkingIn === jid}>
+                    {checkingIn === jid ? <span className="spin" /> : <><Icon n="pin" s={13} /> {ci ? t.checkedIn : t.checkIn}</>}
                   </button>
               }
             </div>
