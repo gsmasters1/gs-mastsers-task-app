@@ -20,7 +20,10 @@ jobs:
           node-version: "20"
           cache: npm
           cache-dependency-path: gs-masters-task-app/package-lock.json
-      - run: npm ci
+      # The existing tracked lock file predates a transitive yaml dependency.
+      # npm install repairs the runner's lockfile until a dedicated lockfile
+      # refresh is committed; this does not alter the deployed app source.
+      - run: npm install --no-audit --no-fund
       - name: Check-in save outcomes
         run: CI=true npm test -- --watchAll=false --runInBand checkinSave.test.js
       - name: One checkout SMS per crew
