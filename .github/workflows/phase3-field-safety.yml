@@ -24,7 +24,9 @@ jobs:
       # npm install repairs the runner's lockfile until a dedicated lockfile
       # refresh is committed; this does not alter the deployed app source.
       - run: npm install --no-audit --no-fund
-      # The tracked react-scripts shim lacks executable permission on Linux.\n      # Invoke its JS entry point directly to avoid ENOEXEC/permission denied.\n      - name: Check-in save outcomes
+      # The tracked react-scripts shim lacks executable permission on Linux.
+      # Invoke its JS entry point directly to avoid ENOEXEC/permission denied.
+      - name: Check-in save outcomes
         run: CI=true node node_modules/react-scripts/bin/react-scripts.js test --watchAll=false --runInBand checkinSave.test.js
       - name: One checkout SMS per crew
         run: node --test netlify/functions/field-reminder-dedupe.test.mjs
