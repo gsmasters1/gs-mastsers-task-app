@@ -1,5 +1,7 @@
 [build]
-  command = "npm run build"
+  # Existing lockfile misses a transitive dependency and react-scripts shim lacks +x on Linux.
+  # Repair dependencies and invoke the JS entry directly until the lockfile is regenerated.
+  command = "npm install --no-audit --no-fund && CI=false node node_modules/react-scripts/bin/react-scripts.js build"
   publish = "build"
   functions = "netlify/functions"
 
