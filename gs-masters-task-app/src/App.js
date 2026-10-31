@@ -8035,6 +8035,20 @@ function CrewTasks(props) {
     const inTime = new Date(open.checkIn);
     const hours = Math.round(((now - inTime) / 3600000) * 100) / 100;
     const patch = { check_out: now.toISOString(), lat_out: loc?.lat || null, lng_out: loc?.lng || null, hours };
+    // If the check-in itself is still queued, a PATCH to Supabase would
+    // affect zero rows but return HTTP 204, silently losing the checkout.
+    // Queue this update *behind* the INSERT, even when a signal returns.
+    const unsentInsert = open.pendingSync || getQueue().some(a =>
+      a.table === "field_checkins" && a.method !== "PATCH" && a.payload?.id === open.id);
+    if (unsentInsert) {
+      enqueue({ table: "field_checkins", method: "PATCH", id: open.id, payload: patch });
+      setOpenCheckins(p => { const n = { ...p }; delete n[job.id]; return n; });
+      setCheckedJob(null);
+      alert(lang === "es"
+        ? "La entrada y salida esperan sincronización. No están confirmadas hasta que vuelva la señal."
+        : "Check-in and checkout are queued in order; neither is confirmed until sync completes.");
+      return;
+    }
     try { await sbFetch(`field_checkins?id=eq.${open.id}`, { method: "PATCH", body: JSON.stringify(patch), prefer: "return=minimal" }); }
     catch (e) {
       // Was silent -- offline check-outs were simply lost (no PATCH queue),

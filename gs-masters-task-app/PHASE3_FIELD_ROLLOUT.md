@@ -15,7 +15,7 @@ It does not change bank integration, billing approval, or the accounting reminde
 - [ ] Alberto signs in on his usual device and clocks in and out at an actual job location. Check the server row, not only the green UI.
 - [ ] Alex repeats on his own device; check-in must not require an assigned task.
 - [ ] On a job with zero tasks, crew checks in, records a free-text description of work, and checks out. Office sees the log attached to the correct job.
-- [ ] With network disabled, check-in shows **Pending sync**, and the queued action saves once after reconnecting. A server 401/403 must show **NOT checked in** and must never enter the offline queue.
+- [ ] With network disabled, check-in shows **Pending sync**, then an offline checkout queues behind that check-in and both actions save in order after reconnecting. A server 401/403 must show **NOT checked in** and must never enter the offline queue.
 - [ ] With a check-in left open from yesterday, opening the app asks for the **actual checkout date/time**; no fabricated auto-close is entered. QR clock-in must direct the user to correct the stale shift first.
 - [ ] Verify the **5:30 PM Central** daily reminder sends at most one checkout SMS per crew member; the old 6 PM sender has no schedule. Confirm morning 7 AM Central Mon–Sat check-in reminders still work. Test with opted-in office test numbers before relying on live texts.
 - [ ] Confirm `SUPABASE_SERVICE_KEY`, Twilio secrets and Netlify scheduled functions are configured server-side, RLS policies are correct, and SMS logs do not expose PINs or credentials.
