@@ -26,4 +26,4 @@ It does not change bank integration, billing approval, or the accounting reminde
 
 The client change makes a permission denial visible; it **cannot repair a missing Alberto Auth identity or Supabase RLS policy** by itself. Exact cause needs a real authenticated test and the corresponding Supabase response/row. SMS scheduling, genuine GPS behavior and offline replay require device testing. Until those are done, code can be merged after CI but should not be described as production-verified.
 
-Dependency housekeeping: the repository's existing lockfile omits `yaml@2.9.1`. The CI runner currently uses `npm install` to resolve that mismatch. Regenerate and commit the lockfile before requiring `npm ci` for reproducible builds.
+Dependency housekeeping: the repository's existing lockfile omits `yaml@2.9.1`. The CI runner currently uses `npm install` to resolve that mismatch and invokes `react-scripts` using `node` because the tracked executable shim has incorrect Linux permissions. Regenerate and commit the lockfile before requiring `npm ci` for reproducible builds.
