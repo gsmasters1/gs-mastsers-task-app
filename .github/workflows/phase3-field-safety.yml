@@ -1,0 +1,34 @@
+name: Phase 3 field check-in safety
+
+on:
+  pull_request:
+    paths:
+      - "gs-masters-task-app/**"
+      - ".github/workflows/phase3-field-safety.yml"
+  workflow_dispatch:
+
+jobs:
+  phase3:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: gs-masters-task-app
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: gs-masters-task-app/package-lock.json
+      # The existing tracked lock file predates a transitive yaml dependency.
+      # npm install repairs the runner's lockfile until a dedicated lockfile
+      # refresh is committed; this does not alter the deployed app source.
+      - run: npm install --no-audit --no-fund
+      # The tracked react-scripts shim lacks executable permission on Linux.
+      # Invoke its JS entry point directly to avoid ENOEXEC/permission denied.
+      - name: Check-in save outcomes
+        run: CI=true node node_modules/react-scripts/bin/react-scripts.js test --watchAll=false --runInBand checkinSave.test.js
+      - name: One checkout SMS per crew
+        run: node --test netlify/functions/field-reminder-dedupe.test.mjs
+      - name: Production bundle
+        run: CI=false node node_modules/react-scripts/bin/react-scripts.js build
