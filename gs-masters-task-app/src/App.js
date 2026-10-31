@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { createClient } from "@supabase/supabase-js";
+import { saveCheckinOrQueue, checkinSaveMessage } from "./checkinSave";
 import { MapContainer, TileLayer, Marker, Popup } from "react-leaflet";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
@@ -2042,6 +2043,12 @@ function QRClockIn({ jobId, theme, loggedInUser }) {
       // so crew-pay excludes it from payroll pending a manual correction
       // instead of quietly counting bogus hours.
       const openRows = await sbGet("field_checkins", `crew_id=eq.${u.id}&check_out=is.null`);
+      const unresolved = (openRows || []).find(r => r.work_date && r.work_date < today);
+      if (unresolved) {
+        setPinErr("Your previous checkout is missing. Open the field app to enter your actual time before starting another shift. / Falta la salida anterior. Abre la app para corregirla.");
+        setBusy(false);
+        return;
+      }
       for (const other of (openRows || []).filter(r => r.job_id !== jobId)) {
         const hrs = Math.min(14, Math.round((now - new Date(other.check_in)) / 36000) / 100);
         await sbFetch(`field_checkins?id=eq.${other.id}`, {
@@ -7938,18 +7945,12 @@ function CrewTasks(props) {
     sbGet("field_checkins", `crew_id=eq.${user.id}&check_out=is.null`)
       .then(rows => {
         if (!rows?.length) return;
-        const now = new Date();
         const map = {};
         rows.forEach(r => {
-          // Auto-close stale check-ins from previous days. Capped the same
-          // way as the job-switch auto-close above -- a multi-day-old
-          // check-in shouldn't store a multi-day "shift" (seen up to 146h).
-          if (r.work_date && r.work_date < today) {
-            const hrs = Math.min(14, Math.round((now - new Date(r.check_in)) / 36000) / 100);
-            sbFetch(`field_checkins?id=eq.${r.id}`, { method: "PATCH", body: JSON.stringify({ check_out: now.toISOString(), hours: hrs, auto_closed: true, method: "auto" }), prefer: "return=minimal" }).catch(() => {});
-          } else {
-            map[r.job_id] = { id: r.id, jobId: r.job_id, checkIn: r.check_in };
-          }
+          // Never invent a checkout time for yesterday's shift. Crew's
+          // correction dialog in Crew() collects the actual time.
+          if (r.work_date && r.work_date < today) return;
+          map[r.job_id] = { id: r.id, jobId: r.job_id, checkIn: r.check_in };
         });
         setOpenCheckins(map);
       })
@@ -7974,24 +7975,56 @@ function CrewTasks(props) {
     // enforced, unlike the QR flow, which already hard-blocks at the same
     // QR_MAX_DIST_MI. That made this the one way to check in from anywhere
     // with no location check at all. Same threshold, same rule, both paths.
+    let siteDistance = null;
     if (loc && job.lat) {
       const dist = distanceMi(loc, { lat: job.lat, lng: job.lng });
+      siteDistance = dist;
       if (dist !== null && dist > QR_MAX_DIST_MI) {
         alert(lang === "es"
           ? `Demasiado lejos del sitio (${dist.toFixed(2)} mi). Debes estar a menos de ½ milla.`
           : `Too far from site (${dist.toFixed(2)} mi away). Must be within ½ mile.`);
         return;
       }
-      setCheckedJob({ id: job.id, dist });
-    } else setCheckedJob({ id: job.id, dist: null });
-    // Save check-in to DB
+    }
+    // The database may reject a specific crew member (expired auth/RLS),
+    // even though another employee can clock in. Never present that failure
+    // as a successful or offline check-in.
+    let previous = [];
+    try {
+      previous = await sbGet("field_checkins", `crew_id=eq.${user.id}&job_id=eq.${job.id}&check_out=is.null&limit=1`);
+    } catch (e) {
+      if (e.status) {
+        alert(checkinSaveMessage(e, lang));
+        return;
+      } // A network outage is handled by the offline queue below.
+    }
+    if (previous.length) {
+      const ci = previous[0];
+      setOpenCheckins(p => ({ ...p, [job.id]: { id: ci.id, jobId: job.id, checkIn: ci.check_in } }));
+      setCheckedJob({ id: job.id, dist: siteDistance });
+      setTodayJobIds?.(p => new Set([...p, job.id]));
+      alert(lang === "es" ? "Ya tienes una entrada abierta en este trabajo." : "You are already checked in at this job.");
+      return;
+    }
+    const now = new Date().toISOString();
     const id = "ci" + Date.now();
-    const row = { id, crew_id: user.id, job_id: job.id, check_in: new Date().toISOString(), lat_in: loc?.lat || null, lng_in: loc?.lng || null, work_date: today };
-    setOpenCheckins(p => ({ ...p, [job.id]: { id, jobId: job.id, checkIn: new Date().toISOString() } }));
-    // Unlock this job's tasks right away -- they used to stay locked until
-    // the crew member switched tabs and back.
+    const row = { id, crew_id: user.id, job_id: job.id, check_in: now, lat_in: loc?.lat || null, lng_in: loc?.lng || null, work_date: today };
+    let result;
+    try {
+      result = await saveCheckinOrQueue(row, sbPost, enqueue);
+    } catch (e) {
+      alert(checkinSaveMessage(e, lang));
+      return;
+    }
+    setOpenCheckins(p => ({ ...p, [job.id]: { id, jobId: job.id, checkIn: now, pendingSync: result === "queued" } }));
+    setCheckedJob({ id: job.id, dist: siteDistance });
+    // Unlock this job for work logging, even while an offline save is queued.
     setTodayJobIds?.(p => new Set([...p, job.id]));
-    try { await sbPost("field_checkins", row); } catch { enqueue({ table: "field_checkins", payload: row }); }
+    if (result === "queued") {
+      alert(lang === "es"
+        ? "Sin conexión: entrada pendiente de sincronizar. No está confirmada hasta volver la señal."
+        : "No connection: check-in is pending sync, NOT yet confirmed by the office.");
+    }
   };
 
   const checkOut = async (job) => {
@@ -8292,10 +8325,10 @@ function CrewTasks(props) {
               </div>
               {openCheckins[jid]
                 ? <button className="btn btn-sm btn-a" onClick={() => requestCheckOut(job)}>
-                    <Icon n="power" s={13} /> {t.checkOut}
+                    <Icon n="power" s={13} /> {openCheckins[jid]?.pendingSync ? (lang === "es" ? "Sin confirmar · Salir" : "Pending sync · Clock out") : t.checkOut}
                   </button>
                 : <button className={`btn btn-sm ${ci ? "btn-g" : "btn-s"}`} onClick={() => checkIn(job)} disabled={checkingIn === jid}>
-                    {checkingIn === jid ? <span className="spin" /> : <><Icon n="pin" s={13} /> {ci ? t.checkedIn : t.checkIn}</>}
+                    {checkingIn === jid ? <span className="spin" /> : <><Icon n="pin" s={13} /> {openCheckins[jid]?.pendingSync ? (lang === "es" ? "Pendiente de sincronizar" : "Pending sync") : (ci ? t.checkedIn : t.checkIn)}</>}
                   </button>
               }
             </div>

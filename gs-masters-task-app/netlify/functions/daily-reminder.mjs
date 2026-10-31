@@ -1,3 +1,4 @@
+import { uniqueLatestCrewCheckins } from "./field-reminder-dedupe.mjs";
 // ════════════════════════════════════════════════════════════════════════
 //  GS MASTERS FIELD APP — Evening Reminder
 //  Scheduled Netlify Function — 22:30 UTC ≈ 5:30 PM Central (CDT)
@@ -65,8 +66,11 @@ export default async (req) => {
 
     // ── 2. SEND CHECK-OUT REMINDER to anyone still on the clock ──────
     if (TW_SID && openCheckins?.length) {
-      const profileIds = [...new Set(openCheckins.map(c => c.crew_id))];
-      const jobIds     = [...new Set(openCheckins.map(c => c.job_id))];
+      // Multiple open jobs for one person are one reminder, not multiple
+      // SMS messages. Keep the most recent check-in for context.
+      const crewOpen = uniqueLatestCrewCheckins(openCheckins);
+      const profileIds = [...new Set(crewOpen.map(c => c.crew_id))];
+      const jobIds     = [...new Set(crewOpen.map(c => c.job_id))];
       const [profiles, jobs] = await Promise.all([
         sbGet(`field_profiles?id=in.(${profileIds.join(",")})&select=id,name,phone,preferred_lang`),
         sbGet(`field_jobs?id=in.(${jobIds.join(",")})&select=id,name`),
@@ -74,8 +78,8 @@ export default async (req) => {
       const profileMap = Object.fromEntries((profiles || []).map(p => [p.id, p]));
       const jobMap     = Object.fromEntries((jobs || []).map(j => [j.id, j]));
 
-      stillOpenNames = [...new Set(openCheckins.map(c => profileMap[c.crew_id]?.name).filter(Boolean))];
-      for (const ci of openCheckins) {
+      stillOpenNames = [...new Set(crewOpen.map(c => profileMap[c.crew_id]?.name).filter(Boolean))];
+      for (const ci of crewOpen) {
         const p = profileMap[ci.crew_id];
         const j = jobMap[ci.job_id];
         if (!p?.phone) continue;

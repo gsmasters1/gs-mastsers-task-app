@@ -1,0 +1,29 @@
+name: Phase 3 field check-in safety
+
+on:
+  pull_request:
+    paths:
+      - "gs-masters-task-app/**"
+      - ".github/workflows/phase3-field-safety.yml"
+  workflow_dispatch:
+
+jobs:
+  phase3:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: gs-masters-task-app
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: gs-masters-task-app/package-lock.json
+      - run: npm ci
+      - name: Check-in save outcomes
+        run: CI=true npm test -- --watchAll=false --runInBand checkinSave.test.js
+      - name: One checkout SMS per crew
+        run: node --test netlify/functions/field-reminder-dedupe.test.mjs
+      - name: Production bundle
+        run: CI=false npm run build
