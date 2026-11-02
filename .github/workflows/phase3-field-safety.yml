@@ -26,8 +26,8 @@ jobs:
       - run: npm install --no-audit --no-fund
       # The tracked react-scripts shim lacks executable permission on Linux.
       # Invoke its JS entry point directly to avoid ENOEXEC/permission denied.
-      - name: Check-in save outcomes
-        run: CI=true node node_modules/react-scripts/bin/react-scripts.js test --watchAll=false --runInBand checkinSave.test.js
+      - name: Check-in and login safety
+        run: CI=true node node_modules/react-scripts/bin/react-scripts.js test --watchAll=false --runInBand checkinSave.test.js loginNetwork.test.js
       - name: One checkout SMS per crew
         run: node --test netlify/functions/field-reminder-dedupe.test.mjs
       - name: Production bundle
