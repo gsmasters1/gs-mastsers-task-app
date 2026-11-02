@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { createClient } from "@supabase/supabase-js";
 import { saveCheckinOrQueue, checkinSaveMessage } from "./checkinSave";
+import { withLoginTimeout, loginErrorMessage } from "./loginNetwork";
 import { MapContainer, TileLayer, Marker, Popup } from "react-leaflet";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
@@ -68,9 +69,10 @@ function scheduleTokenRefresh(expiresInSec) {
   _tokenRefreshTimer = setTimeout(refreshSession, delay);
 }
 
-async function sbAuthSignIn(profileId, pin) {
+async function sbAuthSignIn(profileId, pin, signal) {
   const res = await fetch(`${SB_URL}/auth/v1/token?grant_type=password`, {
     method: "POST",
+    signal,
     headers: { apikey: SB_JWT, "Content-Type": "application/json" },
     body: JSON.stringify({ email: `${profileId}@gsm.internal`, password: pin }),
   });
@@ -128,7 +130,7 @@ async function fnFetch(url, opts = {}, retried = false) {
   if (res.status === 401 && !retried && _refreshToken && await refreshSession()) return fnFetch(url, opts, true);
   return res;
 }
-const sbGet    = (t, q = "")  => sbFetch(`${t}?${q}`, { method: "GET" });
+const sbGet    = (t, q = "", options = {}) => sbFetch(`${t}?${q}`, { method: "GET", ...options });
 const sbPost   = (t, d)        => sbFetch(t, { method: "POST", body: JSON.stringify(d) });
 const sbPatch  = (t, id, d)    => sbFetch(`${t}?id=eq.${id}`, { method: "PATCH", body: JSON.stringify(d), prefer: "return=minimal" });
 const sbDelete = (t, id)       => sbFetch(`${t}?id=eq.${id}`, { method: "DELETE", prefer: "return=minimal" });
@@ -2342,26 +2344,34 @@ function Login({ onLogin, t, lang, setLang, theme, toggleTheme }) {
   // "Sign in a different way" keeps the original manual form as a fallback
   // -- same function, same error handling, nothing removed.
   const [people, setPeople] = useState(null); // null = loading, [] = failed/empty -> fallback to manual
+  const [directoryError, setDirectoryError] = useState(false);
+  const [directoryRetry, setDirectoryRetry] = useState(0);
   const [picked, setPicked] = useState(null);
   const [manualMode, setManualMode] = useState(false);
   const [login, setLogin] = useState(""), [pin, setPin] = useState(""), [err, setErr] = useState(""), [busy, setBusy] = useState(false);
 
   useEffect(() => {
-    sbGet("field_profiles", "archived=eq.false&active=eq.true&select=id,name,role,email,phone,active,archived&order=name.asc")
-      .then(rows => setPeople(Array.isArray(rows) ? rows : []))
-      .catch(() => setPeople([]));
-  }, []);
+    let current = true;
+    setPeople(null);
+    setDirectoryError(false);
+    withLoginTimeout(signal => sbGet("field_profiles", "archived=eq.false&active=eq.true&select=id,name,role,email,phone,active,archived&order=name.asc", { signal }))
+      .then(rows => { if (current) setPeople(Array.isArray(rows) ? rows : []); })
+      .catch(() => {
+        if (!current) return;
+        setDirectoryError(true);
+        setPeople([]);
+      });
+    return () => { current = false; };
+  }, [directoryRetry]);
 
   const signInAs = async (u, enteredPin) => {
     if (!enteredPin) return setErr(lang === "en" ? "Enter your PIN." : "Ingresa tu PIN.");
     setBusy(true); setErr("");
     try {
-      await sbAuthSignIn(u.id, enteredPin);
+      await withLoginTimeout(signal => sbAuthSignIn(u.id, enteredPin, signal));
       onLogin(fromProfile(u));
     } catch (e) {
-      setErr(e.message === "auth_failed"
-        ? (lang === "en" ? "Wrong PIN. Try again." : "PIN incorrecto. Intenta de nuevo.")
-        : (lang === "en" ? "Connection error. Try again." : "Error de conexión."));
+      setErr(loginErrorMessage(e, lang, true));
       setBusy(false);
     }
   };
@@ -2371,21 +2381,19 @@ function Login({ onLogin, t, lang, setLang, theme, toggleTheme }) {
     setBusy(true); setErr("");
     try {
       const val = login.trim().toLowerCase();
-      let rows = await sbGet("field_profiles", `email=eq.${encodeURIComponent(val)}&select=id,name,role,email,phone,active,archived`);
+      let rows = await withLoginTimeout(signal => sbGet("field_profiles", `email=eq.${encodeURIComponent(val)}&select=id,name,role,email,phone,active,archived`, { signal }));
       if (!rows?.length) {
         const digitsIn = login.trim().replace(/\D/g, "").slice(-10);
-        const allProfiles = await sbGet("field_profiles", "select=id,name,role,email,phone,active,archived");
+        const allProfiles = await withLoginTimeout(signal => sbGet("field_profiles", "select=id,name,role,email,phone,active,archived", { signal }));
         rows = (allProfiles || []).filter(p => p.phone && p.phone.replace(/\D/g, "").slice(-10) === digitsIn);
       }
       const u = rows?.[0];
       if (!u) { setErr(lang === "en" ? "Invalid credentials." : "Credenciales inválidas."); setBusy(false); return; }
       if (u.active === false) { setErr(lang === "en" ? "Account deactivated." : "Cuenta desactivada."); setBusy(false); return; }
-      await sbAuthSignIn(u.id, pin);
+      await withLoginTimeout(signal => sbAuthSignIn(u.id, pin, signal));
       onLogin(fromProfile(u));
     } catch (e) {
-      setErr(e.message === "auth_failed"
-        ? (lang === "en" ? "Invalid credentials." : "Credenciales inválidas.")
-        : (lang === "en" ? "Connection error. Try again." : "Error de conexión."));
+      setErr(loginErrorMessage(e, lang));
     }
     setBusy(false);
   };
@@ -2408,6 +2416,13 @@ function Login({ onLogin, t, lang, setLang, theme, toggleTheme }) {
           <div className="logo-title">GS MASTERS</div>
           <div className="logo-sub">Field App</div>
           <div style={{ marginTop: 32 }}>
+            {directoryError && <div role="alert" style={{ color: "var(--red)", fontSize: 13, marginBottom: 18, lineHeight: 1.5 }}>
+              {lang === "es" ? "No se pudo cargar la lista de empleados. El servicio puede estar fuera de línea." : "Could not load the employee list. The field service may be offline."}
+              <button className="btn btn-s btn-sm btn-full" style={{ marginTop: 10 }}
+                onClick={() => { setDirectoryRetry(n => n + 1); setManualMode(false); setErr(""); }}>
+                {lang === "es" ? "Volver a intentar" : "Retry employee list"}
+              </button>
+            </div>}
             <div className="fg"><label className="fl">Email or Phone Number</label>
               <input className="fi" type="text" value={login} onChange={e => setLogin(e.target.value)} placeholder="email or (205) 555-1234" /></div>
             <div className="fg"><label className="fl">PIN</label>
