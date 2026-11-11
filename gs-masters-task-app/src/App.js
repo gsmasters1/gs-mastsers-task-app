@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import { createClient } from "@supabase/supabase-js";
 import { saveCheckinOrQueue, checkinSaveMessage } from "./checkinSave";
 import { withLoginTimeout, loginErrorMessage } from "./loginNetwork";
+import { pendingCheckouts, queueCheckout, removeCheckout } from "./checkoutOutbox";
 import { MapContainer, TileLayer, Marker, Popup } from "react-leaflet";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
@@ -7369,6 +7370,51 @@ function Crew(props) {
   const [manualTime, setManualTime] = useState("");
   const [manualBusy, setManualBusy] = useState(false);
   const [showCheckoutNote, setShowCheckoutNote] = useState(false);
+  const [pendingCheckoutRows, setPendingCheckoutRows] = useState([]);
+  const [checkoutSyncError, setCheckoutSyncError] = useState(false);
+  const checkoutSyncBusy = useRef(false);
+  const syncCheckoutNotes = useCallback(async () => {
+    if (checkoutSyncBusy.current) return;
+    checkoutSyncBusy.current = true;
+    try {
+      const rows = await pendingCheckouts(user.id);
+      setPendingCheckoutRows(rows);
+      if (!navigator.onLine || !rows.length) return;
+      await flushQueue();
+      let failed = false;
+      for (const row of rows) {
+        try {
+          await saveCrewCheckout({ ...row, translationKey: settings?.gtKey, onLog: props.setLogs });
+          await removeCheckout(row.shift.id);
+        } catch { failed = true; }
+      }
+      setCheckoutSyncError(failed);
+      setPendingCheckoutRows(await pendingCheckouts(user.id));
+    } catch {
+      setCheckoutSyncError(true);
+    } finally { checkoutSyncBusy.current = false; }
+  }, [user.id, settings?.gtKey, props.setLogs]);
+  useEffect(() => {
+    syncCheckoutNotes();
+    const timer = setInterval(syncCheckoutNotes, 30000);
+    window.addEventListener("online", syncCheckoutNotes);
+    return () => { clearInterval(timer); window.removeEventListener("online", syncCheckoutNotes); };
+  }, [syncCheckoutNotes]);
+
+  const submitCrewCheckout = async ({ shift, note, patch }) => {
+    if (!note.trim() || shift.crewId !== user.id) throw new Error("checkout_note_required");
+    const row = { shift: { id: shift.id, crewId: shift.crewId, jobId: shift.jobId, date: shift.date || localDate() },
+      note: note.trim(), patch };
+    try { await queueCheckout(row); }
+    catch {
+      // Storage may be disabled. A connected phone can still save directly.
+      await saveCrewCheckout({ ...row, translationKey: settings?.gtKey, onLog: props.setLogs });
+      return;
+    }
+    setPendingCheckoutRows(await pendingCheckouts(user.id));
+    void syncCheckoutNotes();
+  };
+  const pendingCheckoutIds = new Set(pendingCheckoutRows.map(row => row.shift.id));
   const [manualNote, setManualNote] = useState("");
   const [issueModal, setIssueModal] = useState(false);
   const [issueText, setIssueText] = useState("");
@@ -7467,7 +7513,7 @@ function Crew(props) {
     const now = new Date();
     const hrs = Math.round((now - new Date(openCheckin.checkIn)) / 36000) / 100;
     const gps = await getLocation();
-    await saveCrewCheckout({ shift: openCheckin, note, translationKey: settings?.gtKey, onLog: props.setLogs,
+    await submitCrewCheckout({ shift: openCheckin, note,
       patch: { check_out: now.toISOString(), hours: hrs, lat_out: gps?.lat || null, lng_out: gps?.lng || null } });
     setOpenCheckin(null);
     setShowCheckoutNote(false);
@@ -7479,7 +7525,7 @@ function Crew(props) {
     try {
       const checkoutDt = new Date(`${manualDate}T${manualTime}:00`);
       const hrs = Math.max(0, Math.round((checkoutDt - new Date(staleCheckin.checkIn)) / 36000) / 100);
-      await saveCrewCheckout({ shift: staleCheckin, note: manualNote, translationKey: settings?.gtKey, onLog: props.setLogs,
+      await submitCrewCheckout({ shift: staleCheckin, note: manualNote,
         patch: { check_out: checkoutDt.toISOString(), hours: hrs } });
       setManualNote("");
       setStaleCheckin(null);
@@ -7499,7 +7545,7 @@ function Crew(props) {
     <div style={{ minHeight: "calc(100vh - 62px)", background: "var(--steel)" }}>
 
       {/* ── Stale check-in — forgot to clock out ── */}
-      {staleCheckin && (
+      {staleCheckin && !pendingCheckoutIds.has(staleCheckin.id) && (
         <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.75)", zIndex: 999, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}>
           <div style={{ background: "var(--steel)", border: "2px solid var(--red)", borderRadius: 16, padding: 24, maxWidth: 360, width: "100%" }}>
             <div style={{ fontSize: 32, textAlign: "center", marginBottom: 8 }}>⚠️</div>
@@ -7533,7 +7579,7 @@ function Crew(props) {
         </div>
       )}
 
-      {openCheckin && (
+      {openCheckin && !pendingCheckoutIds.has(openCheckin.id) && (
         <div style={{ padding: "10px 18px", background: "rgba(16,185,129,.12)", borderBottom: "1px solid rgba(16,185,129,.25)", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
           <div>
             <span style={{ color: "var(--green)", fontWeight: 700, fontSize: 13 }}>● Clocked in</span>
@@ -7548,6 +7594,13 @@ function Crew(props) {
 
       {showCheckoutNote && openCheckin && <LogoutTaskGate tasks={[]} jobs={jobs} lang={lang} t={t} requireNote
         onDone={clockOut} onCancel={() => setShowCheckoutNote(false)} />}
+
+      {pendingCheckoutRows.length > 0 && <div className="card" role="status" style={{ margin: 12 }}>
+        {lang === "es" ? "Salida y nota pendientes de sincronizar" : "Checkout and work note pending sync"}
+        {" · "}{pendingCheckoutRows.length}
+        {checkoutSyncError && <p>{lang === "es" ? "No se confirmó. Intenta de nuevo o avisa a la oficina." : "Still unconfirmed. Retry or tell the office."}</p>}
+        <button className="btn btn-s btn-sm" onClick={syncCheckoutNotes}>{lang === "es" ? "Reintentar" : "Retry sync"}</button>
+      </div>}
 
       {/* ── Push Notification Banner ── */}
       {pushBanner && (
@@ -7584,7 +7637,7 @@ function Crew(props) {
       </button>
 
       <div style={{ padding: 18, paddingBottom: 24 }}>
-        {ctab === "tasks" && <CrewTasks {...props} todayJobIds={todayJobIds} setTodayJobIds={setTodayJobIds} />}
+        {ctab === "tasks" && <CrewTasks {...props} todayJobIds={todayJobIds} setTodayJobIds={setTodayJobIds} submitCrewCheckout={submitCrewCheckout} pendingCheckoutIds={pendingCheckoutIds} />}
         {ctab === "cam" && <CrewPhotos {...props} todayJobIds={todayJobIds} />}
         {ctab === "rec" && <CrewReceipts {...props} todayJobIds={todayJobIds} />}
         {ctab === "log" && <CrewLog {...props} todayJobIds={todayJobIds} />}
@@ -8124,9 +8177,7 @@ function CrewTasks(props) {
     const now = new Date();
     const loc = await getLocation();
     const hours = Math.round(((now - new Date(open.checkIn)) / 3600000) * 100) / 100;
-    if (open.pendingSync) await flushQueue();
-    await saveCrewCheckout({ shift: { ...open, crewId: user.id, jobId: job.id }, note,
-      translationKey: settings?.gtKey, onLog: setLogs,
+    await props.submitCrewCheckout({ shift: { ...open, crewId: user.id, jobId: job.id }, note,
       patch: { check_out: now.toISOString(), lat_out: loc?.lat || null, lng_out: loc?.lng || null, hours } });
     setOpenCheckins(p => { const n = { ...p }; delete n[job.id]; return n; });
     setCheckedJob(null);
@@ -8387,7 +8438,9 @@ function CrewTasks(props) {
                   </a>
                 )}
               </div>
-              {openCheckins[jid]
+              {openCheckins[jid] && props.pendingCheckoutIds?.has(openCheckins[jid].id)
+                ? <span className="muted">{lang === "es" ? "Salida pendiente" : "Checkout pending"}</span>
+                : openCheckins[jid]
                 ? <button className="btn btn-sm btn-a" onClick={() => requestCheckOut(job)}>
                     <Icon n="power" s={13} /> {openCheckins[jid]?.pendingSync ? (lang === "es" ? "Sin confirmar · Salir" : "Pending sync · Clock out") : t.checkOut}
                   </button>
