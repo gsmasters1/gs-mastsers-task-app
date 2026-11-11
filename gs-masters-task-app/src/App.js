@@ -2608,6 +2608,7 @@ function TopBar({ user, onLogout, t, lang, setLang, online, showMenu, menuOpen, 
           <span className="tb-title">GS MASTERS FIELD</span>
           <span className="tb-name-m">{user.name}</span></div></div>
       <div className="tb-right">
+        {canSupervise && <a href="https://app.gsmastersinc.com/inspection-center.html" target="_blank" rel="noopener noreferrer" className="btn btn-ghost btn-sm" title="Open Inspection Center" aria-label="Open Inspection Center" style={{ color:"var(--sky2)", textDecoration:"none", whiteSpace:"nowrap" }}>Inspection Center</a>}
         {canSupervise && <button className="btn btn-ghost btn-sm btn-ic" onClick={onMessages} title="Office Messages"
           style={{ position:"relative", color: officeCount ? "var(--sky2)" : "var(--slate)" }}>
           <Icon n="message" s={19} />
