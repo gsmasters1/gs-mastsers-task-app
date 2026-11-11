@@ -150,6 +150,42 @@ const DRIVE_UPLOAD_FN = "https://app.gsmastersinc.com/.netlify/functions/field-m
 const mediaUrl = path => !path ? null
   : path.startsWith("drive:") ? `https://drive.google.com/thumbnail?id=${encodeURIComponent(path.slice(6))}&sz=w2000`
   : `${SB_URL}/storage/v1/object/public/${MEDIA_BUCKET}/${path}`;
+// Short-lived SIGNED URLs for field-media objects so that bucket can be private.
+// Cached ~23h. drive:/data: paths are not field-media and are returned as-is
+// (they keep their existing url). On any failure the caller keeps the public
+// url already in dataUrl, so this is harmless while the bucket is still public.
+const MEDIA_SIGN_FN = "https://app.gsmastersinc.com/.netlify/functions/field-media-sign";
+const _signCache = new Map(); // storage_path -> { url, exp }
+async function signFieldMedia(paths) {
+  const now = Date.now(), out = {}, missing = [];
+  for (const p of new Set(paths)) {
+    if (!p || p.startsWith("drive:") || p.startsWith("data:")) continue;
+    const c = _signCache.get(p);
+    if (c && c.exp > now) out[p] = c.url; else missing.push(p);
+  }
+  if (missing.length && _authToken) {
+    try {
+      const res = await fnFetch(MEDIA_SIGN_FN, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ paths: missing }),
+      });
+      if (res.ok) {
+        const urls = (await res.json()).urls || {};
+        const exp = now + 23 * 3600 * 1000;
+        for (const [p, u] of Object.entries(urls)) { _signCache.set(p, { url: u, exp }); out[p] = u; }
+      }
+    } catch (e) { /* keep existing public url */ }
+  }
+  return out;
+}
+// After loading photo/receipt rows, upgrade their dataUrl to a signed URL.
+async function upgradeRowsSigned(rows, setter) {
+  try {
+    const urls = await signFieldMedia((rows || []).map(r => r.storagePath).filter(Boolean));
+    if (!Object.keys(urls).length) return;
+    setter(prev => prev.map(r => (r.storagePath && urls[r.storagePath]) ? { ...r, dataUrl: urls[r.storagePath] } : r));
+  } catch (e) { /* keep existing urls */ }
+}
 async function uploadToStorage(dataUrl, path, jobId = null, kind = "photo") {
   if (!_authToken) throw new Error("Not signed in");
   const name = String(path || "").replace(/\//g, "_");
@@ -1286,8 +1322,8 @@ export default function App() {
         if (dbJobs)     setJobs(dbJobs.map(fromJob));
         if (dbTasks)    setTasks(dbTasks.map(fromTask));
         if (dbLogs)     setLogs(dbLogs.map(fromLog));
-        if (dbPhotos)   setPhotos(dbPhotos.map(fromPhoto));
-        if (dbReceipts) setReceipts(dbReceipts.map(fromReceipt));
+        if (dbPhotos)   { const _ph = dbPhotos.map(fromPhoto); setPhotos(_ph); upgradeRowsSigned(_ph, setPhotos); }
+        if (dbReceipts) { const _rc = dbReceipts.map(fromReceipt); setReceipts(_rc); upgradeRowsSigned(_rc, setReceipts); }
         if (dbMats)     setMats(dbMats.map(fromMat));
         if (dbDispatch) setDispatches(dbDispatch.map(fromDispatch));
         if (navigator.onLine) flushQueue();
@@ -1334,8 +1370,8 @@ export default function App() {
         ]);
         if (dbTasks) setTasks(dbTasks.map(fromTask));
         if (dbLogs) setLogs(dbLogs.map(fromLog));
-        if (dbPhotos) setPhotos(dbPhotos.map(fromPhoto));
-        if (dbReceipts) setReceipts(dbReceipts.map(fromReceipt));
+        if (dbPhotos) { const _ph = dbPhotos.map(fromPhoto); setPhotos(_ph); upgradeRowsSigned(_ph, setPhotos); }
+        if (dbReceipts) { const _rc = dbReceipts.map(fromReceipt); setReceipts(_rc); upgradeRowsSigned(_rc, setReceipts); }
         if (dbMats) setMats(dbMats.map(fromMat));
         if (dbDispatch) setDispatches(dbDispatch.map(fromDispatch));
       } catch {}
@@ -6575,8 +6611,8 @@ function AdminActivity({ jobs, tasks, users, logs: initLogs, photos: initPhotos,
       ]);
       if (dbTasks)    { setLocalTasks(dbTasks.map(fromTask));         setTasks(dbTasks.map(fromTask)); }
       if (dbLogs)     { setLocalLogs(dbLogs.map(fromLog));            setLogs(dbLogs.map(fromLog)); }
-      if (dbPhotos)   { setLocalPhotos(dbPhotos.map(fromPhoto));      setPhotos(dbPhotos.map(fromPhoto)); }
-      if (dbReceipts) { setLocalReceipts(dbReceipts.map(fromReceipt)); setReceipts(dbReceipts.map(fromReceipt)); }
+      if (dbPhotos)   { const _ph = dbPhotos.map(fromPhoto); setLocalPhotos(_ph); setPhotos(_ph); upgradeRowsSigned(_ph, setLocalPhotos); upgradeRowsSigned(_ph, setPhotos); }
+      if (dbReceipts) { const _rc = dbReceipts.map(fromReceipt); setLocalReceipts(_rc); setReceipts(_rc); upgradeRowsSigned(_rc, setLocalReceipts); upgradeRowsSigned(_rc, setReceipts); }
       if (dbCheckins) setCheckins(dbCheckins.map(fromCheckin));
       setLastAt(new Date());
     } catch {}
