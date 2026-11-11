@@ -604,6 +604,47 @@ async function translateText(text, target, key) {
   } catch { return text; }
 }
 
+async function saveCrewCheckout({ shift, note, patch, translationKey, onLog }) {
+  const text = typeof note === "string" ? note.trim() : "";
+  if (!text || !shift?.id || !shift.crewId || !shift.jobId) throw new Error("checkout_note_required");
+  const id = "checkout-" + shift.id;
+  const filter = `id=eq.${encodeURIComponent(id)}&crew_id=eq.${encodeURIComponent(shift.crewId)}&job_id=eq.${encodeURIComponent(shift.jobId)}`;
+  let row = (await sbGet("field_logs", filter))?.[0];
+  if (!row) {
+    let key = translationKey;
+    if (!key) {
+      try { key = (await sbGet("field_integration_settings", "id=eq.1&select=gt_key"))?.[0]?.gt_key; } catch {}
+    }
+    const [en, es] = await Promise.all([translateText(text, "en", key), translateText(text, "es", key)]);
+    row = { id, crew_id: shift.crewId, job_id: shift.jobId, log_date: shift.date || localDate(),
+      task_id: null, text_en: en, text_es: es, resolved: true };
+    try { await sbPost("field_logs", row); }
+    catch (error) {
+      if (error.status !== 409) throw error;
+      row = (await sbGet("field_logs", filter))?.[0];
+      if (!row) throw error;
+    }
+  }
+  onLog?.(previous => previous.some(log => log.id === id) ? previous : [...previous, fromLog(row)]);
+  const shiftFilter = `id=eq.${encodeURIComponent(shift.id)}&crew_id=eq.${encodeURIComponent(shift.crewId)}`;
+  const changed = await sbFetch(`field_checkins?${shiftFilter}&check_out=is.null&select=id`, {
+    method: "PATCH", body: JSON.stringify(patch),
+  });
+  if (!changed?.length) {
+    const [current] = await sbGet("field_checkins", `${shiftFilter}&select=check_out`) || [];
+    if (!current?.check_out) throw new Error("checkout_not_saved");
+  }
+}
+
+function checkoutNoteLabel(lang) {
+  return lang === "es" ? "¿En qué trabajaste hoy? (obligatorio)" : "What did you work on today? (required)";
+}
+
+function checkoutSaveError(lang) {
+  return lang === "es" ? "No se confirmó la salida. Revisa tu conexión e inténtalo de nuevo." :
+    "Checkout wasn't confirmed. Check your connection and try again.";
+}
+
 // ─── DEMO DATA ──────────────────────────────────────────────────────────
 const DEMO_USERS = [
   { id: "u1", name: "Gregory Masters", role: "admin", email: "gsmastersinc@gmail.com", phone: "+12055550001", pin: "1234", active: true },
@@ -1779,7 +1820,7 @@ export default function App() {
 // least ONE thing logged (a tagged task, or a typed off-list note) —
 // someone who was on site did something, and that's what stops the
 // "everyone forgets to log" problem without lying about which task.
-function LogoutTaskGate({ tasks, jobs, lang, t, onComplete, onWorkedOn, onLogOther, onDone }) {
+function LogoutTaskGate({ tasks, jobs, lang, t, onComplete, onWorkedOn, onLogOther, onDone, requireNote = false, onCancel }) {
   const [resolved, setResolved] = useState({}); // { [taskId]: 'done' | 'worked' }
   const [busyId, setBusyId] = useState(null);
   const [warnId, setWarnId] = useState(null);
@@ -1789,7 +1830,17 @@ function LogoutTaskGate({ tasks, jobs, lang, t, onComplete, onWorkedOn, onLogOth
   const [otherLogCount, setOtherLogCount] = useState(0);
   const tt = task => lang === "es" ? (task.titleEs || task.title) : task.title;
   const jobName = jid => jobs.find(j => j.id === jid)?.name || "";
-  const anyLogged = Object.keys(resolved).length > 0 || otherLogCount > 0;
+  const [checkoutError, setCheckoutError] = useState("");
+  const anyLogged = requireNote ? Boolean(otherText.trim()) : Object.keys(resolved).length > 0 || otherLogCount > 0;
+  const finish = async () => {
+    if (!requireNote) { onDone(); return; }
+    if (!otherText.trim() || otherBusy) return;
+    setOtherBusy(true);
+    setCheckoutError("");
+    try { await onDone(otherText.trim()); }
+    catch { setCheckoutError(checkoutSaveError(lang)); }
+    finally { setOtherBusy(false); }
+  };
 
   const submitOther = async () => {
     if (!otherText.trim()) return;
@@ -1874,32 +1925,34 @@ function LogoutTaskGate({ tasks, jobs, lang, t, onComplete, onWorkedOn, onLogOth
           {/* ── Off-list work — job they were sent to isn't always the task list ── */}
           <div style={{ background: "rgba(255,255,255,.04)", border: "1px solid rgba(255,255,255,.08)",
             borderRadius: 10, padding: "12px 14px", marginBottom: 10 }}>
-            <div style={{ fontSize: 13, fontWeight: 600, color: "#f8fafc", marginBottom: 6 }}>{t.otherWorkLabel}</div>
-            <textarea value={otherText} onChange={e => setOtherText(e.target.value)}
+            <div style={{ fontSize: 13, fontWeight: 600, color: "#f8fafc", marginBottom: 6 }}>{requireNote ? checkoutNoteLabel(lang) : t.otherWorkLabel}</div>
+            <textarea aria-label={requireNote ? checkoutNoteLabel(lang) : t.otherWorkLabel} disabled={otherBusy} value={otherText} onChange={e => setOtherText(e.target.value)}
               placeholder={t.otherWorkPlaceholder}
               style={{ width: "100%", minHeight: 56, background: "rgba(255,255,255,.05)",
                 border: "1px solid rgba(255,255,255,.1)", borderRadius: 8, padding: 8,
                 color: "#f8fafc", fontSize: 13, fontFamily: "inherit", resize: "vertical", marginBottom: 8 }} />
-            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            {!requireNote && <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
               <button className="btn btn-sm" style={{ background: "rgba(255,255,255,.07)", color: "#cbd5e1", border: "1px solid rgba(59,130,246,.15)" }}
                 disabled={!otherText.trim() || otherBusy} onClick={submitOther}>
                 {otherBusy ? <span className="spin" /> : t.logOtherBtn}
               </button>
               {otherSaved && <span style={{ fontSize: 12, color: "#10b981", fontWeight: 600 }}>✅ {t.loggedToday}</span>}
-            </div>
+            </div>}
           </div>
         </div>
 
         <div style={{ padding: "14px 20px 20px" }}>
-          {!anyLogged && (
+          {checkoutError && <p role="alert">{checkoutError}</p>}
+          {!anyLogged && !requireNote && (
             <p style={{ fontSize: 12, color: "#f97316", marginBottom: 8, textAlign: "center" }}>{t.needOneLogged}</p>
           )}
           <button className="btn btn-full" style={{ width: "100%", justifyContent: "center",
               background: anyLogged ? "linear-gradient(135deg,#059669,#10b981)" : "rgba(255,255,255,.08)",
               color: anyLogged ? "#fff" : "#64748b", cursor: anyLogged ? "pointer" : "not-allowed" }}
-            disabled={!anyLogged} onClick={onDone}>
-            {t.continueBtn}
+            disabled={!anyLogged || otherBusy || Boolean(busyId)} onClick={finish}>
+            {requireNote ? t.checkOut : t.continueBtn}
           </button>
+          {onCancel && <button className="btn btn-s btn-full" disabled={otherBusy} onClick={onCancel}>{t.cancel}</button>}
         </div>
       </div>
     </div>
@@ -2025,6 +2078,7 @@ function QuickPIN({ quick, onLogin, onSwitch, theme, lang }) {
 const QR_MAX_DIST_MI = 0.5;
 
 function QRClockIn({ jobId, theme, loggedInUser }) {
+  const [checkoutNote, setCheckoutNote] = useState("");
   const [job, setJob] = useState(null);
   const [users, setUsers] = useState([]);
   const [jobProgress, setJobProgress] = useState(null); // { done, total, pct }
@@ -2087,13 +2141,10 @@ function QRClockIn({ jobId, theme, loggedInUser }) {
         setBusy(false);
         return;
       }
-      for (const other of (openRows || []).filter(r => r.job_id !== jobId)) {
-        const hrs = Math.min(14, Math.round((now - new Date(other.check_in)) / 36000) / 100);
-        await sbFetch(`field_checkins?id=eq.${other.id}`, {
-          method: "PATCH",
-          body: JSON.stringify({ check_out: now.toISOString(), hours: hrs, auto_closed: true, method: "auto" }),
-          prefer: "return=minimal",
-        });
+      if ((openRows || []).some(row => row.job_id !== jobId)) {
+        setPinErr("Check out of the previous job and record your work first. / Registra lo que hiciste y sal del trabajo anterior primero.");
+        setBusy(false);
+        return;
       }
       // Clock IN
       await sbPost("field_checkins", {
@@ -2114,17 +2165,14 @@ function QRClockIn({ jobId, theme, loggedInUser }) {
   };
 
   const doClockOut = async () => {
-    if (!openCheckin) return;
+    if (!openCheckin || !checkoutNote.trim() || busy) return;
     setBusy(true);
     const gps = await getLocation();
     const now = new Date();
     const hrs = Math.round((now - new Date(openCheckin.checkIn)) / 36000) / 100;
     try {
-      await sbFetch(`field_checkins?id=eq.${openCheckin.id}`, {
-        method: "PATCH",
-        body: JSON.stringify({ check_out: now.toISOString(), hours: hrs, lat_out: gps?.lat || null, lng_out: gps?.lng || null, method: "qr" }),
-        prefer: "return=minimal",
-      });
+      await saveCrewCheckout({ shift: openCheckin, note: checkoutNote,
+        patch: { check_out: now.toISOString(), hours: hrs, lat_out: gps?.lat || null, lng_out: gps?.lng || null, method: "qr" } });
       setDoneAction("out");
       setDoneTime(now);
       setDoneHrs(hrs);
@@ -2325,13 +2373,15 @@ function QRClockIn({ jobId, theme, loggedInUser }) {
                 </div>
               </div>
               {pinErr && <p style={{ color: "var(--red)", fontSize: 13, marginBottom: 12 }}>{pinErr}</p>}
-              <button onClick={doClockOut} disabled={busy}
+              <label className="fl" htmlFor="qr-checkout-note">What did you work on today? / ¿En qué trabajaste hoy?</label>
+              <textarea id="qr-checkout-note" className="fi" required disabled={busy} value={checkoutNote} onChange={e => setCheckoutNote(e.target.value)} />
+              <button onClick={doClockOut} disabled={busy || !checkoutNote.trim()}
                 style={{ width: "100%", padding: "16px", borderRadius: 12, border: "none",
                   background: "linear-gradient(135deg,#059669,#10b981)", color: "#fff",
                   fontFamily: "'Barlow Condensed'", fontSize: 20, fontWeight: 800, cursor: "pointer", marginBottom: 10 }}>
                 {busy ? "..." : "Clock Out · Salida"}
               </button>
-              <button onClick={() => { setStep("pick"); setOpenCheckin(null); setPin(""); setPinErr(""); }}
+              <button onClick={() => { setStep("pick"); setOpenCheckin(null); setCheckoutNote(""); setPin(""); setPinErr(""); }}
                 style={{ background: "none", border: "none", color: "var(--slate)", fontSize: 12, cursor: "pointer", textDecoration: "underline" }}>
                 ← Back
               </button>
@@ -7318,7 +7368,8 @@ function Crew(props) {
   const [manualDate, setManualDate] = useState("");
   const [manualTime, setManualTime] = useState("");
   const [manualBusy, setManualBusy] = useState(false);
-  const [clockingOut, setClockingOut] = useState(false);
+  const [showCheckoutNote, setShowCheckoutNote] = useState(false);
+  const [manualNote, setManualNote] = useState("");
   const [issueModal, setIssueModal] = useState(false);
   const [issueText, setIssueText] = useState("");
   const [issuePhoto, setIssuePhoto] = useState(null);
@@ -7411,42 +7462,26 @@ function Crew(props) {
       .catch(() => {});
   }, [user.id, tab]);
 
-  const clockOut = async () => {
-    if (!openCheckin || clockingOut) return;
-    setClockingOut(true);
+  const clockOut = async note => {
+    if (!openCheckin) return;
     const now = new Date();
     const hrs = Math.round((now - new Date(openCheckin.checkIn)) / 36000) / 100;
     const gps = await getLocation();
-    try {
-      await sbFetch(`field_checkins?id=eq.${openCheckin.id}`, {
-        method: "PATCH",
-        body: JSON.stringify({ check_out: now.toISOString(), hours: hrs, lat_out: gps?.lat || null, lng_out: gps?.lng || null }),
-        prefer: "return=minimal",
-      });
-      setOpenCheckin(null);
-    } catch (e) {
-      // Was silent: the banner stayed, but nobody knew the clock-out never
-      // saved, so it got auto-closed the next day with bogus hours.
-      if (!e.status) {
-        enqueue({ table: "field_checkins", method: "PATCH", id: openCheckin.id, payload: { check_out: now.toISOString(), hours: hrs, lat_out: gps?.lat || null, lng_out: gps?.lng || null } });
-        setOpenCheckin(null);
-        alert(lang === "es" ? "Sin señal — tu salida se guardará cuando vuelva la conexión." : "No signal — your clock-out is saved on this phone and will send when you're back online.");
-      } else alert(lang === "es" ? "No se pudo registrar tu salida. Intenta otra vez." : "Clock-out did not save. Try again.");
-    }
-    setClockingOut(false);
+    await saveCrewCheckout({ shift: openCheckin, note, translationKey: settings?.gtKey, onLog: props.setLogs,
+      patch: { check_out: now.toISOString(), hours: hrs, lat_out: gps?.lat || null, lng_out: gps?.lng || null } });
+    setOpenCheckin(null);
+    setShowCheckoutNote(false);
   };
 
   const submitManualCheckout = async () => {
-    if (!staleCheckin || !manualDate || !manualTime || manualBusy) return;
+    if (!staleCheckin || !manualDate || !manualTime || !manualNote.trim() || manualBusy) return;
     setManualBusy(true);
     try {
       const checkoutDt = new Date(`${manualDate}T${manualTime}:00`);
       const hrs = Math.max(0, Math.round((checkoutDt - new Date(staleCheckin.checkIn)) / 36000) / 100);
-      await sbFetch(`field_checkins?id=eq.${staleCheckin.id}`, {
-        method: "PATCH",
-        body: JSON.stringify({ check_out: checkoutDt.toISOString(), hours: hrs }),
-        prefer: "return=minimal",
-      });
+      await saveCrewCheckout({ shift: staleCheckin, note: manualNote, translationKey: settings?.gtKey, onLog: props.setLogs,
+        patch: { check_out: checkoutDt.toISOString(), hours: hrs } });
+      setManualNote("");
       setStaleCheckin(null);
     } catch {
       alert(lang === "es" ? "No se pudo guardar. Revisa tu conexión e intenta otra vez." : "Could not save. Check your connection and try again.");
@@ -7488,7 +7523,9 @@ function Crew(props) {
                   style={{ width: "100%", padding: "10px 12px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--bg)", color: "var(--text)", fontSize: 14 }} />
               </div>
             </div>
-            <button onClick={submitManualCheckout} disabled={manualBusy || !manualDate || !manualTime}
+            <label className="fl" htmlFor="manual-checkout-note">{checkoutNoteLabel(lang)}</label>
+            <textarea id="manual-checkout-note" className="fi" required disabled={manualBusy} value={manualNote} onChange={e => setManualNote(e.target.value)} />
+            <button onClick={submitManualCheckout} disabled={manualBusy || !manualDate || !manualTime || !manualNote.trim()}
               style={{ width: "100%", padding: "13px 0", borderRadius: 10, border: "none", background: "var(--accent)", color: "#000", fontFamily: "'Barlow Condensed'", fontSize: 17, fontWeight: 800, cursor: "pointer" }}>
               {manualBusy ? "..." : (lang === "es" ? "Guardar hora de salida" : "Save Checkout Time")}
             </button>
@@ -7502,12 +7539,15 @@ function Crew(props) {
             <span style={{ color: "var(--green)", fontWeight: 700, fontSize: 13 }}>● Clocked in</span>
             <span className="muted" style={{ fontSize: 12, marginLeft: 6 }}>{openJobName} · {new Date(openCheckin.checkIn).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>
           </div>
-          <button onClick={clockOut} disabled={clockingOut}
+          <button onClick={() => setShowCheckoutNote(true)}
             style={{ padding: "6px 14px", borderRadius: 8, border: "1px solid var(--green)", background: "rgba(16,185,129,.15)", color: "var(--green)", fontSize: 12, fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap" }}>
-            {clockingOut ? "..." : "Clock Out"}
+            {t.checkOut}
           </button>
         </div>
       )}
+
+      {showCheckoutNote && openCheckin && <LogoutTaskGate tasks={[]} jobs={jobs} lang={lang} t={t} requireNote
+        onDone={clockOut} onCancel={() => setShowCheckoutNote(false)} />}
 
       {/* ── Push Notification Banner ── */}
       {pushBanner && (
@@ -8078,39 +8118,19 @@ function CrewTasks(props) {
     }
   };
 
-  const checkOut = async (job) => {
+  const checkOut = async (job, note) => {
     const open = openCheckins[job.id];
-    if (!open) return;
-    const loc = await getLocation();
+    if (!open) throw new Error("checkout_not_saved");
     const now = new Date();
-    const inTime = new Date(open.checkIn);
-    const hours = Math.round(((now - inTime) / 3600000) * 100) / 100;
-    const patch = { check_out: now.toISOString(), lat_out: loc?.lat || null, lng_out: loc?.lng || null, hours };
-    // If the check-in itself is still queued, a PATCH to Supabase would
-    // affect zero rows but return HTTP 204, silently losing the checkout.
-    // Queue this update *behind* the INSERT, even when a signal returns.
-    const unsentInsert = open.pendingSync || getQueue().some(a =>
-      a.table === "field_checkins" && a.method !== "PATCH" && a.payload?.id === open.id);
-    if (unsentInsert) {
-      enqueue({ table: "field_checkins", method: "PATCH", id: open.id, payload: patch });
-      setOpenCheckins(p => { const n = { ...p }; delete n[job.id]; return n; });
-      setCheckedJob(null);
-      alert(lang === "es"
-        ? "La entrada y salida esperan sincronización. No están confirmadas hasta que vuelva la señal."
-        : "Check-in and checkout are queued in order; neither is confirmed until sync completes.");
-      return;
-    }
-    try { await sbFetch(`field_checkins?id=eq.${open.id}`, { method: "PATCH", body: JSON.stringify(patch), prefer: "return=minimal" }); }
-    catch (e) {
-      // Was silent -- offline check-outs were simply lost (no PATCH queue),
-      // so the row stayed open and got auto-closed next day.
-      if (!e.status) {
-        enqueue({ table: "field_checkins", method: "PATCH", id: open.id, payload: patch });
-        alert(lang === "es" ? "Sin señal — tu salida se guardará cuando vuelva la conexión." : "No signal — your check-out is saved on this phone and will send when you're back online.");
-      } else { alert(lang === "es" ? "No se pudo registrar tu salida. Intenta otra vez." : "Check-out did not save. Try again."); return; }
-    }
+    const loc = await getLocation();
+    const hours = Math.round(((now - new Date(open.checkIn)) / 3600000) * 100) / 100;
+    if (open.pendingSync) await flushQueue();
+    await saveCrewCheckout({ shift: { ...open, crewId: user.id, jobId: job.id }, note,
+      translationKey: settings?.gtKey, onLog: setLogs,
+      patch: { check_out: now.toISOString(), lat_out: loc?.lat || null, lng_out: loc?.lng || null, hours } });
     setOpenCheckins(p => { const n = { ...p }; delete n[job.id]; return n; });
     setCheckedJob(null);
+    setCheckoutGate(null);
   };
 
   // Prompt about unresolved tasks for THIS job on check-out — this is the
@@ -8134,7 +8154,6 @@ function CrewTasks(props) {
       tk.status === "pending" &&
       !already.has(tk.id)
     );
-    if (pend.length === 0 && assignedJobTasks.length > 0) { checkOut(job); return; }
     setCheckoutGate({ job, tasks: pend });
   };
   const gateComplete = async (task) => {
@@ -8143,26 +8162,6 @@ function CrewTasks(props) {
     return true;
   };
   const gateWorkedOn = async (task) => { await workedOnTask(task); };
-  const gateLogOther = async (text) => {
-    const jobId = checkoutGate?.job?.id || null;
-    const logId = "l" + Date.now();
-    const weather = await getTodaysWeather(checkoutGate?.job);
-    const log = { id: logId, en: text, es: text, weather, taskId: null, jobId, crewId: user.id, date: today };
-    setLogs(p => [...p, log]);
-    const row = { id: logId, text_en: text, text_es: text, weather, task_id: null, job_id: jobId, crew_id: user.id, log_date: today };
-    try { await sbPost("field_logs", row); } catch { enqueue({ table: "field_logs", payload: row }); return; }
-    if (settings?.gtKey) {
-      try {
-        const [en, es] = await Promise.all([
-          translateText(text, "en", settings.gtKey),
-          translateText(text, "es", settings.gtKey),
-        ]);
-        setLogs(p => p.map(l => l.id === logId ? { ...l, en, es } : l));
-        try { await sbPatch("field_logs", logId, { text_en: en, text_es: es }); } catch {}
-      } catch {}
-    }
-  };
-
   const myRecurring = tasks.filter(t =>
     t.recurring && !closedJobIds.has(t.jobId)
   );
@@ -8890,8 +8889,8 @@ function CrewTasks(props) {
 
       {checkoutGate && (
         <LogoutTaskGate tasks={checkoutGate.tasks} jobs={jobs} lang={lang} t={t}
-          onComplete={gateComplete} onWorkedOn={gateWorkedOn} onLogOther={gateLogOther}
-          onDone={() => { const j = checkoutGate.job; setCheckoutGate(null); checkOut(j); }} />
+          onComplete={gateComplete} onWorkedOn={gateWorkedOn} requireNote
+          onDone={note => checkOut(checkoutGate.job, note)} onCancel={() => setCheckoutGate(null)} />
       )}
 
       {matModal && <div className="modal-bg" onClick={e => e.target === e.currentTarget && setMatModal(null)}>
