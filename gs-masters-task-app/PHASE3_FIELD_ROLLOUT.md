@@ -6,7 +6,7 @@ It does not change bank integration, billing approval, or the accounting reminde
 ## Automated checks
 
 - `src/checkinSave.test.js`: confirmed write, network queued, permission/validation/server rejection not queued, bilingual permission messages.
-- `netlify/functions/field-reminder-dedupe.test.mjs`: a crew member with two open jobs receives one evening reminder.
+- `tests/field-reminder-dedupe.test.mjs`: a crew member with two open jobs receives one evening reminder.
 - `CI=false npm run build`: ensure full React bundle compiles. The CI workflow also runs the two tests above.
 
 ## Live acceptance (required before calling it operational)

@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { uniqueLatestCrewCheckins } from "./field-reminder-dedupe.mjs";
+import { uniqueLatestCrewCheckins } from "../netlify/functions/field-reminder-dedupe.mjs";
 
 test("two open jobs for one crew member yield one reminder", () => {
   const rows = [
